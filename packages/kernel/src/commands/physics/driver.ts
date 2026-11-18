@@ -2130,7 +2130,7 @@ export class PhysicsDriver implements WorldDriver {
   private remoteLog: string[] = [];
   private grabAnchor = new Map<string, { ax: number; ay: number }>();
   /** The world in the worker: drops and steps, for the time bar readout. */
-  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number } = { drops: 0, awake: 0, contacts: 0, hash: '' };
+  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number; kernels?: boolean } = { drops: 0, awake: 0, contacts: 0, hash: '' };
 
   /** Hands the world to a worker (or takes it back: then it is built again here, from its start). */
   setRemote(on: boolean): void {
@@ -2160,7 +2160,7 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   /** The cells the worker computed for a frame: they are written on the next pass. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number }, log?: readonly string[]): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number; kernels?: boolean }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
     // the worker's own log holds what it logged itself (a slider moved while the film played, round 6's carry-over): it,

@@ -790,6 +790,21 @@ A world with cloth or liquid runs in a worker (9.6). The worker has its own core
 
 Three small steps instead of four (9.5) took the Chrome rows down by 8% to 19%, except the cloth that hits itself, which keeps four (before: rope 1.57, 32 × 32 3.76, flag 5.06, over 40 bodies 9.67, self 8.67, two cloths 12.04, water 11.78 ms). Rows still over their goal: the 32 × 32 sheet, two cloths and cloth in water in Node; in Chrome, every row but the rope and the flag.
 
+**Measured (task 10.9, round 1 of the Rust loops, 11.6).** The same Chrome script and Node bench, the TypeScript loops (`--kernels off`) against the Rust loops, on one computer in one session, three runs of each in turn, the run with the lowest mean of each:
+
+| Scene | Goal (Chrome ×4) | Chrome TypeScript | Chrome Rust | Node TypeScript | Node Rust | Node budget |
+|---|---|---|---|---|---|---|
+| 2D rope, 400 points, a ball on it | 2 ms | 1.38 ms (95% 2.10) | 1.10 ms (1.80) | 0.33 ms | 0.28 ms | 0.5 ms |
+| 3D cloth 32 × 32 on a ball | 3 ms | 3.50 ms (4.30) | 3.13 ms (3.80) | 0.80 ms | 0.78 ms | 0.75 ms |
+| 64 × 32 flag in gusts | 6 ms | 4.50 ms (5.20) | 3.05 ms (3.70) | 0.93 ms | 0.70 ms | 1.5 ms |
+| 64 × 32 over 40 bodies | 8 ms | 8.25 ms (9.20) | 6.98 ms (7.80) | 1.91 ms | 1.74 ms | 2 ms |
+| 64 × 32 that hits itself | 8 ms | 8.88 ms (13.20) | 8.00 ms (11.90) | 1.89 ms | 1.93 ms | 2 ms |
+| Two 64 × 32 cloths | 8 ms | 10.30 ms (12.70) | 7.57 ms (9.80) | 2.17 ms | 1.86 ms | 2 ms |
+| 64 × 32 and 2,000 drops | 8 ms | 11.04 ms (12.50) | 9.11 ms (10.40) | 2.29 ms | 2.04 ms | 2 ms |
+| 3D liquid, 2,000 drops | | | | 1.60 ms | 1.57 ms | 1.5 ms |
+
+The Chrome means drift by about 10% between runs and over a session on this computer (the first run of the TypeScript loops that day gave the numbers of the round 9 table above), so compare the two columns of this table with each other, not with the table above. The worst frame of the rope is 5 ms with the Rust loops (2.9 ms without), in all three runs; it was not looked into (the product runs cloth in a worker). Rows over their goal in Chrome with the Rust loops: cloth in water, the 32 × 32 on a ball, and the cloth that hits itself (by 14%, 4% and 0%).
+
 ### 11.3 Hard limits
 
 These are the same on every computer. Over a limit, the line is refused with `limit` (`errors.md` 3).
@@ -873,7 +888,7 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 
 ### 11.6 When a solver moves to Rust
 
-Status: proposed. Each solver is first made as fast as it can be in TypeScript (the fixes in
+Status: round 1 built (task 10.9, "As built" below); round 2 open. Each solver is first made as fast as it can be in TypeScript (the fixes in
 `docs/research/physics-papers.md` 8 and 9). Then, in Chrome with the CPU 4 times slower:
 
 - A solver whose rows are all within their goal stays TypeScript.
@@ -884,6 +899,65 @@ Status: proposed. Each solver is first made as fast as it can be in TypeScript (
   TypeScript.
 - The Rust tools (rustup, cargo, the `wasm32` target) and any crate need the product owner's approval first, and a
   crate needs an entry in `docs/design/libraries.md`.
+
+**As built (task 10.9, round 1; the product owner approved the Rust toolchain on 2026-11-18, no crates).** The proposal
+above is one `step()` call a step. What is built is smaller, because the TypeScript step reads bodies, solids, the smoke
+flow and the liquid through many hooks, and moving all of it would move most of the physics:
+
+- **The step stays in TypeScript** (its order, pins, grabs, body coupling, slow links, tearing, sleep, checkpoints). Its
+  **hot loops** are in Rust and called from it, each on whole arrays (thousands of points), so a call costs nothing next
+  to the loop. Round 1 ported, in `packages/kernel/wasm/src/lib.rs`: the stretch, shear and bend pass over the links
+  (`solve_links`; the links with a pinned end stay TypeScript), the tethers, the moves and speeds of a small step
+  (`advance`, `speeds_advance`, `speeds`), a rope's three-band chain, the air on the faces (for a steady wind; a smoke flow
+  that changes the air by place stays TypeScript), the neighbour grid in space (`grid_build`, `grid_pairs`,
+  `grid_in_box`: the cloth's and the 3D liquid's) and a hull's test of its candidate points (`hull_hits`; `pushOut` stays
+  TypeScript and runs on each hit in the same order).
+- **The same bits.** Each Rust loop is a line-by-line copy of its TypeScript loop: the same operations in the same order,
+  `f64` only, no fused multiply-add (WebAssembly has none), no SIMD, `f64.sqrt`, `f64.floor` and `f64.abs` (which round
+  as `Math.sqrt`, `Math.floor` and `Math.abs` do). The TypeScript loops stay, as the fallback (no WebAssembly, or the
+  module did not compile) and as the reference. A scratch hash check plays 15 scenes (the seven of the Chrome bench, a
+  cross of two sheets, a net torn by a ball in wind, a pour, a rope in wind, pins to bodies in the plane and in space,
+  two thicknesses over a box) for 10 s with and without the kernels and compares a hash of every cloth, drop and body
+  array every second: equal in all 15.
+- **The arrays the loops read live in the module's memory.** One instance of the module for each `ClothSet` and one for
+  each 3D liquid grid (`KernelArena`, `physics/wasm/kernels.ts`); TypeScript keeps typed-array views on it, made once when
+  the set is built and never again (nothing grows in a step, so a view never goes stale). The set is sized for its own
+  counts; the grid for the limits of 11.3 (2,000 drops, 4,096 points). Every call has integer arguments only (byte offsets
+  and counts); the numbers a call needs (the small step, gravity, the wind, the box of a search) are written first to a
+  block of the same memory, because a floating-point argument is boxed by the caller (garbage) unless the engine inlines
+  the call.
+- **Rust without `no_std`.** `f64::sqrt` and `floor` are not in `core` on stable Rust, and `core::arch::wasm32::f64_sqrt` is
+  unstable; `std` gives the same instructions and the module needs no allocator (it takes no imports and none of the
+  module's code allocates). Size: 13.5 KB, `packages/kernel/src/physics/wasm/kernels-wasm.ts` (base64, committed, rebuilt by
+  `npm run build:wasm`; `node packages/kernel/wasm/build.mjs --check` tells whether the file is what the source builds to).
+- **Main thread.** A browser's main thread may refuse to compile a module over 4 KB in one go (Chrome). The loader
+  compiles in a worker or Node at the first use, and a page's main thread calls `initPhysicsKernels()` once at start-up
+  (the Chrome bench page does, and so do `createHeadlessApp`, which `createApp` starts through, and the studio's
+  `main.ts`; nothing waits for it, one compile serves every call); a solver built before it resolves runs the TypeScript
+  loops, with the same film. `setPhysicsKernels(false)` turns the kernels off for solvers built after it (tests, the hash
+  check). `physicsKernelsActive(figure)` says which loops a figure's cloth and liquid solvers run (`true`, `false`, or
+  `undefined` with no such solver); the studio's physics readout ends with "Rust" or "TypeScript" (for a world in the
+  worker, the worker's answer in its reply).
+- **A stale module is caught.** `build.mjs` writes into the header of `kernels-wasm.ts` the SHA-256 of `lib.rs`,
+  `Cargo.toml` and `Cargo.lock`; a spec test hashes the three files and compares, so CI (which has no Rust) fails when a
+  source changed and `npm run build:wasm` was not run.
+- **No garbage in a step.** The moves and speeds hand the Rust loop their raw inputs (the small step, gravity, the cloth's
+  damping) and it works out the products and the speeds' factor itself, the same operations as the TypeScript loops: a
+  number worked out in TypeScript is a heap number until the engine has optimised that function, and with the loop gone
+  the function is called too seldom to be optimised soon. A step's copy of the points to the start-of-step arrays no
+  longer makes three views a step.
+- **Measured**, Chrome 157 with the CPU 4× slower, mean of a frame of two steps, the TypeScript loops and the Rust loops
+  on the same computer in the same session (best of three runs each): rope 1.38 → 1.10 ms, 32 × 32 on a ball 3.50 → 3.13,
+  flag 4.50 → 3.05, over 40 bodies 8.25 → 6.98, self 8.88 → 8.00, two cloths 10.30 → 7.57, cloth in water 11.04 → 9.11
+  (goals 2, 3, 6, 8, 8, 8, 8). In Node (the rows of 11.2, same way): flag 0.93 → 0.70 ms, two cloths 2.17 → 1.86, cloth in
+  water 2.29 → 2.04, over 40 bodies 1.91 → 1.74, rope 0.33 → 0.28; the 32 × 32 on a ball (0.80 → 0.78), the cloth that hits
+  itself (1.89 → 1.93) and the 3D liquid (1.60 → 1.57) did not change. The link pass is the least helped (1.2×: it is bound
+  by memory, not by the maths); the moves, speeds, tethers and air are 2× to 3.5× faster.
+- **Left (round 2, only if a Chrome row still misses its goal):** `prepareSelf` (24% of the cloth that hits itself, 12% of
+  two cloths) with its `grid_in_box` calls (15% of `self`: about 2,000 small searches a step, 70 ns each, so the cost is the
+  call and a batch of boxes in one call is the next step), `prepareDrops` and `faceTable` (14% of cloth in water),
+  `hitSphere` and the faces a ball meets (about 17% of the 32 × 32 on a ball). Rows still over their goal in Chrome after
+  round 1: cloth in water (114%), the 32 × 32 on a ball (104%), self (100%).
 
 ## 12. Drawing
 

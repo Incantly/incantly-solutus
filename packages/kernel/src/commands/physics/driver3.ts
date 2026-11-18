@@ -1996,7 +1996,7 @@ export class Physics3Driver implements WorldDriver {
   /** `@input` lines made on the page not yet sent to the worker, and every line of the film, for saving. */
   private outbox: string[] = [];
   private remoteLog: string[] = [];
-  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number } = { drops: 0, awake: 0, contacts: 0, hash: '' };
+  remoteInfo: { drops: number; awake: number; contacts: number; hash: string; cloth?: number; kernels?: boolean } = { drops: 0, awake: 0, contacts: 0, hash: '' };
 
   /** Hands the world to a worker (or takes it back: then it is built again here, from its start, with the same log). */
   setRemote(on: boolean): void {
@@ -2026,7 +2026,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   /** The cells the worker computed for a frame, written on the next pass; and the worker's whole log, when it changed. */
-  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number }, log?: readonly string[]): void {
+  accept(cells: readonly (readonly [string, Cell])[], info?: { drops: number; awake: number; contacts: number; hash: string; cloth?: number; kernels?: boolean }, log?: readonly string[]): void {
     for (const [name, cell] of cells) this.remoteCells.set(name, cell);
     if (info) this.remoteInfo = info;
     // the worker logs what it was sent and what it made itself (a pedal moved while the film played): its log, plus the

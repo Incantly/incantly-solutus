@@ -2,7 +2,7 @@
  * The app core (embed-files-export design 3; .kiro/specs/sdk R1): one figure behind a small typed API. Writing goes
  * through lines; reads return data; errors are data. No DOM: the screen (`createApp`) and the frame host sit on top.
  */
-import { Figure, numberSource, physics, playerOf, setSheetLocks } from '@incantly/kernel';
+import { Figure, initPhysicsKernels, numberSource, physics, playerOf, setSheetLocks } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineOrigin, ObjectView, TxResult } from '@incantly/kernel';
 import { MODES, catalogueOf, compilePolicy, makeGate, switchMode } from '@incantly/modes';
 import type { AppModeId, ModeChangeResult, ModeConfig } from '@incantly/modes';
@@ -1101,6 +1101,9 @@ function valueTextOf(o: ObjectView): string {
 
 /** An app with no screen: Node, a worker, a test, or the frame host before it mounts. */
 export function createHeadlessApp(opts: HeadlessOptions = {}): App & { flushEvents(): void } {
+  // compiles the physics kernels without blocking, for a page's main thread; nothing waits for it (a solver built before it
+  // resolves runs the TypeScript loops, and the film is the same bits). `createApp` starts through here.
+  void initPhysicsKernels();
   return new AppCore(opts);
 }
 

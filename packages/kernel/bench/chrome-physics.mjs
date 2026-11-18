@@ -4,7 +4,10 @@
  *
  * Run from the repository root:
  *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright node packages/kernel/bench/chrome-physics.mjs
- *     [--rate 4] [--warm 1] [--run 5] [--scenes rope,sheet32,flag,over40,self,two,wet] [--headed]
+ *     [--rate 4] [--warm 1] [--run 5] [--scenes rope,sheet32,flag,over40,self,two,wet] [--kernels off] [--headed]
+ *
+ * `--kernels off` runs the TypeScript loops instead of the WebAssembly ones (design 11.6); the line after the Chrome
+ * version says whether the kernels were compiled and are running.
  *
  * Playwright is not a dependency of the repository (docs/design/libraries.md): point PLAYWRIGHT_DIR at a folder where
  * it is installed. Chrome itself is the installed one (`channel: 'chrome'`). The page is `bench/chrome/index.html`,
@@ -47,9 +50,11 @@ try {
   const logs = [];
   page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
   page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`));
-  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.goto(arg('kernels', 'on') === 'off' ? `${url}?kernels=off` : url, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => 'physicsBench' in window, null, { timeout: 30_000 });
+  const kernels = await page.evaluate(() => window.physicsKernels);
   out(`Chrome ${browser.version()}, CPU ×${rate}, ${warm} s warm-up, ${run} s of frames (two steps each)`);
+  out(`WebAssembly kernels: ${kernels.wanted ? 'on' : 'off'}, ${kernels.compiled ? 'compiled' : 'not compiled'}, ${kernels.running ? 'running' : 'not running'}`);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate });
   const over = [];

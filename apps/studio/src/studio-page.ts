@@ -38,7 +38,7 @@ import { sceneBounds } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
 import { studioRegistry } from './registry';
 import { KernelSession } from './session';
-import { tracePoints, tracedIds, worldDriverOf } from '@incantly/kernel';
+import { physicsKernelsActive, tracePoints, tracedIds, worldDriverOf } from '@incantly/kernel';
 import { createSelection, selectionFrom } from './selection';
 import type { Selection } from './selection';
 import { hitTest } from '@incantly/sdk/screen';
@@ -446,10 +446,13 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       const contacts = w ? w.contactCount : r.contacts;
       const drops = w ? (pd.fluid?.ps.n ?? 0) : r.drops;
       const where = pd.remote ? ' · in a worker' : '';
+      // which loops the cloth and liquid solvers run: Rust (WebAssembly) or TypeScript, the same film (design 11.6)
+      const rust = w ? physicsKernelsActive(session.figure) : r.kernels;
+      const loops = rust === undefined ? '' : rust ? ' · Rust' : ' · TypeScript';
       // and cloth points when there are any (round 9)
       const points = w ? (pd.cloth?.n ?? 0) : (r.cloth ?? 0);
       const dropsText = (w ? pd.fluid !== undefined : r.drops > 0 || points === 0) ? ` · ${drops} drops` : '';
-      perf.textContent = `${frameAvg.toFixed(1)} ms · ${awake} awake · ${contacts} contacts${dropsText}${points > 0 ? ` · ${points} cloth points` : ''}${where}`;
+      perf.textContent = `${frameAvg.toFixed(1)} ms · ${awake} awake · ${contacts} contacts${dropsText}${points > 0 ? ` · ${points} cloth points` : ''}${loops}${where}`;
       // over 6 ms on the page, or 8 ms when the world is in the worker, the readout turns amber (ui.md 12)
       perf.classList.toggle('busy', frameAvg > (pd.remote ? 8 : 6));
     }

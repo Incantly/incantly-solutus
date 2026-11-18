@@ -3,7 +3,13 @@
  * `window.physicsBench(name, warmSeconds, runSeconds)`: each frame is one `setClock` of 1/60 s, which is two steps of
  * 1/120 s. The time is the kernel's own, the page's main thread; in the product the worker runs it.
  */
-import { CommandRegistry, Figure, geometry, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace } from '../../src/index';
+import { CommandRegistry, Figure, geometry, initPhysicsKernels, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, physics3Of, setPhysicsKernels } from '../../src/index';
+
+// the page's main thread may not compile the WebAssembly module in one go (Chrome refuses over 4 KB), so it is compiled
+// first, without blocking; `?kernels=off` runs the TypeScript loops instead
+const kernelsWanted = new URLSearchParams(location.search).get('kernels') !== 'off';
+setPhysicsKernels(kernelsWanted);
+const kernelsReady = kernelsWanted ? await initPhysicsKernels() : false;
 
 export const SCENES: Record<string, string[]> = {
   rope: ['rope = Cloth((0, 5), (8, 5), 400, mass = 0.5, pins = [(0, 5)])', 'ball = Body(Circle((8, 5), 0.2), mass = 1)', 'tie = Pin(rope, (8, 5), ball)'],
@@ -58,9 +64,20 @@ function physicsBench(name: string, warm: number, run: number): Timing {
   };
 }
 
+/** Does a solver built now run the Rust loops? (A cloth's `kfn` is set when its arena was made.) */
+function kernelsRunning(): boolean {
+  const figure = new Figure({ commands });
+  for (const line of SCENES.flag as string[]) figure.apply(line);
+  figure.setClock(1 / 60);
+  const cloth = (physics3Of(figure) as unknown as { cloth?: { kfn?: unknown } } | undefined)?.cloth;
+  return cloth?.kfn !== undefined;
+}
+
 declare global {
   interface Window {
     physicsBench: typeof physicsBench;
+    physicsKernels: { wanted: boolean; compiled: boolean; running: boolean };
   }
 }
 window.physicsBench = physicsBench;
+window.physicsKernels = { wanted: kernelsWanted, compiled: kernelsReady, running: kernelsRunning() };

@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "bench": "vitest bench --run",
     "check": "npm run lint && npm run typecheck && npm test",
+    "build:wasm": "node packages/kernel/wasm/build.mjs",
     "studio": "npm run dev --workspace @incantly/studio"
   },
   "devDependencies": {

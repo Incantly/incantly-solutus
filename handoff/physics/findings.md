@@ -40,3 +40,42 @@ Found while fixing (after the review, so not fixed in this round):
 
 - PH-2: `keepOut` is a hook of `ClothSet` (a no-op there) that `cloth3.ts` and `cloth2.ts` pass to `World3.keepOut` and `World2.keepOut`, which walk the world's touching contacts of the body against fixed shapes (any other body that is not dynamic, so the ground, terrain, static and kinematic bodies) in the world's order. It runs in two places: in `endSub` (the cloth's move and speed of a body that took the small steps) and in `keepFixed`, once at the end of the cloth's step (the move `bdx` and the push `bj` that the world applies at the next step; the part into the ground is taken out of the move, and out of the body's speed now). The second place is needed: the tester's ball was driven into the ground by held points pushing it as a wall (`give` with `dt = h`: 6 cm and 38 m/s in one step), not by the pin. It is at the end of the cloth's step, not in `applyImpulses`, because after a seek the world has no contact list until it steps.
 - PH-3: the fix as listed (the body tether of a sheet at `start distance × 1.02`) made the tester's two failing tests worse (the ball was lost at 0.65 s instead of 0.0 s) and breaks the "body's tether" tests (a ball on a sheet reached 1.0200 to 1.0204 of the start distance, the test allows less than 1.02): a ball that may wander 4 cm along the ground rolls off its pin. What fixes it is the 2% of play on the sheet's point tethers, and only for a sheet or net that holds a body (`max(1 + 2 (1 − stretch), 1.02)`; a rope and a sheet with no body pin keep theirs, or the hanging-sheet check of 2% on its links and the pinned-ball weight check break). The body's own tether stays `start distance × (1 + 2 (1 − stretch))`. Design 9.5 says so.
+
+## Review of 10.9 Rust kernels (2026-11-18, one round)
+
+Read: the builder's diff `36a31ee..f124249` (crate, `kernels.ts`, cloth, grid and hull wiring), builder notes, the tester's
+report. Ran the "no garbage" bench.
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-8 | `physics/wasm/kernels.ts`, the wiring in `cloth.ts`, `grid3.ts` | With kernels on, cloth steps make garbage: the bench "Cloth, no garbage" fails (design 11.4). | `npx vitest run --config packages/kernel/bench/vitest.config.ts packages/kernel/bench/physics.bench.ts -t "no garbage"`: 3 collections in 2,000 steps (0 with kernels off). | high | partly fixed (05aee97), see PH-14 |
+| PH-9 | `packages/sdk` (createApp, headless app, worker start), `apps/studio` start | Nothing calls `initPhysicsKernels()`, so in a browser the page's own physics (no worker, the SDK on the page) always uses the TypeScript loops. Only the worker can compile synchronously. | Builder notes, "Main-thread compile". | medium | fixed (05aee97) |
+| PH-10 | `kernels.ts`, the kernel's public API | No public way to tell whether a solver uses the Rust loops, so a module that silently fails to load passes every test. | Tester report 10.9. | medium | fixed (05aee97) |
+| PH-11 | `packages/kernel/wasm/build.mjs`, `kernels-wasm.ts` | CI has no Rust, so nothing notices when `lib.rs` changes and the committed `kernels-wasm.ts` is not rebuilt. | By reading. | medium | fixed (05aee97) |
+| PH-12 | rope with kernels | The rope's worst frame in Chrome is 5 ms with Rust against 2.9 ms without, in all 3 runs. | Builder notes. | low | to be implemented |
+| PH-13 | round 2 | Still over goal in Chrome 4× slower: cloth in water 9.11 (8), 32 × 32 on a ball 3.13 (3), self 8.00 (8). Round 2 list: `prepareDrops`/`faceTable`, `prepareSelf` and batched `grid_in_box`, `hitSphere`, link layout or SIMD. | Builder notes. | medium | to be implemented (replaces the cloth part of PH-6) |
+| PH-14 | `packages/kernel/bench/physics.bench.ts` "Cloth, no garbage" | The row counts collections in a window that starts wherever V8's young generation happens to be. With the kernels on it fails in about half of the runs (0, 3, 0, 0, 0, 3, 1, 3, 1, 3, 0, 0 collections in 12 runs, after the fix of PH-8), with them off in none of 20, yet the sheet makes no garbage that fills it: with one `gc()` before the observer starts, 10 runs in 10 show 0 collections. | New space at the start of the window, printed in the row's own setup: 29 to 31 MB of 32 in the failing runs (a collection follows at the first idle moment, the row's `await` of 50 ms, or inside the loop), 9 MB in the passing ones. The first frames (the sheet's construction, 9 MB, and the engine's first runs of every loop) put 16.5 MB in the young generation with the kernels on and, estimated, about 25 MB with the loops in TypeScript (their first runs make more garbage): the TypeScript run wraps round the 32 MB to a low fill, the Rust run lands near the top. | medium | to be implemented (tester: start Node with `--expose-gc` in `packages/kernel/bench/vitest.config.ts` and call `gc()` before `obs.observe`, or warm up for 600 frames; the row is the tester's file) |
+| PH-15 | `cloth.ts` steps, both modes | About 110 bytes of garbage a step remain with the kernels on and off (sampling heap profile over 3,000 steps after 8,000: `sizeBodies` 40 B, the step's own boxed `h` 24 B, `stepCloth` 17 B, `prepLinks` 16 B). Not enough to fill the young generation in 2,000 steps (0.2 MB), but design 11.4 says none. | `HeapProfiler.startSampling` with minor collections included. | low | to be implemented |
+
+**Fixes for PH-8 to PH-11** (the one fix round):
+
+- PH-8: find what allocates per step with kernels on (`--trace-gc`, or a heap profile over 2,000 steps after warm-up;
+  likely a typed-array view, a closure, or a boxed number at a call). Fix it so the bench shows 0 collections; the bench
+  is not changed.
+- PH-9: call `initPhysicsKernels()` once (not awaited by anything that changes a film) in the SDK's app start
+  (`createApp` and the headless app) and in the studio's start; a solver built before it resolves uses the TypeScript
+  loops and the film is the same. One line in design 11.6.
+- PH-10: export `physicsKernelsActive(figure): boolean | undefined` from the kernel (true when the figure's cloth or
+  liquid solver runs the Rust loops; undefined with no such solver), and show it in the studio's physics readout as
+  "Rust" or "TypeScript". Regression test: in Node a 3D sheet's figure reports `true`; with `setPhysicsKernels(false)`
+  it reports `false`.
+- PH-11: `build.mjs` writes into the header of `kernels-wasm.ts` a SHA-256 of `lib.rs`, `Cargo.toml` and `Cargo.lock`
+  (the sources). Regression test: it hashes those three files and expects the header's value, with a message that
+  says to run `npm run build:wasm`.
+
+**As fixed (fix round, commit 05aee97):**
+
+- PH-8: what allocated, found with a sampling heap profile (minor collections included) and `v8.getHeapSpaceStatistics` for the young generation. (1) `stepCloth` made three typed-array views a step (`x.subarray(0, n)` to copy the start-of-step places): about 300 bytes a step in both modes; the arrays hold exactly `n` points, so `sx.set(this.x)` does it. (2) With the loops in Rust, `advance`, `speedsAdvance` and `speeds` kept only a call and a few products (`hs * this.gx`, the speeds' factor with its `Math.min`/`Math.max`): too few calls to be optimised soon, and until then every product is a heap number (about 250 KB over the first 700 steps, on top of the TypeScript run's own). The Rust loops now take the raw inputs from the block (`KP.gx`, `KP.damp`) and work out `hs * gx` and the factor themselves, the same operations in the same order (the hash tests are unchanged and pass). With both in, the young generation grows by the same 110 bytes a step as with the kernels off (PH-15). The bench row still fails about half of the runs for a reason outside the solver (PH-14): with a `gc()` before its observer, 10 runs in 10 show 0 collections.
+- PH-9: `createHeadlessApp` (which `createApp` starts through) and the studio's `main.ts` call `initPhysicsKernels()` once, not awaited; it now keeps one compile in flight however many apps start. Design 11.6 "Main thread" says so.
+- PH-10: `physicsKernelsActive(figure)` (kernel index) over `ClothSet.usesKernels` and `Fluid3.usesKernels`; the studio's readout ends with "Rust" or "TypeScript" (for a world in the worker, `info.kernels` of the worker's reply). Four regression tests in `physics-kernels.test.ts`.
+- PH-11: `build.mjs` writes the SHA-256 of the three sources into the header of `kernels-wasm.ts`; one regression test hashes them and compares.
