@@ -58,8 +58,11 @@ import { fuelSum3, hottest3 } from '../../physics/fire3';
 const CHECKPOINT_SECONDS = 0.5;
 /** A figure with a smoke or fire grid in space keeps a checkpoint every second: a 24³ grid is about 400 KB (design 9.8, 10.3). */
 const SMOKE_CHECKPOINT_SECONDS = 1;
-/** Smoke steps 60 times a second of film, whatever the bodies' step (design 9.4). */
-const SMOKE_RATE = 60;
+/**
+ * The grid in space steps 30 times a second of film, each step split in two halves a frame apart, so a frame pays half a
+ * grid step (design 9.8, PH-48; the plane's grid keeps 60, design 9.4).
+ */
+const SMOKE_RATE = 30;
 /** A figure with cloth keeps a checkpoint every 0.25 s, so a seek steps at most 30 steps (design 10.3). */
 const CLOTH_CHECKPOINT_SECONDS = 0.25;
 const CHECKPOINT_BYTES = 32 * 1024 * 1024;
@@ -1089,6 +1092,8 @@ export class Physics3Driver implements WorldDriver {
     const K = 2 * PAIR_EVERY;
     // a grid keeps a checkpoint every second (its 400 KB a checkpoint would fill the 32 MB at every half second), a cloth every 0.25 s
     this.cpStride = this.smokeMembers.length > 0 ? Math.max(K, K * Math.round((SMOKE_CHECKPOINT_SECONDS * this.rate) / K)) : this.cloth ? Math.max(K, K * Math.floor((CLOTH_CHECKPOINT_SECONDS * this.rate) / K)) : Math.max(K, K * Math.round((CHECKPOINT_SECONDS * this.rate) / K));
+    // a checkpoint never falls between the two halves of a grid step (design 9.8): a multiple of the grid's step too
+    if (this.smokeMembers.length > 0) while (this.cpStride % this.smokeEvery !== 0) this.cpStride += K;
     this.cpBytes = 0;
     this.failedAt = new Map();
     this.leftAt = new Map();
@@ -2287,11 +2292,27 @@ export class Physics3Driver implements WorldDriver {
    */
   private stepSmoke(w: World3, h: number): void {
     const t = this.t0 + this.n / this.rate;
-    const due = this.n % this.smokeEvery === 0;
+    // a grid step is split in two halves half a grid step apart (design 9.8): the first at `half`, the second (with the
+    // drag, the fire's notices and the burning) when the step is due, so a checkpoint (a multiple of `smokeEvery`) never
+    // falls between them; a grid that steps every world step is not split
+    const half = this.smokeEvery >> 1;
+    const r = this.n % this.smokeEvery;
+    const due = r === 0;
+    const first = half > 0 && r === half;
+    const H = this.smokeEvery * h;
     for (let m = 0; m < this.smokeMembers.length; m++) {
       const sm = this.smokeMembers[m] as (typeof this.smokeMembers)[number];
       sm.grid.account(w);
-      if (!due) continue;
+      if (due && half > 0) {
+        const was = sm.grid.unstable;
+        sm.grid.stepSecond(w, H);
+        if (sm.grid.unstable && !was) this.warnOnce(`unstable-smoke:${sm.rec.id}`, makeNotice('unstable_world', { name: sm.rec.p.name, t: Number(t.toFixed(3)), hint: 'a body moved through the smoke too fast; use slower bodies or a coarser grid' }, [sm.rec.p.name]));
+        if (sm.grid.fire) this.checkFireOut(sm, t);
+        continue;
+      }
+      if (!(first || (due && half === 0))) continue;
+      // the time the grid step ends at, the second half's (the source runs while that is before `until`)
+      const te = first ? t + (this.smokeEvery - half) * h : t;
       // a source or heat that changes during the film is read at each smoke step (the rule ran for this step's time)
       if (this.varySet.has(sm.rec)) {
         const c = sm.rec.cell;
@@ -2303,19 +2324,26 @@ export class Physics3Driver implements WorldDriver {
         }
       }
       const spec = sm.value.spec;
-      sm.grid.making = t - this.smokeEvery * h < spec.until - 1e-9;
+      sm.grid.making = te - H < spec.until - 1e-9;
       if (!spec.wind) {
         const ws = this.windSettings();
         sm.grid.windX = ws.windX;
         sm.grid.windY = ws.windY;
         sm.grid.windZ = ws.windZ;
       }
+      if (first) {
+        sm.grid.stepFirst(w, H, this.fluid?.ps);
+        continue;
+      }
       const was = sm.grid.unstable;
-      sm.grid.step(w, this.smokeEvery * h, this.fluid?.ps);
+      sm.grid.step(w, H, this.fluid?.ps);
       if (sm.grid.unstable && !was) this.warnOnce(`unstable-smoke:${sm.rec.id}`, makeNotice('unstable_world', { name: sm.rec.p.name, t: Number(t.toFixed(3)), hint: 'a body moved through the smoke too fast; use slower bodies or a coarser grid' }, [sm.rec.p.name]));
       if (sm.grid.fire) this.checkFireOut(sm, t);
     }
-    if (due && this.burn) this.stepBurn(w, t, this.smokeEvery * h);
+    // burnable things swap heat with the grid once a grid step, right after its first half: the cells the bodies fill are
+    // marked there, and a checkpoint (after a second half) never falls between the marks and the burning (design 9.8)
+    const burnNow = half > 0 ? first : due;
+    if (burnNow && this.burn) this.stepBurn(w, t, H);
   }
 
   /** `fire_out`, once: the source has stopped, nothing is above 150 °C, and no fuel is left (after the fire was alight). */
@@ -2477,6 +2505,7 @@ export class Physics3Driver implements WorldDriver {
     const f = 1 - 0.8 * b.burnt(u);
     w.mass[i] = (this.burnMass[u] as number) * f;
     w.invM[i] = (this.burnInvM[u] as number) / f;
+    w.weighNow(i);
     for (let k = 0; k < 9; k++) {
       w.Il[i * 9 + k] = (this.burnIl[u * 9 + k] as number) * f;
       w.invIl[i * 9 + k] = (this.burnInvIl[u * 9 + k] as number) / f;

@@ -38,6 +38,8 @@ const DYNAMIC = BodyType3.Dynamic;
 
 /** Pressure passes a step (design 9.4). */
 export const SMOKE3_PASSES = 20;
+/** Passes in the first half of a split grid step (design 9.8: the grid steps 30 times a second, half of a step a frame). */
+export const SMOKE3_PASSES_A = 0;
 const OMEGA = 1.8;
 const START_PROJECTIONS = 10;
 const KEEP = 1 - OMEGA;
@@ -743,20 +745,44 @@ export class Smoke3 {
 
   /** One step of `h` against the bodies where they are now; `drops` are the liquid's drops (for water). */
   step(w: World3 | undefined, h: number, drops?: DropsView3): void {
+    this.stepPart(w, h, drops, 0);
+  }
+
+  /**
+   * One grid step in two halves, one a frame (design 9.8): the first half carries the flow, lifts, swirls, burns, holds
+   * the solid faces and does the first passes of the projection; the second does the other passes, the gradient, carries
+   * the smoke and finds the drag. Run the first, then the second, with the same `h`; nothing else steps the grid between.
+   */
+  stepFirst(w: World3 | undefined, h: number, drops?: DropsView3): void {
+    this.stepPart(w, h, drops, 1);
+  }
+
+  stepSecond(w: World3 | undefined, h: number): void {
+    this.stepPart(w, h, undefined, 2);
+  }
+
+  /** The counts of the even and odd off-stencil cells, kept between the two halves of a split projection. */
+  private nf0 = 0;
+  private nf1 = 0;
+
+  private stepPart(w: World3 | undefined, h: number, drops: DropsView3 | undefined, part: number): void {
     if (this.unstable) return;
-    this.markSolids(w);
-    const k = this.kn;
-    if (k) this.writeNumbers(k, h);
-    this.advectFlow(h);
     const fire = this.fire !== undefined;
-    if (fire) {
-      advectFire3(this, h);
-      fireLift3(this, h);
-    } else this.lift(h);
-    if (this.swirl > 0) confine3(this, h);
-    if (fire) fireStep3(this, h, drops);
-    this.solidFaces(w);
-    this.project();
+    if (part !== 2) {
+      this.markSolids(w);
+      const k = this.kn;
+      if (k) this.writeNumbers(k, h);
+      this.advectFlow(h);
+      if (fire) {
+        advectFire3(this, h);
+        fireLift3(this, h);
+      } else this.lift(h);
+      if (this.swirl > 0) confine3(this, h);
+      if (fire) fireStep3(this, h, drops);
+      this.solidFaces(w);
+    }
+    this.project(part);
+    if (part === 1) return;
     this.advectSmoke(h);
     if (fire) this.markAlive();
     else this.makeSmoke();
@@ -1073,10 +1099,12 @@ export class Smoke3 {
    * The projection: solve Σ w (p_nb − p) = div over the air cells, with p = 0 outside the box (open air) and no term for
    * a solid neighbour, by red-black over-relaxed passes; then take the gradient off the faces.
    */
-  private project(): void {
+  private project(part = 0): void {
     const kn = this.kn;
     if (kn) {
-      kn.fn.grid3_project(kn.gi, kn.gf);
+      if (part === 0) kn.fn.grid3_project(kn.gi, kn.gf);
+      else if (part === 1) kn.fn.grid3_project_a(kn.gi, kn.gf);
+      else kn.fn.grid3_project_b(kn.gi, kn.gf);
       return;
     }
     const n = this.n;
@@ -1099,7 +1127,11 @@ export class Smoke3 {
     let nf1 = 0;
     const half = n * nn;
     const { rowLo, rowHi } = this;
-    for (let k = 0; k < n; k++) {
+    if (part === 2) {
+      nf0 = this.nf0;
+      nf1 = this.nf1;
+    }
+    for (let k = 0; k < (part === 2 ? 0 : n); k++) {
       for (let j = 0; j < n; j++) {
         // the span of air in this row: the solid cells outside it (a floor, a wall) are not solved, only held at p = 0
         const c0 = (k * n + j) * n;
@@ -1155,7 +1187,10 @@ export class Smoke3 {
         }
       }
     }
-    for (let pass = 0; pass < SMOKE3_PASSES; pass++) {
+    this.nf0 = nf0;
+    this.nf1 = nf1;
+    const pend = part === 1 ? SMOKE3_PASSES_A : SMOKE3_PASSES;
+    for (let pass = part === 2 ? SMOKE3_PASSES_A : 0; pass < pend; pass++) {
       for (let colour = 0; colour < 2; colour++) {
         const f0 = colour === 0 ? 0 : half;
         const f1 = f0 + (colour === 0 ? nf0 : nf1);
@@ -1181,6 +1216,7 @@ export class Smoke3 {
         for (let m = f0; m < f1; m++) p[fix[m] as number] = fixed[m] as number;
       }
     }
+    if (part === 1) return;
     // take the gradient off every face between two air cells, or an air cell and the open air outside (p = 0 there)
     for (let k = 0; k < n; k++) {
       for (let j = 0; j < n; j++) {
@@ -1296,7 +1332,9 @@ export class Smoke3 {
     if (after > 1e-12 && before > 1e-12 && !(this.hasSource && this.making)) {
       const out = (h * this.outflow(s)) / (this.dx * this.dy * this.dz);
       let f = (before - out) / after;
-      const cap = this.swirl > 0 ? SCALE_CAP * (1 + this.swirl) : SCALE_CAP;
+      // 0.5% for each 1/60 s of the step (a grid in space steps 1/30 s, design 9.8)
+      const per = h * 60;
+      const cap = this.swirl > 0 ? SCALE_CAP * per * (1 + this.swirl) : SCALE_CAP * per;
       if (f > 1 + cap) f = 1 + cap;
       else if (f < 1 - cap) f = 1 - cap;
       if (f !== 1) for (let c = 0; c < s2.length; c++) s2[c] = (s2[c] as number) * f;

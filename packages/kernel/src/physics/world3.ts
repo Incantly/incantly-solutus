@@ -215,6 +215,19 @@ export class World3 {
   torque = new Float64Array(0);
   impulse = new Float64Array(0);
   forces = new Float64Array(0);
+
+  /**
+   * The weight in this step's force readout of body i, from its mass now: a body that burns has its mass made smaller
+   * after the bodies' step (design 9.8), and its weight is read with the mass it has (gravity moves every mass alike).
+   */
+  weighNow(i: number): void {
+    const f = i * NK * 3 + FK3.gravity * 3;
+    if (f + 2 >= this.forces.length) return;
+    const m = this.mass[i] as number;
+    this.forces[f] = m * this.gx;
+    this.forces[f + 1] = m * this.gy;
+    this.forces[f + 2] = m * this.gz;
+  }
   reach = new Float64Array(0);
   shape0 = new Int32Array(0);
   shapeN = new Int32Array(0);

@@ -25,6 +25,8 @@ export interface KernelExports {
   speeds(x: number, y: number, z: number, px: number, py: number, pz: number, vx: number, vy: number, vz: number, p: number, p0: number, e: number): void;
   solve_chain(x: number, y: number, z: number, w: number, rest: number, alpha: number, broken: number, chain: number, nx: number, ny: number, nz: number, dg: number, up: number, rhs: number, p0: number, n: number, p: number, pinOf: number, pinFx: number, pinFy: number, pinFz: number): void;
   air_forces(x: number, y: number, z: number, vx: number, vy: number, vz: number, w: number, ta: number, tb: number, tc: number, triCut: number, pinOf: number, afx: number, afy: number, afz: number, t0: number, t1: number, p: number): void;
+  /** As `air_forces`, with the air read at each face's first corner from `airX`, `airY`, `airZ` (a grid's flow in space). */
+  air_forces_field(x: number, y: number, z: number, vx: number, vy: number, vz: number, w: number, ta: number, tb: number, tc: number, triCut: number, pinOf: number, afx: number, afy: number, afz: number, airX: number, airY: number, airZ: number, t0: number, t1: number, p: number): void;
   hull_hits(idx: number, start: number, count: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, owner: number, pinOf: number, pinBody: number, body: number, planes: number, nf: number, par: number, out: number): number;
   grid_build(x: number, y: number, z: number, n: number, cx: number, cy: number, cz: number, slot: number, start: number, count: number, sorted: number, mf: number, mi: number): void;
   grid_pairs(x: number, y: number, z: number, n: number, cx: number, cy: number, cz: number, start: number, sorted: number, sx: number, sy: number, sz: number, nbrN: number, pi: number, pj: number, group: number, mf: number, mi: number): number;
@@ -38,6 +40,8 @@ export interface KernelExports {
   grid3_fire(gi: number, gf: number): void;
   grid3_solid_faces(gi: number, gf: number): void;
   grid3_project(gi: number, gf: number): void;
+  grid3_project_a(gi: number, gf: number): void;
+  grid3_project_b(gi: number, gf: number): void;
   grid3_advect_smoke(gi: number, gf: number): void;
   /** 1 when a speed of the grid is not a number or is past 1e6 either way. */
   grid3_health(gi: number): number;
@@ -47,6 +51,7 @@ export interface KernelExports {
   grid3_fuel_sum(gi: number, gf: number): void;
   grid3_smoke_sum(gi: number, gf: number): void;
   grid3_max_speed(gi: number, gf: number): void;
+  grid3_fire_readouts(gi: number, gf: number): void;
 }
 
 /**
@@ -72,7 +77,7 @@ export const GRID_OF = new WeakMap<object, GridKernels>();
 export const GI = {
   n: 0, fire: 1, u: 2, v: 3, w: 4, u2: 5, v2: 6, w2: 7, s: 8, s2: 9, p: 10, div: 11, wl: 12, wr: 13, wd: 14, wu: 15, wb: 16, wf: 17, inv: 18,
   fix: 19, fixed: 20, rowLo: 21, rowHi: 22, own: 23, src: 24, T: 25, F: 26, T2: 27, F2: 28, wet: 29, ca: 30, cb: 31, cc: 32, oa: 33, ob: 34, oc: 35, om: 36,
-  sb: 37, still: 38, drops: 39, nbodies: 40, ndrops: 41, sourceOn: 42, hold: 43, size: 64,
+  sb: 37, still: 38, drops: 39, nbodies: 40, ndrops: 41, sourceOn: 42, hold: 43, nf0: 44, nf1: 45, size: 64,
 } as const;
 
 /** The numbers of a grid in space (`lib.rs`: `F_*`): the box and cell sizes, the step, the wind, the lift, the swirl and the fire's settings. */
