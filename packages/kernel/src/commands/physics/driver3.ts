@@ -30,7 +30,7 @@ import { specKey } from './jointbuild';
 import { CheckpointStore } from './checkpoints';
 import { ClothOut, DropsOut, FlipArrays, RecList, SmokeOut, makeFloat32 } from './flip';
 import type { WorldValue } from './types';
-import { DEFAULT_WORLD, collectBuffers, isWorldValue } from './types';
+import { DEFAULT_WORLD, cellForMove, isWorldValue } from './types';
 import { getStoredHandler } from '../numbers/handlers';
 import { cos, sin } from '../../physics/math';
 import { runHandler } from '../numbers/run';
@@ -2978,8 +2978,8 @@ export class Physics3Driver implements WorldDriver {
       seen.add(rec.id);
       const c = this.lastCells.get(rec.id);
       if (!c) return;
-      cells.push([rec.p.name, c]);
-      collectBuffers(c.defined ? c.value : undefined, transfer, 0);
+      // the worker keeps its own arrays: the reply carries copies, and the copies' buffers are the ones moved
+      cells.push([rec.p.name, cellForMove(c, transfer)]);
     };
     for (const m of this.members) if (m.role === 'body') add(m.rec);
     for (const j of this.jointMembers) add(j.rec);

@@ -31,7 +31,7 @@ const make = (lines: readonly string[]): Figure => {
   return f;
 };
 
-function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; moved: number[]; posts: ToWorker[] } {
+function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; moved: number[]; posts: ToWorker[]; state: PhysicsWorkerState } {
   const state = new PhysicsWorkerState();
   let cb: ((m: FromWorker) => void) | undefined;
   let onErr: ((why: string) => void) | undefined;
@@ -58,7 +58,7 @@ function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; 
       cb = undefined;
     },
   };
-  return { channel, moved, posts };
+  return { channel, moved, posts, state };
 }
 
 const zs = (f: Figure): Float32Array => {
@@ -186,5 +186,47 @@ describe('round 6 carry-over: a slider logged in the worker (design 9.6)', () =>
     expect(posts.filter((m) => m.k === 'load').length).toBe(2);
     expect(page.toScript()).toMatch(/@input physics set gy/);
     expect(page.value('ball')).toEqual(alone.value('ball'));
+  });
+});
+
+describe('what the worker moves is a copy, in space (PH-47)', () => {
+  const SLEEPER3 = [...SPLASH, 'cube = Body(Box((5, 5, 0.5), 1, 1, 1), mass = 2)', 'fg = cube.force("gravity")', 'fn = cube.force("normal")'];
+
+  it('a body that sleeps for 60 frames reads its forces in the worker and on the page, and no frame throws', () => {
+    const page = make(SLEEPER3);
+    const alone = make(SLEEPER3);
+    const { channel, state } = sameThread();
+    const host = new PhysicsWorkerHost(page, () => channel);
+    for (let k = 1; k <= 150; k++) {
+      const t = k / 60;
+      page.setClock(t);
+      host.frame(t);
+      alone.setClock(t);
+    }
+    expect(host.running).toBe(true);
+    expect(host.takeWarnings().map((x) => x.kind)).not.toContain('worker_crashed');
+    const inside = (state as unknown as { figure: Figure }).figure;
+    const body = inside.value('cube') as { forces?: Float64Array };
+    expect(body.forces?.byteLength).toBeGreaterThan(0);
+    const fn = inside.value('fn') as { x: number; y: number; z: number };
+    expect(fn.z).toBeCloseTo(2 * 9.8, 3);
+    expect(page.value('fn')).toEqual(fn);
+    expect(page.value('fn')).toEqual(alone.value('fn'));
+    expect(page.value('fg')).toEqual(alone.value('fg'));
+  });
+
+  it('the arrays in a reply are copies: the worker\'s own arrays are never detached by a frame', () => {
+    const page = make(SLEEPER3);
+    const { state } = sameThread();
+    state.handle({ k: 'load', seq: 1, script: page.toScript() });
+    const inside = (state as unknown as { figure: Figure }).figure;
+    for (let k = 1; k <= 30; k++) {
+      const { reply, transfer } = state.handle({ k: 'frame', seq: 1 + k, t: k / 60, sets: [], lines: [] });
+      const water = inside.value('water') as { xs: Float32Array };
+      const held = water.xs.buffer;
+      for (const b of transfer) expect(b).not.toBe(held);
+      structuredClone(reply, { transfer });
+      expect(water.xs.byteLength).toBeGreaterThan(0);
+    }
   });
 });
