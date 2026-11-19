@@ -729,9 +729,9 @@ JavaScript's `+`, `−`, `*`, `/` and `Math.sqrt` give the same answer on every 
 1. The engine uses its own `sin`, `cos`, `atan2`, `exp` and `pow`, written with only exact operations, in `packages/kernel/src/physics/math.ts`.
 2. Every loop over bodies, pairs and contacts runs in id order. No order comes from a hash or an unordered set.
 3. No randomness, except `seed`-based numbers from the probability area's seeded generator (for example where `Pour` puts each drop).
-4. Formulas the user writes (forces, motors) are run by the kernel's compiled functions. Those use `Math.sin` today. For exact replay across browsers, the compiled-function maths in the kernel switches to the same functions in `math.ts`. This is a change to the core (section 16).
+4. Formulas the user writes (forces, motors) are run by the kernel's compiled functions. Those used `Math.sin` and the rest, which differ between engines in the last bit (a flag in gusts with `sin(2 t)` in its wind and a smoke with the same in its wind differed from the first or second second of the film between Chromium, Firefox and WebKit). Since round 10 the compiled functions run `packages/kernel/src/language/exact-math.ts` (installed by default; `setExactMath(false)` brings back `Math` for a test). It is made of `+ − × ÷`, `Math.sqrt`, `Math.floor`, `Math.abs`, `Math.trunc`, `Math.sign` and comparisons only: the angle is reduced by π/2 in pieces whose products are exact (a long reduction in whole numbers, `BigInt`, for an angle of 1.3e10 or more), `atan`, `atan2` and `log` are the C library's algorithms, `exp` is `physics/math.ts`'s, and `pow` is worked in double-double numbers. Each function is within 1 ulp of `Math` (`tan`, `asin`, `acos`, the hyperbolic functions and `hypot` within 2 to 3) and gives `Math`'s answer for NaN, the infinities, the signed zeros and the edges of its domain (`packages/kernel/bench/exact-math.bench.ts`). The engine's own `sin` and `cos` (`physics/math.ts`) are not these: they are good to 1e-18 in absolute terms, and are left as they are so no film changes.
 
-A test runs the same 60 s film in Chrome, Firefox and Safari and compares a hash of the world every second (section 11.4).
+`packages/kernel/bench/cross-browser.mjs` runs seven 60 s films in Chromium, Firefox and WebKit (Safari's engine), with the Rust loops on and off, and compares a hash of the world every second (section 11.4). Equal in all of them since round 10; without the exact maths the flag and the smoke differ.
 
 ### 10.3 Checkpoints
 
@@ -886,6 +886,37 @@ readouts in one sweep).** The same Chrome script, CPU 4× slower, two runs; Node
 
 Every fire and cloth row of 11.2 is within its Chrome goal.
 
+**Measured (round 10), every row.** Apple M1 Pro. Node: `packages/kernel/bench/physics.bench.ts` ("bodies (design 11.2)" and the rows above), three runs, the range of the three. Chrome 157 with the CPU 4× slower: `packages/kernel/bench/chrome-physics.mjs`, two full runs, the two means (the page's main thread; the product runs cloth, liquid and the grids in the worker). A row's percentage is the mean (the slowest second for the two rows of falling bodies) over the goal.
+
+| Scene | Node goal | Node mean (95%, worst) | Chrome goal | Chrome mean, run 1 and 2 | % of goal |
+|---|---|---|---|---|---|
+| Apply one physics line (`ball with bounce = 0.9`, 300 bodies at rest) | 0.25 ms | median 0.23 to 0.26 (95% 0.37 to 0.47, worst 0.38 to 1.25) | 1 ms | median 0.8, 0.8 (95% 1.2 to 1.3) | 80 |
+| 2D pile-up, 300 boxes dropped at once | 1.5 ms | slowest second 1.18 to 1.37 (a first run in a cold process 2.1 to 2.3), mean 0.20 (95% 1.06, worst 2.6) | 6 ms | slowest second 5.42, 4.41 (mean 1.16, 0.96; worst 24.1, 20.7) | 74 to 90 |
+| 2D, 900 asleep and 100 falling | 0.75 ms | 2.7 to 3.1 (95% 3.4 to 3.6, worst 3.5 to 11.3) | 3 ms | 7.53, 7.01 (95% 8.9, worst 9.7) | 234 to 251 |
+| 2D chain of 200 hinges, hanging | 1 ms | 0.75 to 0.85 (95% 1.1 to 1.8, worst 9 to 22) | 4 ms | 3.05, 3.14 (95% 4.0 to 4.3, worst 11.7 to 13.3) | 76 to 78 |
+| 2D chain of 200 hinges, let go level, 8 s | 1 ms | 104 to 118 (95% 240 to 270, worst 260 to 291) | | | |
+| 2D car on hills, 2,000 ground pieces | 0.12 ms | 0.18 to 0.21 (95% 0.21 to 0.27, worst 1.6 to 2.5) | 0.5 ms | 1.01, 0.94 (95% 1.6 to 1.7, worst 3.8 to 4.7) | 187 to 202 |
+| 3D boxes, 100, all awake | 1.5 ms | 1.53 to 1.77, slowest second 1.72 to 2.04 (95% 2.0 to 2.3, worst 4.3 to 16.5) | 6 ms | slowest second 7.43, 7.73 (mean 6.73, 6.54; worst 13.1 to 16.4) | 124 to 129 |
+| 2D liquid, 2,000 drops | 1.5 ms | | 6 ms | 5.72, 5.32 (95% 6.1 to 6.8) | 89 to 95 |
+| 3D liquid, 2,000 drops | 1.5 ms | | 6 ms | 5.11, 4.91 (95% 5.5 to 5.8) | 82 to 85 |
+| Waves 64 × 64 | 0.25 ms | | 1 ms | 0.52, 0.51 | 51 to 52 |
+| Smoke 64 × 64 | 0.75 ms | | 3 ms | 2.10, 2.04 | 68 to 70 |
+| Fire in the plane, two burning bodies | 1 ms | | 4 ms | 3.27, 2.87 | 72 to 82 |
+| Seek anywhere in a 60 s film, 300 bodies, warm | 25 ms | median 1.6, 95% 2.8 to 3.1, worst 28 to 32 | 100 ms | median 6.4, 6.0; 95% 14.0, 13.3; worst 135.6, 126.0 | 95%: 13 to 14 |
+| Restart a 60 s film with 300 bodies | first frame 16 ms | 0.32 to 0.40 ms, not behind after 60 frames | first frame 16.7 ms | 1.4, 2.1 ms (a cold first run 31.7 ms); not behind after 1 frame | 8 to 13 |
+| 2D rope, 400 points | 0.5 ms | | 2 ms | 1.00, 0.83 | 41 to 50 |
+| 3D cloth 32 × 32 on a ball | 0.75 ms | | 3 ms | 2.63, 2.51 | 84 to 88 |
+| 64 × 32 flag in gusts | 1.5 ms | | 6 ms | 2.41, 2.43 | 40 |
+| 64 × 32 over 40 bodies | 2 ms | | 8 ms | 5.51, 5.49 | 69 |
+| 64 × 32 that hits itself | 2 ms | | 8 ms | 6.41, 6.34 | 79 to 80 |
+| Two 64 × 32 cloths | 2 ms | | 8 ms | 6.01, 5.92 | 74 to 75 |
+| 64 × 32 and 2,000 drops | 2 ms | | 8 ms | 7.88, 7.28 | 91 to 99 |
+| Fire in space 24³ | 2 ms | | 8 ms | 3.72, 3.34 | 42 to 47 |
+| Fire in space 32³ | 4 ms | | 8 ms | 8.15, 7.54 | 94 to 102 |
+| 64 × 32 flag over a fire 24³ | 2.5 ms | | 8 ms | 8.17, 7.51 | 94 to 102 |
+
+The rows over their Node budget are findings, with the numbers: most asleep (a world of 1,000 bodies of which none is awake costs 0.9 ms a frame by itself, and 100 falling balls alone cost 0.23 ms), the chain let go level (the chain folds on itself after 4 s and a frame takes 100 to 290 ms), the car on 2,000 ground pieces, and 3D boxes with none asleep. In Chrome, three rows are more than 25% over their goal (10.8 of the tasks stays open): most asleep, the car on hills and 3D boxes all awake. The apply of a line is within its budget at the edge of it (0.23 to 0.26 against 0.25); the flush that follows a change to a body rebuilds the world and plays the film again to where it was (68 ms in Node, 260 ms in Chrome with the CPU 4× slower for a figure at 20 s with 300 bodies, design 5.4 "A line redefines a body"), which the budget of the table does not cover.
+
 ### 11.3 Hard limits
 
 These are the same on every computer. Over a limit, the line is refused with `limit` (`errors.md` 3).
@@ -944,6 +975,25 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Liquid, no garbage | Steps of a 3D liquid of 2,000 drops (Rust loops on and off) and of a 2D liquid, after warm-up | no collector run, under 16 bytes a step |
 | Frame, no garbage | Frames through `setClock` of a 64 × 32 flag in constant wind (Rust loops on and off), 300 boxes at rest, a 2D liquid of 2,000 drops, fire 64 × 64 with two burning bodies | no collector run; under 2 KB, 1 KB, 4 KB, 8 KB a frame (the cells, below) |
 | Frame, bodies falling | 300 boxes falling and landing, a frame through `setClock` | under 30 KB a frame (the cells of the bodies that move) |
+
+**Where each row is checked, and what round 10 measured** (Node, `packages/kernel/bench/physics-checks.bench.ts` unless said; a row that fails keeps asserting the number of the design):
+
+| Row | Result |
+|---|---|
+| Worst frame, 60 s | fails: the slowest frame without a collector pause is 3.8 to 5.3 ms for the 2D pile of 300 boxes and 8.5 to 15.9 ms for 100 boxes in space (budget 1.5 ms); the mean is 0.2 and 1.7 ms |
+| Pile-up | passes on its second run: the slowest second is 1.28 ms, and 2.1 to 2.3 ms in a process that has played no film yet |
+| Calm stack | passes: the top box moves 0.0000 mm from 5 s to 60 s, asleep and with sleeping off; the tower of 20 sags 106 mm in its first seconds (5 mm of slop at each of 20 contacts), so "under 1 mm" holds after it settles, not from where the boxes are put |
+| Pyramid | passes: all asleep at 1.2 s, the farthest box 46.7 mm from where it was put after 60 s |
+| No pass-through | passes: 0 of 1,000 shots passed (seeded offsets) |
+| Energy | passes: 1,000 bounces, the largest loss of the height 0.017% |
+| Energy, joints | fails: a hinge pendulum swung 0.6 rad loses 2.3% of its energy in 10 s and 72.6% in 1,000 s (budget 2%) |
+| Same result | passes: seven films twice, every hash equal every second for 60 s, and with the Rust loops on and off for 20 s; and in Chromium, Firefox and WebKit (`cross-browser.mjs`, once the formulas use the exact maths, 10.2 item 4) |
+| Seek | fails by a little: 100 seeded random times in a 60 s film of 300 bodies asleep, 95% under 13 ms and the worst 28 to 31 ms (budget 25); with sleeping off the median is 30 ms and the worst 70 ms |
+| Long run | passes: 10 minutes of 300 awake bodies, the checkpoints never over 31.7 MB, the heap and buffers after a collection peak at 106.8 MB in minutes 4 to 7 and 99.6 MB in the last 3 minutes |
+| Wake storm | fails: a ball hits 500 sleeping boxes, 471 wake, the mean frame is 4.0 ms and the worst 6.0 to 15.7 ms (budget 1.5) |
+| One line | passes: the apply is under 0.5 ms (95%); the flush after it is 68 ms (see 11.2) |
+| No garbage, 300 bodies | fails: 3 collector runs in 2,500 steps of 294 awake bodies; 100 boxes in space awake: 139 runs in 2,500 steps |
+| Worker cost, cloth rows, liquid rows, frame rows | in `packages/sdk/bench/physics.bench.ts` and `physics.bench.ts`, as before |
 
 The "no garbage" rows count collector runs (Node's `gc` performance entries) in a window that starts after a `gc()`, so what
 the setup left in the young generation does not fall into it: the bench's Node is started with `--expose-gc`
@@ -1197,7 +1247,7 @@ Each round is one PR, with tests, examples in the studio and screenshots.
 - A real engine with contacts, friction, joints, vehicles, liquids and cloth, where the reference app has none.
 - Cloth, water and bodies push each other both ways, in one exact film.
 - Every part is a line in the same language, so formulas, sliders and the teacher drive it.
-- Seek and replay are exact, and the same on every computer.
+- Seek and replay are exact, and the same on every computer: the formulas a person writes run on their own exact maths (`exact-math.ts`), so a film is the same bits in Chromium, Firefox and Safari's engine.
 - Forces are counted per kind and drawn, so a lesson shows why a body moves.
 - One speed level for every computer, so a lesson made on a fast laptop plays the same on a slow one.
 
