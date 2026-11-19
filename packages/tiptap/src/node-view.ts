@@ -9,8 +9,9 @@ import { NodeSelection } from '@tiptap/pm/state';
 import type { EditorView, NodeView } from '@tiptap/pm/view';
 import { createApp } from '@incantly/sdk';
 import type { LineResult, MountedApp } from '@incantly/sdk';
-import { FIGURE_DEFAULTS, FULL_WIDTH_PX, SCRIPT_HEADER, checkAttrs, isPictureUrl } from './attrs';
+import { FIGURE_DEFAULTS, FULL_WIDTH_PX, HEIGHT_MAX, HEIGHT_MIN, SCRIPT_HEADER, checkAttrs, isPictureUrl } from './attrs';
 import type { IncantlyFigureAttrs } from './attrs';
+import { CodePanel } from './code-panel';
 import { tiptapError } from './errors';
 import type { TiptapError } from './errors';
 import { PICTURE_LIMIT, pictureOf } from './picture';
@@ -19,6 +20,7 @@ import { runtimeOf } from './runtime';
 import type { EditorRuntime } from './runtime';
 import type { SchedulerView } from './scheduler';
 import { ensureStyles } from './styles';
+import { FigureToolbar } from './toolbar';
 import type { IncantlyTiptapOptions } from './types';
 
 /** A line of the script that did not apply, with its position in the node's script (1-based). */
@@ -48,6 +50,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
   readonly notice: HTMLElement;
   readonly captionEl: HTMLElement;
   readonly srList: HTMLElement;
+  readonly resizeEl: HTMLElement;
   node: PmNode;
   /** True while the view holds, or is about to hold, a mounted app. */
   wantsMount = false;
@@ -77,6 +80,11 @@ export class FigureNodeView implements NodeView, SchedulerView {
   /** The elements that belong to the view's own interface (events in them are not the editor's). */
   protected readonly uiRoots: HTMLElement[] = [];
   private contextLost = false;
+  private panel: CodePanel | undefined;
+  private toolbar: FigureToolbar | undefined;
+  private selected = false;
+  private wasWritable: boolean | undefined;
+  private readonly onEditorUpdate = (): void => this.syncWritable();
 
   constructor(
     protected readonly editor: Editor,
@@ -108,11 +116,46 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.captionEl = h('div', 'inc-tt-caption');
     this.srList = h('ul', 'inc-tt-sr');
     this.srList.setAttribute('aria-label', 'Objects in the figure');
-    this.dom.append(this.box, this.badge, this.notice, this.captionEl, this.srList);
-    this.uiRoots.push(this.box, this.badge, this.notice);
+    this.resizeEl = h('div', 'inc-tt-resize');
+    this.resizeEl.setAttribute('role', 'slider');
+    this.resizeEl.setAttribute('aria-label', 'Figure height');
+    this.resizeEl.setAttribute('aria-valuemin', String(HEIGHT_MIN));
+    this.resizeEl.setAttribute('aria-valuemax', String(HEIGHT_MAX));
+    this.resizeEl.tabIndex = 0;
+    this.dom.append(this.box, this.badge, this.notice, this.captionEl, this.resizeEl, this.srList);
+    this.uiRoots.push(this.box, this.badge, this.notice, this.resizeEl);
     this.attachBoxEvents();
+    this.attachResize();
     this.render();
+    this.syncWritable();
+    this.editor.on('update', this.onEditorUpdate);
     this.key = this.runtime.scheduler.register(this);
+    // "Ask AI for a figure" in the slash menu: the new figure is selected with its AI box open
+    if (this.runtime.askOnNext !== undefined && this.runtime.askOnNext === this.figureId) {
+      this.runtime.askOnNext = undefined;
+      queueMicrotask(() => {
+        if (this.destroyed || !this.writable) return;
+        this.selectSelf();
+        this.ensureToolbar().show();
+        this.toolbar?.toggleAi(true);
+      });
+    }
+  }
+
+  /** What only a writer sees follows the editor's editable state and the extension's `readOnly`. */
+  private syncWritable(): void {
+    if (this.destroyed) return;
+    const w = this.writable;
+    if (w === this.wasWritable) return;
+    this.wasWritable = w;
+    this.dom.classList.toggle('inc-tt-writable', w);
+    this.resizeEl.hidden = !w;
+    if (!w) {
+      this.toolbar?.hide();
+      this.panel?.close();
+    } else if (this.selected) this.ensureToolbar().show();
+    this.showBadge();
+    if (this.box.dataset['state'] === 'bad') this.render();
   }
 
   /* ------------------------------ what the node says ------------------------------ */
@@ -158,6 +201,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.dom.dataset['id'] = this.figureId;
     this.box.style.width = width === 'full' ? '100%' : `${width}px`;
     this.box.style.height = `${height}px`;
+    this.resizeEl.setAttribute('aria-valuenow', String(height));
     const caption = typeof a['caption'] === 'string' ? a['caption'] : '';
     this.box.setAttribute('aria-label', caption || 'Incantly figure');
     this.captionEl.textContent = caption;
@@ -256,7 +300,8 @@ export class FigureNodeView implements NodeView, SchedulerView {
 
   private showBadge(): void {
     const n = this.problems.length;
-    this.badge.hidden = n === 0 || this.app === undefined;
+    // the badge opens the code panel, which only a writer has
+    this.badge.hidden = n === 0 || this.app === undefined || !this.writable;
     this.badge.textContent = n === 1 ? '1 line has an error' : `${n} lines have errors`;
     this.badge.setAttribute('aria-label', n === 1 ? '1 line has an error. Open the lines.' : `${n} lines have errors. Open the lines.`);
   }
@@ -434,13 +479,13 @@ export class FigureNodeView implements NodeView, SchedulerView {
     );
   }
 
-  /** Round 3 and 4 hook: the app is live. */
+  /** The app is live: the toolbar offers "Save view as default". */
   protected onMounted(_app: MountedApp): void {
-    // the toolbar and the code panel follow a live figure
+    this.toolbar?.sync();
   }
 
   protected onUnmounted(): void {
-    // the toolbar and the code panel stop following it
+    this.toolbar?.sync();
   }
 
   private mountFailed(cause: unknown): void {
@@ -570,51 +615,87 @@ export class FigureNodeView implements NodeView, SchedulerView {
     });
   }
 
-  /** Round 3: opens the code panel, at a line when one is given. */
-  openLines(_line?: number): void {
-    // the panel is added with the toolbar
+  /* ------------------------------ the writer's interface ------------------------------ */
+
+  /** Opens the code panel under the figure, with the caret at a line when one is given. Writers only. */
+  openLines(line?: number): void {
+    if (!this.writable || this.destroyed) return;
+    this.ensurePanel().open(this.nodeScript(), line);
+    this.toolbar?.sync();
   }
 
-  /* ------------------------------ updates from the editor ------------------------------ */
-
-  update(node: PmNode): boolean {
-    if (this.destroyed || node.type !== this.node.type) return false;
-    const prev = this.node;
-    if (node === prev) return true;
-    this.node = node;
-    const changed = (k: string): boolean => prev.attrs[k] !== node.attrs[k];
-    this.render();
-    if (changed('script')) this.scriptChanged(typeof node.attrs['script'] === 'string' ? node.attrs['script'] : '');
-    if (changed('mode')) this.modeChanged();
-    if (changed('height') || changed('width')) this.resized();
-    if (this.dead && (changed('script') || changed('mode'))) this.revive();
-    this.onNodeUpdated(prev);
-    return true;
+  /** Closes the panel and gives the document its focus back, with the figure selected. */
+  closeLines(): void {
+    this.panel?.close();
+    this.toolbar?.sync();
+    this.leaveToDocument();
   }
 
-  /** Round 3 and 4 hook: the node changed. */
-  protected onNodeUpdated(_prev: PmNode): void {
-    // the toolbar and the panel follow the node
+  toggleLines(): void {
+    if (this.panel?.isOpen) this.closeLines();
+    else this.openLines(this.problems[0]?.line);
   }
 
-  /** Round 4 hook: an outside script is about to be applied; false stops it. */
-  protected beforeOutsideScript(_script: string): void {
-    // collaboration conflicts are handled by the panel
+  get linesOpen(): boolean {
+    return this.panel?.isOpen === true;
   }
 
-  private scriptChanged(script: string): void {
-    if (script === this.ownCommit) {
-      this.ownCommit = undefined;
-      this.applied = script;
-      return;
+  private ensurePanel(): CodePanel {
+    if (!this.panel) {
+      this.panel = new CodePanel(this, this.doc);
+      this.box.after(this.panel.el);
+      this.uiRoots.push(this.panel.el);
     }
-    this.ownCommit = undefined;
-    this.beforeOutsideScript(script);
+    return this.panel;
+  }
+
+  private ensureToolbar(): FigureToolbar {
+    if (!this.toolbar) {
+      this.toolbar = new FigureToolbar(this, this.doc);
+      this.dom.prepend(this.toolbar.el);
+      this.uiRoots.push(this.toolbar.el);
+    }
+    return this.toolbar;
+  }
+
+  /** An attribute of the node as the toolbar shows it. */
+  attrOf<T extends string | number>(name: string, fallback: T): T {
+    const v = this.node.attrs[name];
+    return (typeof v === typeof fallback ? v : fallback) as T;
+  }
+
+  currentScript(): string {
+    return this.nodeScript();
+  }
+
+  currentMode(): IncantlyFigureAttrs['mode'] | undefined {
+    return this.attrs()?.mode;
+  }
+
+  /** "Save view as default": the figure as it is now becomes its script. */
+  saveViewAsDefault(): void {
+    const app = this.app;
+    if (!app || app.destroyed) return;
+    const text = this.safe(() => app.toScript());
+    if (text === undefined) return;
+    this.commitScript(text);
+    this.panel?.showStreamed(text);
+  }
+
+  /** Deletes the figure from the document. */
+  deleteSelf(): void {
+    const pos = this.getPos();
+    if (typeof pos !== 'number' || this.view.isDestroyed) return;
+    this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize));
+    this.view.focus();
+  }
+
+  /** Makes the live figure show a script: new lines at the end run alone, any other change loads the whole script. */
+  applyScript(script: string): void {
     const old = this.applied;
     this.applied = script;
     const app = this.app;
     if (!app || app.destroyed) return;
-    // lines added at the end run alone; any other change loads the whole script
     const rest = script.slice(old.length);
     if (old !== '' && script.startsWith(old) && (old.endsWith('\n') || rest.startsWith('\n'))) {
       const lines = rest.replace(/^\n/, '').split('\n');
@@ -632,6 +713,63 @@ export class FigureNodeView implements NodeView, SchedulerView {
       this.showBadge();
       this.refreshObjects();
     } else this.loadLines(script);
+  }
+
+  /** The panel's lines were replaced by an outside change while the writer had typed some. */
+  reportConflict(): void {
+    const e = tiptapError('collab_conflict', 'Someone else committed this figure first, so their lines are shown.', {
+      hint: 'Your lines are kept in the panel: re-apply them or discard them.',
+      node: this.figureId,
+    });
+    reportError(this.editor, this.options, e);
+    this.say('Someone else changed this figure first', 8000);
+  }
+
+  reportPanelError(e: TiptapError): void {
+    reportError(this.editor, this.options, e);
+  }
+
+  /** Round 4 replaces this with the AI job. */
+  async ask(request: string): Promise<void> {
+    const ok = this.editor.commands.askIncantly(this.figureId, request);
+    if (!ok) {
+      const e = (this.editor.storage as unknown as Record<string, { lastError?: TiptapError | null } | undefined>)['incantly']?.lastError;
+      this.toolbar?.message(e?.message ?? 'The AI could not start.');
+    }
+  }
+
+  /** Adds an element of the view's own interface, so the editor leaves its events alone. */
+  registerUi(el: HTMLElement): void {
+    this.uiRoots.push(el);
+  }
+
+  /* ------------------------------ updates from the editor ------------------------------ */
+
+  update(node: PmNode): boolean {
+    if (this.destroyed || node.type !== this.node.type) return false;
+    const prev = this.node;
+    if (node === prev) return true;
+    this.node = node;
+    const changed = (k: string): boolean => prev.attrs[k] !== node.attrs[k];
+    this.render();
+    if (changed('script')) this.scriptChanged(typeof node.attrs['script'] === 'string' ? node.attrs['script'] : '');
+    if (changed('mode')) this.modeChanged();
+    if (changed('height') || changed('width')) this.resized();
+    if (this.dead && (changed('script') || changed('mode'))) this.revive();
+    this.toolbar?.sync();
+    return true;
+  }
+
+  private scriptChanged(script: string): void {
+    if (script === this.ownCommit) {
+      this.ownCommit = undefined;
+      this.applied = script;
+      return;
+    }
+    this.ownCommit = undefined;
+    // an outside change wins over lines the writer has typed and not committed (the panel keeps them)
+    this.panel?.outsideScript(script);
+    this.applyScript(script);
   }
 
   private modeChanged(): void {
@@ -687,12 +825,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     on(this.box, 'focusin', touch);
     // a drag that starts inside the figure moves a point, not the node
     on(this.box, 'mousedown', () => {
-      this.dom.draggable = false;
-      const restore = (): void => {
-        this.dom.draggable = true;
-        this.doc.removeEventListener('mouseup', restore, true);
-      };
-      this.doc.addEventListener('mouseup', restore, true);
+      this.suspendNodeDrag();
       if (this.writable) this.selectSelf();
     }, true);
     on<KeyboardEvent>(this.box, 'keydown', (e) => {
@@ -707,7 +840,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
   }
 
   /** Selects the node, so the toolbar shows. */
-  protected selectSelf(): void {
+  selectSelf(): void {
     const pos = this.getPos();
     if (typeof pos !== 'number' || this.view.isDestroyed) return;
     const sel = this.view.state.selection;
@@ -716,7 +849,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
   }
 
   /** Escape inside the figure: the document gets focus back, with the figure selected. */
-  protected leaveToDocument(): void {
+  leaveToDocument(): void {
     this.selectSelf();
     this.view.focus();
   }
@@ -765,24 +898,88 @@ export class FigureNodeView implements NodeView, SchedulerView {
   }
 
   selectNode(): void {
+    this.selected = true;
     this.dom.classList.add('inc-tt-selected');
-    this.onSelected(true);
+    if (this.writable) this.ensureToolbar().show();
   }
 
   deselectNode(): void {
+    this.selected = false;
     this.dom.classList.remove('inc-tt-selected');
-    this.onSelected(false);
+    this.toolbar?.hide();
   }
 
-  /** Round 3 hook: the node was selected or deselected. */
-  protected onSelected(_selected: boolean): void {
-    // the toolbar shows and hides
+  /** A drag that starts inside the figure or on its handle is the figure's own, so the node must not be dragged. */
+  private suspendNodeDrag(): void {
+    this.dom.draggable = false;
+    const restore = (): void => {
+      this.dom.draggable = true;
+      this.doc.removeEventListener('mouseup', restore, true);
+    };
+    this.doc.addEventListener('mouseup', restore, true);
+  }
+
+  /** The bottom edge drags to change the height: live while dragging, one transaction on release. */
+  private attachResize(): void {
+    const el = this.resizeEl;
+    let drag: { y: number; h: number; now: number } | undefined;
+    const clamp = (h: number): number => Math.round(Math.min(HEIGHT_MAX, Math.max(HEIGHT_MIN, h)));
+    const current = (): number => this.attrs()?.height ?? FIGURE_DEFAULTS.height;
+    el.addEventListener('mousedown', () => this.suspendNodeDrag(), true);
+    el.addEventListener('pointerdown', (e) => {
+      if (!this.writable) return;
+      e.preventDefault();
+      drag = { y: e.clientY, h: current(), now: current() };
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        // no pointer capture: the move events still reach the handle while the pointer is over it
+      }
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      drag.now = clamp(drag.h + e.clientY - drag.y);
+      this.setHeightNow(drag.now);
+    });
+    const end = (): void => {
+      if (!drag) return;
+      const h = drag.now;
+      const from = drag.h;
+      drag = undefined;
+      if (h !== from) this.commitAttrs({ height: h }, true);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+    el.addEventListener('keydown', (e) => {
+      if (!this.writable) return;
+      const step = e.shiftKey ? 100 : 20;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        this.commitAttrs({ height: clamp(current() + (e.key === 'ArrowDown' ? step : -step)) }, true);
+      }
+    });
+  }
+
+  /** Changes the box and the live figure to a height now, before the node says so. */
+  private setHeightNow(h: number): void {
+    this.box.style.height = `${h}px`;
+    this.resizeEl.setAttribute('aria-valuenow', String(h));
+    const app = this.app;
+    if (!app) return;
+    this.safe(() => {
+      app.element.style.height = `${h}px`;
+      const a = this.attrs();
+      app.resize(typeof a?.width === 'number' ? a.width : this.box.clientWidth || FULL_WIDTH_PX, h);
+    });
   }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     this.wantsMount = false;
+    this.editor.off('update', this.onEditorUpdate);
+    this.panel?.dispose();
+    this.toolbar?.el.remove();
     if (this.noticeTimer !== undefined) clearTimeout(this.noticeTimer);
     for (const off of this.offDom) off();
     this.offDom = [];

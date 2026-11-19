@@ -166,7 +166,14 @@ export const IncantlyFigure = Node.create<IncantlyTiptapOptions>({
             reportError(editor, options, checked);
             return false;
           }
-          if (dispatch) tr.replaceSelectionWith(type.create({ ...checked.value })).scrollIntoView();
+          if (dispatch) {
+            tr.replaceSelectionWith(type.create({ ...checked.value })).scrollIntoView();
+            // a figure at the very end would leave no line to write on
+            const paragraph = tr.doc.type.schema.nodes['paragraph'];
+            if (paragraph && tr.doc.lastChild?.type === type && tr.doc.canReplaceWith(tr.doc.childCount, tr.doc.childCount, paragraph)) {
+              tr.insert(tr.doc.content.size, paragraph.create());
+            }
+          }
           return true;
         },
 

@@ -8,6 +8,8 @@ import { DEFAULT_OPTIONS } from './types';
 export class EditorRuntime {
   readonly store = new FigureStore();
   readonly scheduler: EditorScheduler;
+  /** The id of a figure that was just inserted by "Ask AI for a figure": its AI box opens when it is selected. */
+  askOnNext: string | undefined;
 
   constructor(
     readonly editor: Editor,

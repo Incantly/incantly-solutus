@@ -6,6 +6,7 @@ import { DEFAULT_OPTIONS } from './types';
 import type { IncantlyTiptapOptions } from './types';
 import { isModeId } from './attrs';
 import { disposeRuntime, runtimeOf } from './runtime';
+import { slashPlugin } from './slash';
 
 export interface IncantlyStorage {
   /** The last error the extension reported, for hosts that poll instead of listening. */
@@ -38,6 +39,10 @@ export const Incantly = Extension.create<IncantlyTiptapOptions, IncantlyStorage>
   addExtensions() {
     const options = resolveOptions(this.options);
     return [IncantlyFigure.configure(options)];
+  },
+
+  addProseMirrorPlugins() {
+    return [slashPlugin(this.editor, resolveOptions(this.options))];
   },
 
   onCreate() {
