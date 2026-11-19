@@ -20,7 +20,7 @@ import { BodyType, FK, FORCE_KINDS, World2 } from '../../physics/world2';
 import { atan2, cos, sin } from '../../physics/math';
 import { solidShapeOf } from './shapes';
 import type { BodySpec, BodyValue, WorldValue } from './types';
-import { DEFAULT_WORLD, collectBuffers, isBodyValue, isWorldValue } from './types';
+import { DEFAULT_WORLD, cellForMove, isBodyValue, isWorldValue } from './types';
 import type { JointEnd, JointValue } from './joints';
 import { isJointValue } from './joints';
 import type { JointMember } from './jointbuild';
@@ -3051,8 +3051,8 @@ export class PhysicsDriver implements WorldDriver {
       seen.add(rec.id);
       const c = this.lastCells.get(rec.id);
       if (!c) return;
-      cells.push([rec.p.name, c]);
-      collectBuffers(c.defined ? c.value : undefined, transfer, 0);
+      // the worker keeps its own arrays: the reply carries copies, and the copies' buffers are the ones moved
+      cells.push([rec.p.name, cellForMove(c, transfer)]);
     };
     for (const m of this.members) if (m.role === 'body') add(m.rec);
     for (const j of this.jointMembers) add(j.rec);

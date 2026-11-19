@@ -104,6 +104,16 @@ export function setPhysicsGridSimd(on: boolean): void {
   gridSimd = on;
 }
 
+/**
+ * Would a grid in space built now run the SIMD build? `true` when the kernels and the SIMD switch are on and the engine
+ * has compiled that build, `false` when one is off or the engine cannot compile it, `undefined` before the module has
+ * been compiled (it is compiled when the first solver is built, or by `initPhysicsKernels`).
+ */
+export function physicsGridSimdReady(): boolean | undefined {
+  if (!enabled || !gridSimd || SIMD.failed) return false;
+  return SIMD.mod ? true : undefined;
+}
+
 /** Are the kernels on (the switch; they may still be missing on a computer without WebAssembly). */
 export function physicsKernelsOn(): boolean {
   return enabled;

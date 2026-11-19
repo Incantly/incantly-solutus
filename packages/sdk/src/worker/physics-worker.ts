@@ -5,7 +5,7 @@
  * so every hit has one order. The
  * worker holds a headless copy of the figure. The page sends the script when the figure's lines change, and each frame
  * the film time, the free values that changed and the `@input` lines made on the page (pushes, grabs). The worker
- * plays its copy to that time and sends back the cells of every object the world owns, with their typed arrays moved,
+ * plays its copy to that time and sends back the cells of every object the world owns, with copies of their typed arrays moved,
  * not copied. The page writes those cells over its own (the page's driver steps nothing meanwhile).
  *
  * This file is the message protocol and the worker's side of it, with no DOM and no timers: `physics.worker.ts` wires
