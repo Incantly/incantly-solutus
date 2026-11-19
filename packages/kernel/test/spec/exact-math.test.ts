@@ -42,7 +42,7 @@ const MIN_I64 = -(2n ** 63n);
 /** The bits of a double as an integer that grows with the number: neighbours differ by 1, and -0 and +0 are both 0. */
 function ordered(x: number): bigint {
   f64[0] = x;
-  const b = i64[0];
+  const b = i64[0] as bigint;
   return b < 0n ? MIN_I64 - b : b;
 }
 
@@ -276,7 +276,7 @@ describe('special cases equal Math\u2019s (design 10.2 item 4: NaN, the infiniti
       for (const x of EDGE_INPUTS) {
         const got = call(EXACT_MATH, fn, [x]);
         const want = call(Math, fn, [x]);
-        if (!agrees(got, want, BOUND_OF[fn])) bad.push(`${fn}(${Object.is(x, -0) ? '-0' : x}) gave ${Object.is(got, -0) ? '-0' : got}, Math gave ${Object.is(want, -0) ? '-0' : want}`);
+        if (!agrees(got, want, BOUND_OF[fn] as number)) bad.push(`${fn}(${Object.is(x, -0) ? '-0' : x}) gave ${Object.is(got, -0) ? '-0' : got}, Math gave ${Object.is(want, -0) ? '-0' : want}`);
       }
       expect(bad).toEqual([]);
     });
@@ -330,7 +330,7 @@ describe('special cases equal Math\u2019s (design 10.2 item 4: NaN, the infiniti
       for (const [a, b] of PAIRS) {
         const got = call(EXACT_MATH, fn, [a, b]);
         const want = call(Math, fn, [a, b]);
-        if (!agrees(got, want, BOUND_OF[fn])) bad.push(`${fn}(${label(a)}, ${label(b)}) gave ${label(got)}, Math gave ${label(want)}`);
+        if (!agrees(got, want, BOUND_OF[fn] as number)) bad.push(`${fn}(${label(a)}, ${label(b)}) gave ${label(got)}, Math gave ${label(want)}`);
       }
       expect(bad).toEqual([]);
     });
@@ -527,11 +527,11 @@ describe('a figure\u2019s formulas with the exact maths (design 10.2 item 4)', (
     expect(exactAgain.length).toBe(exact.length);
     const bad: string[] = [];
     for (let i = 0; i < exact.length; i++) {
-      const f = FORMULAS[i % FORMULAS.length];
-      const t = TIMES[Math.floor(i / FORMULAS.length)];
+      const f = FORMULAS[i % FORMULAS.length] as (typeof FORMULAS)[number];
+      const t = TIMES[Math.floor(i / FORMULAS.length)] as number;
       // 5 + 3 sin(2 t) carries the sine's ulp error, scaled by 3 and rounded, so it gets a few more ulp.
       const bound = f.name === 'yp' ? 4 : 1;
-      if (ulpDistance(exact[i], platform[i]) > bound) bad.push(`${f.line} at t = ${t}: ${exact[i]} against ${platform[i]}`);
+      if (ulpDistance(exact[i] as number, platform[i] as number) > bound) bad.push(`${f.line} at t = ${t}: ${exact[i]} against ${platform[i]}`);
       expect(Object.is(exact[i], exactAgain[i]), `back on the exact maths, value ${i}`).toBe(true);
     }
     expect(bad).toEqual([]);
