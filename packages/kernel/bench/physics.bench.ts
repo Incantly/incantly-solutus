@@ -12,7 +12,7 @@ import type { Water2 } from '../src/physics/water2';
 import { WaterForces } from '../src/physics/water2';
 import type { World2 } from '../src/physics/world2';
 import type { World3 } from '../src/physics/world3';
-import { CommandRegistry, Figure, geometry, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../src/index';
+import { CommandRegistry, Figure, geometry, getMathLib, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setExactMath, setPhysicsKernels } from '../src/index';
 
 const REG = (() => {
   const r = new CommandRegistry();
@@ -1052,5 +1052,63 @@ describe('bodies (design 11.2)', () => {
     expect(f.driversNeedFrames()).toBe(false);
     // (the reset lands on a step of the grid, so the two films are not the same to the bit: they must be the same film to a few millimetres)
     expect(worstDy).toBeLessThan(0.05);
+  });
+});
+
+/* ------------------------------ formulas on the exact maths (design 10.2 item 4; round 10, task 10.5) ------------------------------ */
+
+/** 300 boxes pushed by a force rule that reads the clock through `sin` and `cos`, never asleep. */
+const FORCE_RULE = (() => {
+  const l = ['g = Ground()', 'world with sleep = false'];
+  for (let k = 0; k < 300; k++) l.push(`b${k} = Body(Box((${(1.25 * (k % 20) - 12).toFixed(2)}, ${(0.5 + 1.25 * Math.floor(k / 20)).toFixed(2)}), 1, 1))`, `b${k} with force = (3 sin(t), 2 cos(2 t))`);
+  return l;
+})();
+
+describe('formulas on the exact maths (design 10.2 item 4)', () => {
+  it('a force rule with sin and cos on 300 bodies runs within 10% of the time it takes on the platform maths', { retry: 2 }, () => {
+    const run = (exact: boolean): number => {
+      setExactMath(exact);
+      try {
+        // the same film in each: mean of a frame over 6 s after 1 s
+        return frames(load(FORCE_RULE), 1, 7).mean;
+      } finally {
+        setExactMath(true);
+      }
+    };
+    // alternate the two three times and keep the least of each, so the machine's drift is not counted
+    let exact = Infinity;
+    let platform = Infinity;
+    for (let k = 0; k < 3; k++) {
+      platform = Math.min(platform, run(false));
+      exact = Math.min(exact, run(true));
+    }
+    console.log(`force = (3 sin(t), 2 cos(2 t)) on 300 bodies: a frame ${exact.toFixed(3)} ms on the exact maths, ${platform.toFixed(3)} ms on the platform's (${((100 * exact) / platform - 100).toFixed(1)}%)`);
+    expect(exact).toBeLessThan(platform * 1.1);
+  });
+
+  it('the same formulas on 200,000 calls of each function: the time of the exact maths against the platform', () => {
+    const lib = { exact: getMathLib() };
+    const xs = Array.from({ length: 1000 }, (_, i) => 0.001 + i * 0.0137);
+    const names = ['sin', 'cos', 'tan', 'atan', 'exp', 'log', 'sinh', 'pow'] as const;
+    const rows: string[] = [];
+    for (const n of names) {
+      const time = (m: typeof Math): number => {
+        let sink = 0;
+        const t = performance.now();
+        for (let r = 0; r < 200; r++) {
+          for (let i = 0; i < xs.length; i++) {
+            const x = xs[i] as number;
+            sink += n === 'pow' ? m.pow(x, 1.7) : (m[n] as (x: number) => number)(x * 0.1);
+          }
+        }
+        if (Number.isNaN(sink)) throw new Error('NaN');
+        return performance.now() - t;
+      };
+      const best = (m: typeof Math): number => Math.min(time(m), time(m), time(m));
+      const e = best(lib.exact as unknown as typeof Math);
+      const p = best(Math);
+      rows.push(`${n} ${((e * 1e6) / 200000).toFixed(0)} ns against ${((p * 1e6) / 200000).toFixed(0)} ns`);
+    }
+    console.log(`per call, exact against platform: ${rows.join(', ')}`);
   });
 });
