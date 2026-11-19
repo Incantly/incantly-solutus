@@ -726,7 +726,7 @@ Between physics steps, the screen shows bodies interpolated between the last two
 
 JavaScript's `+`, `−`, `*`, `/` and `Math.sqrt` give the same answer on every browser. `Math.sin`, `Math.cos`, `Math.atan2`, `Math.exp` and `Math.pow` do not have to. So:
 
-1. The engine uses its own `sin`, `cos`, `atan2`, `exp` and `pow`, written with only exact operations, in `packages/kernel/src/physics/math.ts`.
+1. The engine uses its own `sin`, `cos`, `atan2`, `exp` and `pow`, written with only exact operations, in `packages/kernel/src/physics/math.ts`. `sin` and `cos` are within 1 ulp of `Math` for angles up to 1e10 (the angle is cut by π/2 in pieces whose products are exact; finding PH-52); `exp` gives the platform's answer at both ends of its domain.
 2. Every loop over bodies, pairs and contacts runs in id order. No order comes from a hash or an unordered set.
 3. No randomness, except `seed`-based numbers from the probability area's seeded generator (for example where `Pour` puts each drop).
 4. Formulas the user writes (forces, motors) are run by the kernel's compiled functions. Those used `Math.sin` and the rest, which differ between engines in the last bit (a flag in gusts with `sin(2 t)` in its wind and a smoke with the same in its wind differed from the first or second second of the film between Chromium, Firefox and WebKit). Since round 10 the compiled functions run `packages/kernel/src/language/exact-math.ts` (installed by default; `setExactMath(false)` brings back `Math` for a test). It is made of `+ − × ÷`, `Math.sqrt`, `Math.floor`, `Math.abs`, `Math.trunc`, `Math.sign` and comparisons only: the angle is reduced by π/2 in pieces whose products are exact (a long reduction in whole numbers, `BigInt`, for an angle of 1.3e10 or more), `atan`, `atan2` and `log` are the C library's algorithms, `exp` is `physics/math.ts`'s, and `pow` is worked in double-double numbers. Each function is within 1 ulp of `Math` (`tan`, `asin`, `acos`, the hyperbolic functions and `hypot` within 2 to 3) and gives `Math`'s answer for NaN, the infinities, the signed zeros and the edges of its domain (`packages/kernel/bench/exact-math.bench.ts`). The engine's own `sin` and `cos` (`physics/math.ts`) are not these: they are good to 1e-18 in absolute terms, and are left as they are so no film changes.
@@ -992,7 +992,7 @@ Speed on average is not enough. The physics bench suite checks all of these, and
 | Long run | passes: 10 minutes of 300 awake bodies, the checkpoints never over 31.7 MB, the heap and buffers after a collection peak at 106.8 MB in minutes 4 to 7 and 99.6 MB in the last 3 minutes |
 | Wake storm | fails: a ball hits 500 sleeping boxes, 471 wake, the mean frame is 4.0 ms and the worst 6.0 to 15.7 ms (budget 1.5) |
 | One line | passes: the apply is under 0.5 ms (95%); the flush after it is 68 ms (see 11.2) |
-| No garbage, 300 bodies | fails: 3 collector runs in 2,500 steps of 294 awake bodies; 100 boxes in space awake: 139 runs in 2,500 steps |
+| No garbage, 300 bodies | passes since PH-53: no collector run and 0 bytes a step in 2,500 steps of 294 awake bodies and of 100 boxes in space awake, in 5 of 5 runs of each row (it failed with 3 runs and 139 runs; findings PH-53) |
 | Worker cost, cloth rows, liquid rows, frame rows | in `packages/sdk/bench/physics.bench.ts` and `physics.bench.ts`, as before |
 
 The "no garbage" rows count collector runs (Node's `gc` performance entries) in a window that starts after a `gc()`, so what
