@@ -66,23 +66,7 @@ export interface Poses {
   radB: number;
 }
 
-/** World point to body frame. */
-function toLocalX(P: Poses, b: number, x: number, y: number): number {
-  const dx = x - (P.px[b] as number);
-  const dy = y - (P.py[b] as number);
-  return (P.qc[b] as number) * dx + (P.qs[b] as number) * dy;
-}
-function toLocalY(P: Poses, b: number, x: number, y: number): number {
-  const dx = x - (P.px[b] as number);
-  const dy = y - (P.py[b] as number);
-  return -(P.qs[b] as number) * dx + (P.qc[b] as number) * dy;
-}
-function rotLocalX(P: Poses, b: number, x: number, y: number): number {
-  return (P.qc[b] as number) * x + (P.qs[b] as number) * y;
-}
-function rotLocalY(P: Poses, b: number, x: number, y: number): number {
-  return -(P.qs[b] as number) * x + (P.qc[b] as number) * y;
-}
+/* (World point to body frame, and a direction to it, are written out where they are used: see `collidePolygonCircle` and `collidePolygons`.) */
 
 export function collideCircles(P: Poses, a: Shape2, b: Shape2, m: Manifold): void {
   m.count = 0;
@@ -152,10 +136,15 @@ export function collidePolygonCircle(P: Poses, a: Shape2, b: Shape2, m: Manifold
     const d = Math.sqrt(d2);
     const nx = d > 0 ? dx / d : (a.wnx[i1] as number);
     const ny = d > 0 ? dy / d : (a.wny[i1] as number);
-    m.lnx = rotLocalX(P, a.body, nx, ny);
-    m.lny = rotLocalY(P, a.body, nx, ny);
-    m.lpx = toLocalX(P, a.body, vx, vy);
-    m.lpy = toLocalY(P, a.body, vx, vy);
+    // (the body-frame maps written out: a number passed to or returned from a call that is not inlined is a heap number)
+    const ca = P.qc[a.body] as number;
+    const sa = P.qs[a.body] as number;
+    const ox = vx - (P.px[a.body] as number);
+    const oy = vy - (P.py[a.body] as number);
+    m.lnx = ca * nx + sa * ny;
+    m.lny = -sa * nx + ca * ny;
+    m.lpx = ca * ox + sa * oy;
+    m.lpy = -sa * ox + ca * oy;
     m.id0 = u1 <= 0 ? 1 : 2;
     return;
   }
@@ -203,11 +192,17 @@ function maxSeparation(p1: Shape2, p2: Shape2): void {
 const CL = new Float64Array(6);
 const CL2 = new Float64Array(6);
 
+/** The side `clip` cuts by, set by the caller: the normal in 0 and 1, the offset in 2 (numbers passed in a call are heap numbers when it is not inlined). */
+const CLP = new Float64Array(3);
+
 /**
- * Clips the segment (x0, y0, id0)–(x1, y1, id1) in `src` to the side where `nx x + ny y - offset ≤ 0`, into `dst`.
- * Returns the number of points kept (0 to 2). A new point takes the id `cutId`.
+ * Clips the segment (x0, y0, id0)–(x1, y1, id1) in `src` to the side where `nx x + ny y - offset ≤ 0`, with `nx`, `ny`
+ * and `offset` read from `CLP`, into `dst`. Returns the number of points kept (0 to 2). A new point takes the id `cutId`.
  */
-function clip(src: Float64Array, dst: Float64Array, nx: number, ny: number, offset: number, cutId: number): number {
+function clip(src: Float64Array, dst: Float64Array, cutId: number): number {
+  const nx = CLP[0] as number;
+  const ny = CLP[1] as number;
+  const offset = CLP[2] as number;
   let k = 0;
   const d0 = nx * (src[0] as number) + ny * (src[1] as number) - offset;
   const d1 = nx * (src[3] as number) + ny * (src[4] as number) - offset;
@@ -300,8 +295,14 @@ export function collidePolygons(P: Poses, a: Shape2, b: Shape2, m: Manifold): vo
   ty /= tl;
   const side1 = -(tx * v1x + ty * v1y) + R;
   const side2 = tx * v2x + ty * v2y + R;
-  if (clip(CL, CL2, -tx, -ty, side1, edge * 256 + 128 + 0) < 2) return;
-  if (clip(CL2, CL, tx, ty, side2, edge * 256 + 128 + 1) < 2) return;
+  CLP[0] = -tx;
+  CLP[1] = -ty;
+  CLP[2] = side1;
+  if (clip(CL, CL2, edge * 256 + 128 + 0) < 2) return;
+  CLP[0] = tx;
+  CLP[1] = ty;
+  CLP[2] = side2;
+  if (clip(CL2, CL, edge * 256 + 128 + 1) < 2) return;
   const front = nrx * v1x + nry * v1y;
   m.type = flip ? ManifoldType.FaceB : ManifoldType.FaceA;
   m.lnx = ref.lnx[edge] as number;
@@ -315,8 +316,10 @@ export function collidePolygons(P: Poses, a: Shape2, b: Shape2, m: Manifold): vo
     const y = CL[p * 3 + 1] as number;
     const sep = nrx * x + nry * y - front;
     if (sep > R) continue;
-    const lx = toLocalX(P, inc.body, x, y);
-    const ly = toLocalY(P, inc.body, x, y);
+    const ox = x - (P.px[inc.body] as number);
+    const oy = y - (P.py[inc.body] as number);
+    const lx = (P.qc[inc.body] as number) * ox + (P.qs[inc.body] as number) * oy;
+    const ly = -(P.qs[inc.body] as number) * ox + (P.qc[inc.body] as number) * oy;
     const id = (CL[p * 3 + 2] as number) + flipBit;
     if (k === 0) {
       m.p0x = lx;

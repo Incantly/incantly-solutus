@@ -332,3 +332,115 @@ Node (`physics.bench.ts`) and Chrome 157 with the CPU 4× slower, before and aft
 ### What is left (not started)
 
 In the order of what it would buy, none changes a bit: (1) `f64x2` in the swirl and in the projection's gradient and setup (about 0.1 ms of a 24³ step); (2) the pressure as `f64` values rounded to `f32` in a work array split in red and black halves (no shuffles in a vector; the stored layout stays); (3) the flag row's cloth: tethers and links are 20% of it, the air from the flow (`airForces`, `flowAt`, `airAt` in TypeScript) 12% (round 2 of the cloth); (4) a bigger step for the 32³ grid or fewer passes needs the planner. PH-35 in `findings.md` is left as it is: the checker closes it.
+
+## Round 10: speed and checks (tasks 10.1 to 10.5, 10.8; branch `feat/physics-10`)
+
+No tests written (benches are the builder's; spec tests are the tester's). No engine file changed: every check that fails is a finding below, and its bench keeps asserting the number of the design.
+
+### What was built
+
+- `packages/kernel/bench/physics.bench.ts`: `describe('bodies (design 11.2)')` (10.1: apply one line, 2D pile-up, most asleep, chain of hinges hanging and let go level, car on hills of 2,000 pieces, 3D boxes all awake, seek with 300 bodies, restart at 60 s) and `describe('formulas on the exact maths')` (10.5 speed).
+- `packages/kernel/bench/chrome/main.ts` and `chrome-physics.mjs` (10.2): every row of 11.2 (scenes `pile asleep chain hills boxes3 liquid2 liquid3 waves smoke fire2`, and the special rows `apply seek300 restart`) with the Chrome goal of each; a row is compared with its mean or, for the two rows of falling bodies, with its slowest second; exit 1 when a row is over.
+- `packages/kernel/bench/physics-checks.bench.ts` (10.3), `films.ts` (the seven films and the world hash, shared with the browsers), `cross-browser.mjs`, `chrome/cross.html` and `chrome/cross.ts` (10.4), `exact-math.bench.ts` (10.5), `packages/kernel/src/language/exact-math.ts` (10.5), `builtins.ts` (`EXACT_MATH` is the default, `setExactMath`), `language/index.ts` (exports). `physics/math.ts` is unchanged.
+- Docs: design 10.2 item 4, 11.2 "Measured (round 10), every row", 11.4 "Where each row is checked", 16; `docs/design/performance.md` 6; tasks 10.1 to 10.5 ticked, 10.8 left open; usage log.
+- Rows of 11.4 that are covered elsewhere and stay there: the cloth rows (worst frame, still flag, stretch, no pass-through, two-way, water, energy, tearing, page cost, no worker, no garbage) in `physics.bench.ts` and the sdk benches; "Liquid, no garbage", "Frame, no garbage" and "Frame, bodies falling" in `physics.bench.ts`; "Worker cost" in `packages/sdk/bench/physics.bench.ts`.
+
+### How to run
+
+- Node: `npx vitest run --config packages/kernel/bench/vitest.config.ts packages/kernel/bench/<file>.bench.ts` (`-t "<name>"` for one row; two names that share words run together, so give the whole start of the name).
+- Chrome: `PLAYWRIGHT_DIR=<dir with playwright> node packages/kernel/bench/chrome-physics.mjs [--scenes ...]`.
+- Browsers: `PLAYWRIGHT_DIR=<dir> node packages/kernel/bench/cross-browser.mjs [--exact off] [--chromium-path P] [--firefox-path P] [--webkit-path P] [--firefox-no-sandbox]`.
+- This computer: Playwright 1.65 was in `$KIROCREW_SCRATCH/pw` but its Firefox protocol is older than the Firefox build in `~/Library/Caches/ms-playwright/firefox-1555`, so Playwright 1.64.0 (the one that matches revision 1555) was installed in `$KIROCREW_SCRATCH/pw2` (a scratch folder, not the repository). Chromium was the headless shell in `~/.cache/ms-playwright/chromium_headless_shell-1243` (153.0.8010.12), Firefox 157.0 (Nightly build 1555) with `--firefox-no-sandbox` (its content sandbox cannot start inside this sandbox), WebKit 27.2 from `webkit-2370` (`pw_run.sh`). The Chrome bench uses the installed Google Chrome 157 (`channel: 'chrome'`).
+
+### 10.1 and 10.2: tables
+
+In design 11.2 "Measured (round 10), every row" (Node, three runs; Chrome, two full runs). Rows over their budget are findings F1 to F6.
+
+### 10.3: each check of 11.4
+
+| Check | Pass or fail | Number |
+|---|---|---|
+| Worst frame, 60 s (2D pile of 300; 100 boxes in space) | fail (finding F7) | worst without a collector pause 3.8 to 5.3 ms and 8.5 to 15.9 ms against 1.5 ms; mean 0.2 and 1.7 ms |
+| Pile-up | pass on retry | slowest second 1.28 ms (first run in a new process 2.1 to 2.3 ms, finding F8) |
+| Calm stack | pass | top box moves 0.0000 mm after 5 s; tower sags 106 mm in all (F9) |
+| Pyramid | pass | all asleep at 1.2 s; farthest box 46.7 mm after 60 s |
+| No pass-through | pass | 0 of 1,000 |
+| Energy | pass | 1,000 bounces, 0.017% |
+| Energy, joints | fail (F10) | 2.3% in 10 s, 72.6% in 1,000 s |
+| Same result | pass | 7 films, twice, equal every second for 60 s; Rust loops on and off equal for 20 s; browsers below |
+| Seek | fail by 12 to 24% (F11) | asleep: 95% 5.4 to 12.8 ms, worst 28 to 31 ms; sleeping off: median 30 ms, worst 70 ms; budget 25 ms |
+| Long run | pass | checkpoints at most 31.7 MB; last 3 minutes 99.6 MB against 106.8 MB before |
+| Wake storm | fail (F12) | mean 4.0 ms, worst 6.0 to 15.7 ms |
+| One line | pass | apply 95% under 0.5 ms; flush after 68 ms (F1) |
+| No garbage, 300 awake bodies | fail (F13) | 3 collector runs in 2,500 steps |
+| No garbage, 100 awake boxes in space | fail (F13) | 139 collector runs in 2,500 steps |
+
+### 10.4: the same film in three browsers
+
+Before the exact maths (`--exact off`), against Chromium, with the Rust loops on and off alike:
+
+| Film | Firefox | WebKit |
+|---|---|---|
+| 2D pile of 300 boxes | equal | equal |
+| 3D tower and hinge pendulum | equal | equal |
+| 2D liquid, 2,000 drops | equal | equal |
+| 64 × 32 flag in gusts (`wind = (5 + 3 sin(2 t), …)`) | differs at second 1 (11,010 of 12,742 values; first value 455) | differs at second 2 (10,333 values; first 455) |
+| net that tears | equal | equal |
+| fire in space 24³ with a burning crate | equal | equal |
+| smoke in the plane with a body (`wind = (3 + sin(2 t), 0)`) | differs at second 2 (4,297 of 16,805; first value 30) | differs at second 2 (12,699; first value 30) |
+
+Both differences are the `Math.sin` of the user's wind formula (the first differing values are the cloth's and the grid's first state). After 10.5, every film, both loop modes, both browsers: equal for 60 s. Logs: `$KIROCREW_SCRATCH/tmp/cross-before-final.log`, `cross-after.log`. The Rust loops on and off give the same hashes in every browser, with and without 10.5.
+
+### 10.5: error against `Math` over 100,000 seeded inputs
+
+| Function | Range | Worst (ulp) | Mean (ulp) | Inputs over 1 ulp |
+|---|---|---|---|---|
+| sin | [-1000, 1000] and [-1e6, 1e6] | 1 | 0.012, 0.011 | 0 |
+| cos | the same | 1 | 0.013, 0.012 | 0 |
+| tan | [-1000, 1000] | 2 | 0.32 | 143 |
+| asin | [-1, 1] | 2 | 0.25 | 20 |
+| acos | [-1, 1] | 2 | 0.21 | 2 |
+| atan | ±[1e-8, 1e8] | 1 | 0.0005 | 0 |
+| atan2 | y, x in [-100, 100] | 1 | 0.0016 | 0 |
+| sinh | [-20, 20]; ±[1e-8, 1] | 2 | 0.08; 0.25 | 69; 19 |
+| cosh | [-20, 20] | 2 | 0.07 | 4 |
+| tanh | [-10, 10]; ±[1e-8, 1] | 3 | 0.07; 0.51 | 534; 3,071 |
+| asinh | ±[1e-10, 1e10] | 2 | 0.21 | 151 |
+| acosh | [1, 1e10] | 2 | 0.15 | 86 |
+| atanh | [-1, 1] | 2 | 0.22 | 364 |
+| exp | [-700, 700]; [-20, 20] | 1 | 0.067 | 0 |
+| log | [1e-300, 1e300]; [0.1, 10] | 1 | 0.0000; 0.0115 | 0 |
+| log2, log10 | [1e-300, 1e300] | 1 | 0.0011; 0.0002 | 0 |
+| pow | x in [0.01, 100], y in [-20, 20]; x in [-100, 100], whole y | 1 | 0.0013; 0.0011 | 0 |
+| cbrt | ±[1e-100, 1e100] | 1 | 0.134 | 0 |
+| hypot | both ±[1e-100, 1e100] | 2 | 0.033 | 49 |
+
+Eleven functions are within 1 ulp on every input; `tan`, `asin`, `acos`, the hyperbolic functions and `hypot` are within 2 or 3 (the bench asserts these limits and says so). The platform's own answer is not correctly rounded either. Special cases (NaN, ±Infinity, ±0, 1e-320, 1e308, 709.78 to 711, 1e22 and so on) equal `Math` for every function and every pair, and the exact results stay exact (`log2` of a power of two, `log10` of a power of ten up to 10^22, the cube root of a perfect cube, `pow(2, k)`, `hypot(3, 4)`).
+
+Notes on how: the engine's own `sin` and `cos` (`physics/math.ts`) have a wrong third piece of π/2 (`PIO2_3` is the tail of `PIO2_2` of the C library, not of this `PIO2_2`), an error of 2e-21 × k in the angle: harmless for a body's turn, but 1,308 ulp near a zero of `sin` (F14). It was left alone, as a change would move every film; `exact-math.ts` reduces with its own pieces (28 bits up to 5e7, 20 bits up to 1.3e10, whole numbers after) and uses the C library's kernels. `pow` works in double-double numbers (log of the mantissa corrected by one Newton step in double-double, the product with y, then exp), so it costs 1.8 µs a call for a non-integer exponent (against 25 ns), 0.1 µs for a small whole exponent, and nothing for 2, 1, -1 and 0.5; `sin` and `cos` cost 45 ns against 14 and 24 ns, `exp` 53 against 25, `tan` 47 against 28, `log`, `atan` and `sinh` the same. Still direct uses of `Math.sin` and the rest elsewhere in the kernel (plot sampling, geometry, statistics, units, the clock solver) were not touched; only the compiled formulas and the table of builtins are on the exact maths.
+
+Speed: a force rule `force = (3 sin(t), 2 cos(2 t))` on 300 bodies, a frame: 2.63 and 2.60 ms on the exact maths against 2.56 and 2.55 ms on the platform's (+2.7% and +2.2%; the bench asserts under +10%). The probability, statistics and sheet benches (`probability.bench.ts`, `statistics.bench.ts`, `sheet.bench.ts`) were run before and after in a worktree of the commit before round 10: every number within 3% (they call the rules directly and do not use the formulas' maths).
+
+Tests moved by 10.5, from the full suite (211 files pass, 1 fails, 8,857 tests pass, 1 fails): `packages/kernel/test/spec/language/regressions.test.ts:644`, "LANG-SM-13: the platform library is installed at the start": expected `PLATFORM_MATH`, received the `EXACT_MATH` object (the default library is now the exact one; `setExactMath(false)` and `setMathLib(PLATFORM_MATH)` bring the platform's back). No test that pins a number with `toBe` moved. The physics set (24 files, 566 tests) passes. For the tester and the reviewer: change the test to expect `EXACT_MATH`.
+
+### 10.8: the Rust rule
+
+With the full table of 11.2 (design 11.2 "Measured (round 10), every row"): three rows are more than 25% over their Chrome goal, so 10.8 is not ticked: 2D most asleep (234 to 251% of goal), 2D car on hills (187 to 202%), 3D boxes all awake (124 to 129%, the slowest second; the mean 109 to 118%). Every other row is within 102%: fire 32³ 94 to 102%, the flag over a fire 94 to 102%, cloth in water 91 to 99%, liquid 82 to 95%, pile-up 74 to 90%, the rest under 90%. The three rows are bodies on the page, which stay TypeScript by 11.6 (the order of a port is cloth, grids, liquid, "bodies, the driver, the kernel and the UI stay TypeScript"); the product owner decides.
+
+### Findings (not fixed, numbers in design 11.2 and 11.4)
+
+- **F1** A change to a body's property (`ball with bounce = 0.9`) is applied in 0.23 to 0.26 ms, but the next flush rebuilds the world and plays the film again to where it was: 68 ms in Node and 260 ms in Chrome ×4, for 300 bodies at 20 s. Design 5.4 says "rebuild"; the budget row only covers the apply.
+- **F2** 1,000 bodies of which 900 asleep and 100 awake: 2.7 to 3.1 ms a frame in Node (0.75 budget), 7.0 to 7.5 in Chrome ×4 (3 ms). In a probe, 900 sleeping boxes alone cost 0.9 ms a frame and 100 falling balls alone 0.23 ms: sleeping bodies are not free (not traced further).
+- **F3** A chain of 200 hinged links let go level folds on itself after 4 s: a frame takes 100 to 290 ms (400 contact points; 1 to 2 ms before the fold). The hanging chain is within budget (0.75 to 0.85 ms).
+- **F4** A car on a curve cut into 2,000 pieces: 0.18 to 0.21 ms (0.12 budget), 0.94 to 1.01 ms in Chrome ×4 (0.5).
+- **F5** 100 boxes in space, none asleep, falling and landing: mean 1.53 to 1.77 ms (1.5), slowest second up to 2.04, and a collector run every few frames (446 to 450 of 3,600 frames of 60 s have a pause).
+- **F6** The rows are noisy by up to 2× between a cold and a warm process (the pile-up: 2.1 to 2.3 ms in the first film of a process, 1.2 to 1.3 after).
+- **F7** The worst frame of a 60 s film is 3.8 to 5.3 ms (2D pile) and 8.5 to 15.9 ms (100 boxes in space), against a mean of 0.2 and 1.7 ms. Not traced to checkpoint frames or to the first frame of a landing; the first frame (building the world) is left out.
+- **F8** See F6.
+- **F9** The calm stack sags 106 mm in its first seconds (20 contacts of 5 mm slop); a test that wants "the top box moves under 1 mm" from where it is placed fails, one that waits 5 s passes.
+- **F10** Energy with joints: a hinge pendulum (point mass 1 kg, 1 m, 0.6 rad, no air) loses 2.3% of its swing energy in 10 s and 72.6% in 1,000 s; with `passes = 20` it loses 51% in 1,000 s. A contact-free hinge dissipates; the design asks for 2%.
+- **F11** Seek: 100 seeded random times in a 60 s film of 300 bodies asleep: worst 28 to 31 ms against 25; with sleeping off: median 30 ms, 95% 65 ms, worst 70 ms.
+- **F12** Wake storm: a heavy ball (400 kg) on 500 sleeping boxes wakes 471; the mean is 4.0 ms (about 2.7× the budget of 300 awake bodies' 1.5), the worst 6.0 to 15.7 ms.
+- **F13** No garbage: 300 awake 2D boxes make 3 collector runs in 2,500 steps; 100 awake boxes in space make 139 (about one a 18 steps), so the "no collection runs" rule of 11.4 does not hold for bodies of the pile; the rows of `physics.bench.ts` that pass are cloth, liquid and fire (`framesOf`).
+- **F14** `physics/math.ts` `sin` and `cos`: the third π/2 piece is the wrong one, so the reduction has an absolute error of 2e-21 × k; near a zero of sin the relative error is large (1,308 ulp at x = -860.796). Fixing it moves every film's bits; it needs the product owner's word and a new set of pinned hashes.
+- **F15** The first Chrome ×4 run of the table after a cold start had a restart first frame of 31.7 ms (goal 16.7); the next two runs 1.4 and 2.1 ms.

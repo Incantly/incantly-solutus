@@ -125,6 +125,8 @@ interface CPoint {
 }
 
 interface Contact3 {
+  /** The step this contact was last met in (`updateContacts`); one not met is dropped, or kept while its bodies sleep. */
+  stamp: number;
   key: number;
   a: number;
   b: number;
@@ -241,7 +243,14 @@ export class World3 {
   private fixedWidth = 0;
   joints: Joint3[] = [];
   private contacts: Contact3[] = [];
-  private contactMap = new Map<number, Contact3>();
+  private contactMap = new ContactTable3();
+  private contactStamp = 0;
+  /** Contacts and points that left, kept to be used again: a step makes none of its own (design 11.4). */
+  private contactPool: Contact3[] = [];
+  private pointPool: CPoint[] = [];
+  /** Scratch the solver hands numbers through (a number passed to or returned from a call that is not inlined is a heap number): a point in 0 to 2 and out 3 to 5, an effective mass 6, a closing speed 7, a gap 8, an impulse 9 to 11, last step's points 12 on. */
+  private sc = new Float64Array(16);
+  private oldPts = new Float64Array(48);
   private pairs = new Float64Array(256);
   private pairCount = 0;
   hits: Hit3[] = [];
@@ -623,7 +632,7 @@ export class World3 {
     // the soft step (design 6.5), as in the plane: small steps of forces, bounce, warm start, solve, move, relax
     // (indexed loops and fields throughout: an iterator or a number passed in a call is garbage in every step, design 11.4)
     const live = this.liveJoints;
-    live.length = 0;
+    while (live.length > 0) live.pop();
     for (let k = 0; k < this.joints.length; k++) {
       const j = this.joints[k] as Joint3;
       if (this.live(j)) live.push(j);
@@ -779,8 +788,11 @@ export class World3 {
       }
     }
     const np = this.pairCount;
-    if (np > 16) this.pairs.subarray(0, np).sort();
-    else {
+    if (np > 16) {
+      // the whole array is sorted with Infinity after the pairs: `subarray` would make a typed-array view every step
+      this.pairs.fill(Infinity, np);
+      this.pairs.sort();
+    } else {
       // a few pairs (a quiet world): insertion sort, and no typed-array view made for the engine's sort
       const pairs = this.pairs;
       for (let i = 1; i < np; i++) {
@@ -841,25 +853,31 @@ export class World3 {
 
   /* ------------------------------ narrow phase ------------------------------ */
 
-  /** The contact table and list the next step fills (the last step's are swapped with them: a step makes no new map or list). */
-  private spareMap = new Map<number, Contact3>();
+  /** The contact table and list the next step fills (the last step's are swapped with them: a step makes no new table or list). */
+  private spareMap = new ContactTable3();
   private spareList: Contact3[] = [];
-
-  /** A sleeping body's touch survives into the new table (kept by `updateContacts` through `Map.forEach`: no iterator). */
-  private readonly keepTouch = (c: Contact3, key: number): void => {
-    if (c.touching && this.stillBody(c.a) && this.stillBody(c.b)) this.spareMap.set(key, c);
-  };
 
   private stillBody(i: number): boolean {
     return this.type[i] !== BodyType3.Dynamic || (this.awake[i] === 0 && !this.gone.has(i));
   }
 
-  private updateContacts(): void {
+  /** The margin a pair is made within (both bodies' over this step's length), into `FS[S_MARGIN]`. */
+  private pairMargin(a: number, b: number): void {
     const h = this.hStep;
+    const spa = Math.sqrt((this.v[a * 3] as number) ** 2 + (this.v[a * 3 + 1] as number) ** 2 + (this.v[a * 3 + 2] as number) ** 2);
+    const wma = Math.sqrt((this.w[a * 3] as number) ** 2 + (this.w[a * 3 + 1] as number) ** 2 + (this.w[a * 3 + 2] as number) ** 2);
+    const spb = Math.sqrt((this.v[b * 3] as number) ** 2 + (this.v[b * 3 + 1] as number) ** 2 + (this.v[b * 3 + 2] as number) ** 2);
+    const wmb = Math.sqrt((this.w[b * 3] as number) ** 2 + (this.w[b * 3 + 1] as number) ** 2 + (this.w[b * 3 + 2] as number) ** 2);
+    FS[S_MARGIN] = 2 * SLOP + h * (spa + wma * (this.reach[a] as number)) + (2 * SLOP + h * (spb + wmb * (this.reach[b] as number)));
+  }
+
+  private updateContacts(): void {
     const old = this.contactMap;
     const next = this.spareMap;
     const list = this.spareList;
-    list.length = 0;
+    // (emptied with `pop`: `length = 0` frees the store and the pushes below make one again, every step)
+    while (list.length > 0) list.pop();
+    const stamp = ++this.contactStamp;
     const ns = this.shapes.length;
     for (let p = 0; p < this.pairCount; p++) {
       const key = this.pairs[p] as number;
@@ -876,8 +894,9 @@ export class World3 {
         A = B;
         B = T;
       }
-      const margin = this.marginOf(A.body, h) + this.marginOf(B.body, h);
+      this.pairMargin(A.body, B.body);
       if (A.kind === 3) {
+        const margin = FS[S_MARGIN] as number;
         // terrain: only the cells under the other shape, each triangle a slab of its own with its own touch
         const hf = A.hf as Heightfield;
         const base = ns * ns + (sb * ns + sa) * this.triMax;
@@ -895,8 +914,10 @@ export class World3 {
               // of the slab), cannot touch it
               if (!(top >= zlo) || clearOfTri(hf, i, j, t, B, margin)) continue;
               const slab = slabOf(hf, A.body, i, j, t);
-              const f = slab ? this.collide(slab, B, margin) : undefined;
-              if (!f || f.pts.length === 0) continue;
+              if (!slab) continue;
+              collideShapes(slab, B);
+              if (FD.n === 0) continue;
+              const f = snapshotFound();
               let s = Infinity;
               for (const q of f.pts) s = Math.min(s, q.s);
               found.push({ tri: (i * hf.ny + j) * 2 + t, f, s });
@@ -906,78 +927,162 @@ export class World3 {
         // a shape resting on fine terrain is near many triangles: the closest few carry it (a ball needs one or two)
         found.sort((x, y) => x.s - y.s || x.tri - y.tri);
         const keep = found.slice(0, 4).sort((x, y) => x.tri - y.tri);
-        for (const c of keep) this.meet(base + c.tri, sa, sb, A, B, c.f, old, next, list);
+        for (const c of keep) {
+          restoreFound(c.f);
+          this.meet(base + c.tri, sa, sb, A, B, old, next, list, stamp);
+        }
         continue;
       }
-      this.meet(key, sa, sb, A, B, this.collide(A, B, margin), old, next, list);
+      collideShapes(A, B);
+      this.meet(key, sa, sb, A, B, old, next, list, stamp);
     }
-    // a sleeping body keeps its touches (and what it reads of them) until it wakes; they are not solved
-    // (`clear` makes a new table even on an empty map, so it is asked of a map that holds something)
-    if (old.size > 0) {
-      old.forEach(this.keepTouch);
-      old.clear();
+    // a sleeping body keeps its touches (and what it reads of them) until it wakes; they are not solved. A contact that is
+    // neither met nor kept is dropped, and kept to be made again (its points too).
+    for (let q = 0; q < old.size; q++) {
+      const c = old.list[q] as Contact3;
+      if (c.stamp === stamp) continue;
+      if (c.touching && this.stillBody(c.a) && this.stillBody(c.b)) next.set(c);
+      else this.dropContact(c);
     }
+    old.clear();
     this.spareMap = old;
     this.spareList = this.contacts;
     this.contactMap = next;
     this.contacts = list;
   }
 
-  /** The contact of one pair of shapes (or one terrain triangle and a shape), keeping last step's impulses. */
-  private meet(key: number, sa: number, sb: number, A: Shape3, B: Shape3, found: Found3 | undefined, old: Map<number, Contact3>, next: Map<number, Contact3>, list: Contact3[]): void {
+  /** A contact that is no more: its points and itself go to the pools. */
+  private dropContact(c: Contact3): void {
+    while (c.pts.length > 0) this.pointPool.push(c.pts.pop() as CPoint);
+    this.contactPool.push(c);
+  }
+
+  /** The contact of one pair of shapes (or one terrain triangle and a shape) from what `collideShapes` left in `FD` and `FP`, keeping last step's impulses. */
+  private meet(key: number, sa: number, sb: number, A: Shape3, B: Shape3, old: ContactTable3, next: ContactTable3, list: Contact3[], stamp: number): void {
     const prev = old.get(key);
-    if (prev) old.delete(key);
-    if (!found || found.pts.length === 0) {
+    const n = FD.n;
+    if (n === 0) {
       if (prev) {
-        prev.pts = [];
+        while (prev.pts.length > 0) this.pointPool.push(prev.pts.pop() as CPoint);
         prev.pushed = false;
         prev.touching = false;
-        next.set(key, prev);
+        prev.stamp = stamp;
+        next.set(prev);
       }
       return;
     }
-    const c: Contact3 = prev ?? { key, a: A.body, b: B.body, sa, sb, nx: 0, ny: 0, nz: 0, pts: [], friction: 0, restitution: 0, pushed: false, touching: false, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
+    let c: Contact3;
+    if (prev) c = prev;
+    else {
+      const pooled = this.contactPool.pop();
+      if (pooled) {
+        c = pooled;
+        c.key = key;
+        c.pushed = false;
+        c.touching = false;
+        c.t1x = c.t1y = c.t1z = c.t2x = c.t2y = c.t2z = 0;
+      } else c = { stamp, key, a: A.body, b: B.body, sa, sb, nx: 0, ny: 0, nz: 0, pts: [], friction: 0, restitution: 0, pushed: false, touching: false, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
+    }
+    c.stamp = stamp;
     c.a = A.body;
     c.b = B.body;
     c.sa = sa;
     c.sb = sb;
-    c.nx = found.nx;
-    c.ny = found.ny;
-    c.nz = found.nz;
-    const olds = c.pts;
-    const pts: CPoint[] = [];
-    for (const q of found.pts) {
+    c.nx = FD.nx;
+    c.ny = FD.ny;
+    c.nz = FD.nz;
+    const pts = c.pts;
+    // last step's points: where they are on B, and what they carried, for the warm start
+    const no = pts.length;
+    if (this.oldPts.length < no * 6) this.oldPts = new Float64Array(no * 12);
+    const olds = this.oldPts;
+    for (let k = 0; k < no; k++) {
+      const o = pts[k] as CPoint;
+      olds[k * 6] = o.bx;
+      olds[k * 6 + 1] = o.by;
+      olds[k * 6 + 2] = o.bz;
+      olds[k * 6 + 3] = o.ni;
+      olds[k * 6 + 4] = o.t1i;
+      olds[k * 6 + 5] = o.t2i;
+    }
+    while (pts.length > n) this.pointPool.push(pts.pop() as CPoint);
+    while (pts.length < n) pts.push(this.pointPool.pop() ?? newPoint());
+    const sc = this.sc;
+    for (let k = 0; k < n; k++) {
+      const qx = FP[k * 4] as number;
+      const qy = FP[k * 4 + 1] as number;
+      const qz = FP[k * 4 + 2] as number;
+      const qs = FP[k * 4 + 3] as number;
       // the point on A's surface and on B's: q is on B's, q - s n on A's
-      const ax = q.x - q.s * c.nx;
-      const ay = q.y - q.s * c.ny;
-      const az = q.z - q.s * c.nz;
-      const la = this.toLocal(c.a, ax, ay, az);
-      const lb = this.toLocal(c.b, q.x, q.y, q.z);
-      const cp: CPoint = { ax: la[0], ay: la[1], az: la[2], bx: lb[0], by: lb[1], bz: lb[2], s: q.s, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0, tn: 0, t1t: 0, t2t: 0, sv: 0, sf: 0, sg: 0, bi: 0, bounced: 0 };
+      sc[0] = qx - qs * c.nx;
+      sc[1] = qy - qs * c.ny;
+      sc[2] = qz - qs * c.nz;
+      this.loc(c.a);
+      const cp = pts[k] as CPoint;
+      cp.ax = sc[3] as number;
+      cp.ay = sc[4] as number;
+      cp.az = sc[5] as number;
+      sc[0] = qx;
+      sc[1] = qy;
+      sc[2] = qz;
+      this.loc(c.b);
+      cp.bx = sc[3] as number;
+      cp.by = sc[4] as number;
+      cp.bz = sc[5] as number;
+      cp.s = qs;
+      cp.ni = 0;
+      cp.t1i = 0;
+      cp.t2i = 0;
+      cp.rax = cp.ray = cp.raz = cp.rbx = cp.rby = cp.rbz = 0;
+      cp.nm = cp.t1m = cp.t2m = cp.rv = cp.max = cp.tn = cp.t1t = cp.t2t = cp.sv = cp.sf = cp.sg = cp.bi = cp.bounced = 0;
       // warm start from the old point nearest on B
-      let best: CPoint | undefined;
+      let best = -1;
       let bd = 0.04 * 0.04;
-      for (const o of olds) {
-        const d = (o.bx - cp.bx) ** 2 + (o.by - cp.by) ** 2 + (o.bz - cp.bz) ** 2;
+      for (let o = 0; o < no; o++) {
+        const d = ((olds[o * 6] as number) - cp.bx) ** 2 + ((olds[o * 6 + 1] as number) - cp.by) ** 2 + ((olds[o * 6 + 2] as number) - cp.bz) ** 2;
         if (d < bd) {
           bd = d;
           best = o;
         }
       }
-      if (best) {
-        cp.ni = best.ni;
-        cp.t1i = best.t1i;
-        cp.t2i = best.t2i;
+      if (best >= 0) {
+        cp.ni = olds[best * 6 + 3] as number;
+        cp.t1i = olds[best * 6 + 4] as number;
+        cp.t2i = olds[best * 6 + 5] as number;
       }
-      pts.push(cp);
     }
-    c.pts = pts;
     const fa = this.fric[c.a] as number;
     const fb = this.fric[c.b] as number;
     c.friction = Number.isNaN(fa) ? (Number.isNaN(fb) ? 0.4 : fb) : Number.isNaN(fb) ? fa : Math.sqrt(fa * fb);
     c.restitution = Math.max(this.rest[c.a] as number, this.rest[c.b] as number);
-    next.set(key, c);
+    next.set(c);
     list.push(c);
+  }
+
+  /** The world point in `sc[0..2]` in body i's frame, into `sc[3..5]` (`toLocal` without the array). */
+  private loc(i: number): void {
+    const sc = this.sc;
+    const R = this.R;
+    const r = i * 9;
+    const dx = (sc[0] as number) - (this.p[i * 3] as number);
+    const dy = (sc[1] as number) - (this.p[i * 3 + 1] as number);
+    const dz = (sc[2] as number) - (this.p[i * 3 + 2] as number);
+    sc[3] = (R[r] as number) * dx + (R[r + 3] as number) * dy + (R[r + 6] as number) * dz;
+    sc[4] = (R[r + 1] as number) * dx + (R[r + 4] as number) * dy + (R[r + 7] as number) * dz;
+    sc[5] = (R[r + 2] as number) * dx + (R[r + 5] as number) * dy + (R[r + 8] as number) * dz;
+  }
+
+  /** The point in body i's frame in `sc[0..2]` in world, into `sc[3..5]` (`toWorld` without the array). */
+  private wor(i: number): void {
+    const sc = this.sc;
+    const R = this.R;
+    const r = i * 9;
+    const x = sc[0] as number;
+    const y = sc[1] as number;
+    const z = sc[2] as number;
+    sc[3] = (this.p[i * 3] as number) + (R[r] as number) * x + (R[r + 1] as number) * y + (R[r + 2] as number) * z;
+    sc[4] = (this.p[i * 3 + 1] as number) + (R[r + 3] as number) * x + (R[r + 4] as number) * y + (R[r + 5] as number) * z;
+    sc[5] = (this.p[i * 3 + 2] as number) + (R[r + 6] as number) * x + (R[r + 7] as number) * y + (R[r + 8] as number) * z;
   }
 
   /** The two shapes of a contact key: a pair of shapes, or a terrain triangle and a shape. */
@@ -989,12 +1094,6 @@ export class World3 {
     }
     const k = Math.floor((key - ns * ns) / this.triMax);
     return [k % ns, Math.floor(k / ns)];
-  }
-
-  private marginOf(i: number, h: number): number {
-    const sp = Math.sqrt((this.v[i * 3] as number) ** 2 + (this.v[i * 3 + 1] as number) ** 2 + (this.v[i * 3 + 2] as number) ** 2);
-    const wm = Math.sqrt((this.w[i * 3] as number) ** 2 + (this.w[i * 3 + 1] as number) ** 2 + (this.w[i * 3 + 2] as number) ** 2);
-    return 2 * SLOP + h * (sp + wm * (this.reach[i] as number));
   }
 
   /** World point to body frame. */
@@ -1020,49 +1119,6 @@ export class World3 {
       (this.p[i * 3 + 1] as number) + (R[r + 3] as number) * x + (R[r + 4] as number) * y + (R[r + 5] as number) * z,
       (this.p[i * 3 + 2] as number) + (R[r + 6] as number) * x + (R[r + 7] as number) * y + (R[r + 8] as number) * z,
     ];
-  }
-
-  /**
-   * Contact points of two shapes within `margin`, on B's surface, with their separations, and the normal from A to B.
-   * A is the plane, or the hull of a hull–sphere pair.
-   */
-  private collide(A: Shape3, B: Shape3, margin: number): { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] } | undefined {
-    if (A.kind === 2) {
-      const nx = A.lc[0] as number;
-      const ny = A.lc[1] as number;
-      const nz = A.lc[2] as number;
-      const d = A.lc[3] as number;
-      if (B.kind === 0) {
-        const s = nx * (B.wc[0] as number) + ny * (B.wc[1] as number) + nz * (B.wc[2] as number) - d - B.r;
-        if (s > margin) return undefined;
-        return { nx, ny, nz, pts: [{ x: (B.wc[0] as number) - B.r * nx, y: (B.wc[1] as number) - B.r * ny, z: (B.wc[2] as number) - B.r * nz, s }] };
-      }
-      if (B.kind === 1) {
-        const pts: { x: number; y: number; z: number; s: number }[] = [];
-        const wv = B.wv;
-        for (let j = 0; j < wv.length; j += 3) {
-          const s = nx * (wv[j] as number) + ny * (wv[j + 1] as number) + nz * (wv[j + 2] as number) - d;
-          if (s <= margin) pts.push({ x: wv[j] as number, y: wv[j + 1] as number, z: wv[j + 2] as number, s });
-        }
-        return { nx, ny, nz, pts: reduce4(pts) };
-      }
-      return undefined;
-    }
-    if (A.kind === 0 && B.kind === 0) {
-      const dx = (B.wc[0] as number) - (A.wc[0] as number);
-      const dy = (B.wc[1] as number) - (A.wc[1] as number);
-      const dz = (B.wc[2] as number) - (A.wc[2] as number);
-      const l = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const s = l - A.r - B.r;
-      if (s > margin) return undefined;
-      const nx = l > 1e-12 ? dx / l : 0;
-      const ny = l > 1e-12 ? dy / l : 0;
-      const nz = l > 1e-12 ? dz / l : 1;
-      return { nx, ny, nz, pts: [{ x: (B.wc[0] as number) - B.r * nx, y: (B.wc[1] as number) - B.r * ny, z: (B.wc[2] as number) - B.r * nz, s }] };
-    }
-    if (A.kind === 1 && B.kind === 0) return hullSphere(A, B, margin);
-    if (A.kind === 1 && B.kind === 1) return hullHull(A, B, margin);
-    return undefined;
   }
 
   /* ------------------------------ solver ------------------------------ */
@@ -1091,45 +1147,132 @@ export class World3 {
       c.t2y = nz * c.t1x - nx * c.t1z;
       c.t2z = nx * c.t1y - ny * c.t1x;
       let touching = false;
+      const sc = this.sc;
       for (let kp = 0; kp < c.pts.length; kp++) {
         const p = c.pts[kp] as CPoint;
-        const wa = this.toWorld(c.a, p.ax, p.ay, p.az);
-        const wb = this.toWorld(c.b, p.bx, p.by, p.bz);
-        p.s = nx * (wb[0] - wa[0]) + ny * (wb[1] - wa[1]) + nz * (wb[2] - wa[2]);
+        sc[0] = p.ax;
+        sc[1] = p.ay;
+        sc[2] = p.az;
+        this.wor(c.a);
+        const wax = sc[3] as number;
+        const way = sc[4] as number;
+        const waz = sc[5] as number;
+        sc[0] = p.bx;
+        sc[1] = p.by;
+        sc[2] = p.bz;
+        this.wor(c.b);
+        const wbx = sc[3] as number;
+        const wby = sc[4] as number;
+        const wbz = sc[5] as number;
+        p.s = nx * (wbx - wax) + ny * (wby - way) + nz * (wbz - waz);
         if (p.s < 2 * SLOP) touching = true;
-        const mx = 0.5 * (wa[0] + wb[0]);
-        const my = 0.5 * (wa[1] + wb[1]);
-        const mz = 0.5 * (wa[2] + wb[2]);
+        const mx = 0.5 * (wax + wbx);
+        const my = 0.5 * (way + wby);
+        const mz = 0.5 * (waz + wbz);
         p.rax = mx - (this.p[c.a * 3] as number);
         p.ray = my - (this.p[c.a * 3 + 1] as number);
         p.raz = mz - (this.p[c.a * 3 + 2] as number);
         p.rbx = mx - (this.p[c.b * 3] as number);
         p.rby = my - (this.p[c.b * 3 + 1] as number);
         p.rbz = mz - (this.p[c.b * 3 + 2] as number);
-        p.nm = inverseOrZero(this.effMass(c.a, c.b, p, nx, ny, nz));
-        p.t1m = inverseOrZero(this.effMass(c.a, c.b, p, c.t1x, c.t1y, c.t1z));
-        p.t2m = inverseOrZero(this.effMass(c.a, c.b, p, c.t2x, c.t2y, c.t2z));
+        this.effM(c, p, 0);
+        p.nm = (sc[6] as number) > 0 ? 1 / (sc[6] as number) : 0;
+        this.effM(c, p, 1);
+        p.t1m = (sc[6] as number) > 0 ? 1 / (sc[6] as number) : 0;
+        this.effM(c, p, 2);
+        p.t2m = (sc[6] as number) > 0 ? 1 / (sc[6] as number) : 0;
         // the approach speed before the step's forces, for bounces and hits
-        p.rv = this.relV(c.a, c.b, p, nx, ny, nz, v, w);
+        this.rel(c, p, 0, v, w);
+        p.rv = sc[7] as number;
         p.max = 0;
       }
       c.touching = touching;
     }
   }
 
-  /** 1/m_a + 1/m_b + n·((I_a⁻¹ (r_a × n)) × r_a) + the same for b. */
-  private effMass(a: number, b: number, p: CPoint, nx: number, ny: number, nz: number): number {
-    return (this.invM[a] as number) + (this.invM[b] as number) + angTerm(this.invIw, a, p.rax, p.ray, p.raz, nx, ny, nz) + angTerm(this.invIw, b, p.rbx, p.rby, p.rbz, nx, ny, nz);
+  /**
+   * 1/m_a + 1/m_b + n·((I_a⁻¹ (r_a × n)) × r_a) + the same for b, into `sc[6]`; n is the contact's normal (d = 0) or one
+   * of its two friction directions (1, 2). (Numbers go through `sc`, not through arguments and results: design 11.4.)
+   */
+  private effM(c: Contact3, p: CPoint, d: number): void {
+    const nx = d === 0 ? c.nx : d === 1 ? c.t1x : c.t2x;
+    const ny = d === 0 ? c.ny : d === 1 ? c.t1y : c.t2y;
+    const nz = d === 0 ? c.nz : d === 1 ? c.t1z : c.t2z;
+    const I = this.invIw;
+    let o = c.a * 9;
+    let rx = p.rax;
+    let ry = p.ray;
+    let rz = p.raz;
+    let cx = ry * nz - rz * ny;
+    let cy = rz * nx - rx * nz;
+    let cz = rx * ny - ry * nx;
+    let ix = (I[o] as number) * cx + (I[o + 1] as number) * cy + (I[o + 2] as number) * cz;
+    let iy = (I[o + 3] as number) * cx + (I[o + 4] as number) * cy + (I[o + 5] as number) * cz;
+    let iz = (I[o + 6] as number) * cx + (I[o + 7] as number) * cy + (I[o + 8] as number) * cz;
+    const ta = cx * ix + cy * iy + cz * iz;
+    o = c.b * 9;
+    rx = p.rbx;
+    ry = p.rby;
+    rz = p.rbz;
+    cx = ry * nz - rz * ny;
+    cy = rz * nx - rx * nz;
+    cz = rx * ny - ry * nx;
+    ix = (I[o] as number) * cx + (I[o + 1] as number) * cy + (I[o + 2] as number) * cz;
+    iy = (I[o + 3] as number) * cx + (I[o + 4] as number) * cy + (I[o + 5] as number) * cz;
+    iz = (I[o + 6] as number) * cx + (I[o + 7] as number) * cy + (I[o + 8] as number) * cz;
+    const tb = cx * ix + cy * iy + cz * iz;
+    this.sc[6] = (this.invM[c.a] as number) + (this.invM[c.b] as number) + ta + tb;
   }
 
-  private relV(a: number, b: number, p: CPoint, nx: number, ny: number, nz: number, v = this.v, w = this.w): number {
+  /** The closing speed of point p of contact c along its normal (d = 0) or a friction direction (1, 2), from speeds `v` and `w`, into `sc[7]`. */
+  private rel(c: Contact3, p: CPoint, d: number, v: Float64Array, w: Float64Array): void {
+    const a = c.a;
+    const b = c.b;
+    const nx = d === 0 ? c.nx : d === 1 ? c.t1x : c.t2x;
+    const ny = d === 0 ? c.ny : d === 1 ? c.t1y : c.t2y;
+    const nz = d === 0 ? c.nz : d === 1 ? c.t1z : c.t2z;
     const vax = (v[a * 3] as number) + (w[a * 3 + 1] as number) * p.raz - (w[a * 3 + 2] as number) * p.ray;
     const vay = (v[a * 3 + 1] as number) + (w[a * 3 + 2] as number) * p.rax - (w[a * 3] as number) * p.raz;
     const vaz = (v[a * 3 + 2] as number) + (w[a * 3] as number) * p.ray - (w[a * 3 + 1] as number) * p.rax;
     const vbx = (v[b * 3] as number) + (w[b * 3 + 1] as number) * p.rbz - (w[b * 3 + 2] as number) * p.rby;
     const vby = (v[b * 3 + 1] as number) + (w[b * 3 + 2] as number) * p.rbx - (w[b * 3] as number) * p.rbz;
     const vbz = (v[b * 3 + 2] as number) + (w[b * 3] as number) * p.rby - (w[b * 3 + 1] as number) * p.rbx;
-    return nx * (vbx - vax) + ny * (vby - vay) + nz * (vbz - vaz);
+    this.sc[7] = nx * (vbx - vax) + ny * (vby - vay) + nz * (vbz - vaz);
+  }
+
+  /** The impulse in `sc[9..11]` applied at point p of contact c: −λ on a, +λ on b (`applyAt` with the numbers in slots). */
+  private pushAt(c: Contact3, p: CPoint): void {
+    const sc = this.sc;
+    const a = c.a;
+    const b = c.b;
+    const x = sc[9] as number;
+    const y = sc[10] as number;
+    const z = sc[11] as number;
+    const ma = this.invM[a] as number;
+    const mb = this.invM[b] as number;
+    const v = this.v;
+    v[a * 3] = (v[a * 3] as number) - ma * x;
+    v[a * 3 + 1] = (v[a * 3 + 1] as number) - ma * y;
+    v[a * 3 + 2] = (v[a * 3 + 2] as number) - ma * z;
+    v[b * 3] = (v[b * 3] as number) + mb * x;
+    v[b * 3 + 1] = (v[b * 3 + 1] as number) + mb * y;
+    v[b * 3 + 2] = (v[b * 3 + 2] as number) + mb * z;
+    const I = this.invIw;
+    const w = this.w;
+    let tx = p.ray * z - p.raz * y;
+    let ty = p.raz * x - p.rax * z;
+    let tz = p.rax * y - p.ray * x;
+    let o = a * 9;
+    w[a * 3] = (w[a * 3] as number) + -1 * ((I[o] as number) * tx + (I[o + 1] as number) * ty + (I[o + 2] as number) * tz);
+    w[a * 3 + 1] = (w[a * 3 + 1] as number) + -1 * ((I[o + 3] as number) * tx + (I[o + 4] as number) * ty + (I[o + 5] as number) * tz);
+    w[a * 3 + 2] = (w[a * 3 + 2] as number) + -1 * ((I[o + 6] as number) * tx + (I[o + 7] as number) * ty + (I[o + 8] as number) * tz);
+    tx = p.rby * z - p.rbz * y;
+    ty = p.rbz * x - p.rbx * z;
+    tz = p.rbx * y - p.rby * x;
+    o = b * 9;
+    w[b * 3] = (w[b * 3] as number) + 1 * ((I[o] as number) * tx + (I[o + 1] as number) * ty + (I[o + 2] as number) * tz);
+    w[b * 3 + 1] = (w[b * 3 + 1] as number) + 1 * ((I[o + 3] as number) * tx + (I[o + 4] as number) * ty + (I[o + 5] as number) * tz);
+    w[b * 3 + 2] = (w[b * 3 + 2] as number) + 1 * ((I[o + 6] as number) * tx + (I[o + 7] as number) * ty + (I[o + 8] as number) * tz);
   }
 
   /** Applies impulse λ along (x, y, z) at a point: −λ on a, +λ on b. */
@@ -1154,7 +1297,12 @@ export class World3 {
         const x = p.ni * c.nx + p.t1i * c.t1x + p.t2i * c.t2x;
         const y = p.ni * c.ny + p.t1i * c.t1y + p.t2i * c.t2y;
         const z = p.ni * c.nz + p.t1i * c.t1z + p.t2i * c.t2z;
-        if (x !== 0 || y !== 0 || z !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, x, y, z);
+        if (x !== 0 || y !== 0 || z !== 0) {
+          this.sc[9] = x;
+          this.sc[10] = y;
+          this.sc[11] = z;
+          this.pushAt(c, p);
+        }
       }
     }
   }
@@ -1278,8 +1426,8 @@ export class World3 {
     }
   }
 
-  /** Point p's gap now: its two anchors at the bodies' poses now, along the contact's normal. */
-  private gapOf(c: Contact3, p: CPoint): number {
+  /** Point p's gap now: its two anchors at the bodies' poses now, along the contact's normal; into `sc[8]`. */
+  private gapOf(c: Contact3, p: CPoint): void {
     const R = this.R;
     const a = c.a;
     const b = c.b;
@@ -1291,7 +1439,7 @@ export class World3 {
     const bx = (this.p[b * 3] as number) + (R[rb] as number) * p.bx + (R[rb + 1] as number) * p.by + (R[rb + 2] as number) * p.bz;
     const by = (this.p[b * 3 + 1] as number) + (R[rb + 3] as number) * p.bx + (R[rb + 4] as number) * p.by + (R[rb + 5] as number) * p.bz;
     const bz = (this.p[b * 3 + 2] as number) + (R[rb + 6] as number) * p.bx + (R[rb + 7] as number) * p.by + (R[rb + 8] as number) * p.bz;
-    return c.nx * (bx - ax) + c.ny * (by - ay) + c.nz * (bz - az);
+    this.sc[8] = c.nx * (bx - ax) + c.ny * (by - ay) + c.nz * (bz - az);
   }
 
   /** Each point's closing speed after the small step's forces; for a point fast enough to bounce, before them and its gap. */
@@ -1301,10 +1449,13 @@ export class World3 {
       if (c.restitution === 0) continue;
       for (let kp = 0; kp < c.pts.length; kp++) {
         const p = c.pts[kp] as CPoint;
-        p.sf = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
+        this.rel(c, p, 0, this.v, this.w);
+        p.sf = this.sc[7] as number;
         if (p.sf <= -RESTITUTION_THRESHOLD) {
-          p.sv = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz, this.pfv, this.pfw);
-          p.sg = this.gapOf(c, p);
+          this.rel(c, p, 0, this.pfv, this.pfw);
+          p.sv = this.sc[7] as number;
+          this.gapOf(c, p);
+          p.sg = this.sc[8] as number;
         } else {
           p.sv = p.sf;
           p.sg = 0;
@@ -1331,26 +1482,40 @@ export class World3 {
         // friction in two directions, a box of μ times the push
         const maxF = c.friction * p.ni;
         {
-          const vt = this.relV(c.a, c.b, p, c.t1x, c.t1y, c.t1z);
+          this.rel(c, p, 1, this.v, this.w);
+          const vt = this.sc[7] as number;
           const old = p.t1i;
           const nw = Math.max(-maxF, Math.min(maxF, old - p.t1m * vt));
           const d = nw - old;
           p.t1i = nw;
-          if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.t1x, d * c.t1y, d * c.t1z);
+          if (d !== 0) {
+            this.sc[9] = d * c.t1x;
+            this.sc[10] = d * c.t1y;
+            this.sc[11] = d * c.t1z;
+            this.pushAt(c, p);
+          }
         }
         {
-          const vt = this.relV(c.a, c.b, p, c.t2x, c.t2y, c.t2z);
+          this.rel(c, p, 2, this.v, this.w);
+          const vt = this.sc[7] as number;
           const old = p.t2i;
           const nw = Math.max(-maxF, Math.min(maxF, old - p.t2m * vt));
           const d = nw - old;
           p.t2i = nw;
-          if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.t2x, d * c.t2y, d * c.t2z);
+          if (d !== 0) {
+            this.sc[9] = d * c.t2x;
+            this.sc[10] = d * c.t2y;
+            this.sc[11] = d * c.t2z;
+            this.pushAt(c, p);
+          }
         }
       }
       for (let kp = 0; kp < c.pts.length; kp++) {
         const p = c.pts[kp] as CPoint;
-        const s = this.gapOf(c, p);
-        const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
+        this.gapOf(c, p);
+        const s = this.sc[8] as number;
+        this.rel(c, p, 0, this.v, this.w);
+        const vn = this.sc[7] as number;
         // the relax pass leaves a fast point with a gap to a wall alone if it bounces: it meets in the next small step
         // and bounces there with its full speed
         if (!bias && wall && s > 0 && c.restitution > 0 && vn <= -RESTITUTION_THRESHOLD) continue;
@@ -1367,7 +1532,12 @@ export class World3 {
         const nw = Math.max(0, old - p.nm * ms * (vn + bv) - is * old);
         p.ni = nw;
         const d = nw - old;
-        if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
+        if (d !== 0) {
+          this.sc[9] = d * c.nx;
+          this.sc[10] = d * c.ny;
+          this.sc[11] = d * c.nz;
+          this.pushAt(c, p);
+        }
       }
     }
   }
@@ -1394,12 +1564,18 @@ export class World3 {
       for (let kp = 0; kp < c.pts.length; kp++) {
         const p = c.pts[kp] as CPoint;
         if (p.bounced !== 2) continue;
-        const vn = this.relV(c.a, c.b, p, c.nx, c.ny, c.nz);
+        this.rel(c, p, 0, this.v, this.w);
+        const vn = this.sc[7] as number;
         const target = -c.restitution * p.sv;
         const nw = Math.max(0, p.bi + p.nm * (target - vn));
         const d = nw - p.bi;
         p.bi = nw;
-        if (d !== 0) this.applyAt(c.a, c.b, p.rax, p.ray, p.raz, p.rbx, p.rby, p.rbz, d * c.nx, d * c.ny, d * c.nz);
+        if (d !== 0) {
+          this.sc[9] = d * c.nx;
+          this.sc[10] = d * c.ny;
+          this.sc[11] = d * c.nz;
+          this.pushAt(c, p);
+        }
       }
     }
     for (let kp = 0; kp < c.pts.length; kp++) {
@@ -1710,7 +1886,7 @@ export class World3 {
     while (out.length < this.n) out.push([]);
     out.length = this.n;
     for (let i = 0; i < this.n; i++) (out[i] as number[]).length = 0;
-    this.contactMap.forEach(this.addTouch);
+    for (let q = 0; q < this.contactMap.size; q++) this.addTouch(this.contactMap.list[q] as Contact3);
     for (let i = 0; i < this.n; i++) {
       const l = out[i] as number[];
       if (l.length > 1) l.sort(ascending);
@@ -1725,7 +1901,7 @@ export class World3 {
 
   get contactCount(): number {
     this.contactTotal = 0;
-    this.contactMap.forEach(this.countContact);
+    for (let q = 0; q < this.contactMap.size; q++) this.countContact(this.contactMap.list[q] as Contact3);
     return this.contactTotal;
   }
 
@@ -1787,7 +1963,8 @@ export class World3 {
       out.push(this.sleepTime[i] as number, this.awake[i] as number, this.type[i] as number);
     }
     out.push(this.contactMap.size);
-    for (const c of this.contactMap.values()) {
+    for (let q = 0; q < this.contactMap.size; q++) {
+      const c = this.contactMap.list[q] as Contact3;
       out.push(c.key, c.pts.length, (c.pushed ? 2 : 0) + (c.touching ? 1 : 0), c.nx, c.ny, c.nz);
       for (const p of c.pts) out.push(p.ax, p.ay, p.az, p.bx, p.by, p.bz, p.ni, p.t1i, p.t2i);
     }
@@ -1813,7 +1990,7 @@ export class World3 {
       this.awake[i] = s[k++] as number;
       this.type[i] = s[k++] as number;
     }
-    this.contactMap = new Map();
+    this.contactMap = new ContactTable3();
     this.contacts = [];
     const nc = s[k++] as number;
     for (let i = 0; i < nc; i++) {
@@ -1821,11 +1998,11 @@ export class World3 {
       const np = s[k++] as number;
       const flags = s[k++] as number;
       const [sa, sb] = this.shapesOfKey(key);
-      const c: Contact3 = { key, a: (this.shapes[sa] as Shape3).body, b: (this.shapes[sb] as Shape3).body, sa, sb, nx: s[k++] as number, ny: s[k++] as number, nz: s[k++] as number, pts: [], friction: 0, restitution: 0, pushed: (flags & 2) === 2, touching: (flags & 1) === 1, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
+      const c: Contact3 = { stamp: 0, key, a: (this.shapes[sa] as Shape3).body, b: (this.shapes[sb] as Shape3).body, sa, sb, nx: s[k++] as number, ny: s[k++] as number, nz: s[k++] as number, pts: [], friction: 0, restitution: 0, pushed: (flags & 2) === 2, touching: (flags & 1) === 1, t1x: 0, t1y: 0, t1z: 0, t2x: 0, t2y: 0, t2z: 0 };
       for (let q = 0; q < np; q++) {
         c.pts.push({ ax: s[k++] as number, ay: s[k++] as number, az: s[k++] as number, bx: s[k++] as number, by: s[k++] as number, bz: s[k++] as number, s: 0, ni: s[k++] as number, t1i: s[k++] as number, t2i: s[k++] as number, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0, tn: 0, t1t: 0, t2t: 0, sv: 0, sf: 0, sg: 0, bi: 0, bounced: 0 });
       }
-      this.contactMap.set(key, c);
+      this.contactMap.set(c);
     }
     const nj = s[k++] as number;
     for (let i = 0; i < nj && i < this.joints.length; i++) {
@@ -1858,6 +2035,67 @@ export class World3 {
 
 const ascending = (x: number, y: number): number => x - y;
 
+/** A contact point with nothing in it. */
+function newPoint(): CPoint {
+  return { ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, s: 0, ni: 0, t1i: 0, t2i: 0, rax: 0, ray: 0, raz: 0, rbx: 0, rby: 0, rbz: 0, nm: 0, t1m: 0, t2m: 0, rv: 0, max: 0, tn: 0, t1t: 0, t2t: 0, sv: 0, sf: 0, sg: 0, bi: 0, bounced: 0 };
+}
+
+/**
+ * The contacts by key, in the order they were put (the order a checkpoint saves them in). A `Map` that is cleared every
+ * step makes a new table each time (design 11.4); this one is two arrays, written over (the plane's `ContactTable`).
+ */
+class ContactTable3 {
+  /** The contacts in the order put; `size` of them. */
+  readonly list: Contact3[] = [];
+  size = 0;
+  private slots = new Int32Array(64);
+  private mask = 63;
+
+  private slotOf(key: number): number {
+    let s = Math.imul(key | 0, 0x9e3779b1) >>> 0;
+    s = (s ^ (s >>> 15)) & this.mask;
+    return s;
+  }
+
+  get(key: number): Contact3 | undefined {
+    let s = this.slotOf(key);
+    for (;;) {
+      const at = this.slots[s] as number;
+      if (at === 0) return undefined;
+      const c = this.list[at - 1] as Contact3;
+      if (c.key === key) return c;
+      s = (s + 1) & this.mask;
+    }
+  }
+
+  /** Puts a contact (its `key` set); a key already there is not expected (a step puts each pair once). */
+  set(c: Contact3): void {
+    if ((this.size + 1) * 2 > this.mask + 1) this.grow();
+    let s = this.slotOf(c.key);
+    while ((this.slots[s] as number) !== 0) s = (s + 1) & this.mask;
+    this.list[this.size++] = c;
+    this.slots[s] = this.size;
+  }
+
+  private grow(): void {
+    const cap = (this.mask + 1) * 2;
+    this.slots = new Int32Array(cap);
+    this.mask = cap - 1;
+    for (let i = 0; i < this.size; i++) {
+      let s = this.slotOf((this.list[i] as Contact3).key);
+      while ((this.slots[s] as number) !== 0) s = (s + 1) & this.mask;
+      this.slots[s] = i + 1;
+    }
+  }
+
+  /** Empties the table; the arrays stay. */
+  clear(): void {
+    if (this.size === 0) return;
+    this.slots.fill(0);
+    this.size = 0;
+  }
+}
+
 /** The directions in `src` (x, y, z packed) turned by the rotation at row `r` of `R` (row major), into `dst`. */
 function turnAll(src: Float64Array, dst: Float64Array, R: Float64Array, r: number): void {
   for (let j = 0; j < src.length; j += 3) {
@@ -1868,22 +2106,6 @@ function turnAll(src: Float64Array, dst: Float64Array, R: Float64Array, r: numbe
     dst[j + 1] = (R[r + 3] as number) * a + (R[r + 4] as number) * b + (R[r + 5] as number) * c;
     dst[j + 2] = (R[r + 6] as number) * a + (R[r + 7] as number) * b + (R[r + 8] as number) * c;
   }
-}
-
-function inverseOrZero(k: number): number {
-  return k > 0 ? 1 / k : 0;
-}
-
-/** n · ((I⁻¹ (r × n)) × r) for body i. */
-function angTerm(I: Float64Array, i: number, rx: number, ry: number, rz: number, nx: number, ny: number, nz: number): number {
-  const cx = ry * nz - rz * ny;
-  const cy = rz * nx - rx * nz;
-  const cz = rx * ny - ry * nx;
-  const o = i * 9;
-  const ix = (I[o] as number) * cx + (I[o + 1] as number) * cy + (I[o + 2] as number) * cz;
-  const iy = (I[o + 3] as number) * cx + (I[o + 4] as number) * cy + (I[o + 5] as number) * cz;
-  const iz = (I[o + 6] as number) * cx + (I[o + 7] as number) * cy + (I[o + 8] as number) * cz;
-  return cx * ix + cy * iy + cz * iz;
 }
 
 /** ω_i += sgn I⁻¹ τ. */
@@ -2062,76 +2284,210 @@ function makeShape3(body: number, d: ShapeDef3, ox: number, oy: number, oz: numb
   return { kind: 1, body, r: 0, lc: z, lv, wv: new Float64Array(nv * 3), faces, ln, wn: new Float64Array(ln.length), le: Float64Array.from(dirs), we: new Float64Array(dirs.length), edges: Int32Array.from(edges), wc: new Float64Array(3), reach };
 }
 
-/** At most four points: the deepest, the furthest from it, then the two that widen the patch most. */
-function reduce4<T extends { x: number; y: number; z: number; s: number }>(pts: T[]): T[] {
-  if (pts.length <= 4) return pts;
-  let a = pts[0] as T;
-  for (const p of pts) if (p.s < a.s) a = p;
+/* ------------------------------ the narrow phase ------------------------------ */
+
+/*
+ * The narrow phase writes what it finds into scratch that lives as long as the module, not into objects and arrays, and
+ * takes its numbers from slots of `FS`, not from arguments: an object a pair, an array a point, and a number passed to or
+ * returned from a call that is not inlined are all garbage in every step (design 11.4, PH-53). `FD` holds the normal and
+ * how many points were found, `FP` the points (x, y, z and the separation, four numbers each). The arithmetic is that of
+ * the versions that made objects, in the same order.
+ */
+const FD = { nx: 0, ny: 0, nz: 0, n: 0 };
+let FP = new Float64Array(1024);
+/** The margin the pair is made within: set by the caller before `collideShapes`. */
+const S_MARGIN = 0;
+/** A normal (1 to 3), a point in (4 to 6), a point out (7 to 9), the two hulls' centres (10 to 12, 13 to 15), an axis (16 to 18), a plane's offset (19). */
+const S_N = 1;
+const S_PT = 4;
+const S_OUT = 7;
+const S_CA = 10;
+const S_CB = 13;
+const S_AXIS = 16;
+const S_OFF = 19;
+const FS = new Float64Array(24);
+/** The best axis of a hull pair so far: separation, the axis (1 to 3), its kind and its face index. */
+const HS = new Float64Array(8);
+/** Four points for `reduce4` to put in order. */
+const FT = new Float64Array(16);
+/** The polygons a face is clipped through, ping-ponged: three numbers a point. */
+let PA = new Float64Array(768);
+let PB = new Float64Array(768);
+
+function ensureFP(points: number): void {
+  if (FP.length < points * 4) FP = new Float64Array(points * 8);
+}
+
+/** The found points of the last `collideShapes` as a new object (terrain keeps several of them until it has chosen). */
+function snapshotFound(): Found3 {
+  const pts: { x: number; y: number; z: number; s: number }[] = [];
+  for (let k = 0; k < FD.n; k++) pts.push({ x: FP[k * 4] as number, y: FP[k * 4 + 1] as number, z: FP[k * 4 + 2] as number, s: FP[k * 4 + 3] as number });
+  return { nx: FD.nx, ny: FD.ny, nz: FD.nz, pts };
+}
+
+/** Puts a snapshot back as the found points. */
+function restoreFound(f: Found3): void {
+  ensureFP(f.pts.length);
+  for (let k = 0; k < f.pts.length; k++) {
+    const q = f.pts[k] as { x: number; y: number; z: number; s: number };
+    FP[k * 4] = q.x;
+    FP[k * 4 + 1] = q.y;
+    FP[k * 4 + 2] = q.z;
+    FP[k * 4 + 3] = q.s;
+  }
+  FD.nx = f.nx;
+  FD.ny = f.ny;
+  FD.nz = f.nz;
+  FD.n = f.pts.length;
+}
+
+/** At most four of the `n` points in `FP`: the deepest, the furthest from it, then the two that widen the patch most. Returns how many are left. */
+function reduce4(n: number): number {
+  if (n <= 4) return n;
+  const P = FP;
+  let a = 0;
+  for (let i = 0; i < n; i++) if ((P[i * 4 + 3] as number) < (P[a * 4 + 3] as number)) a = i;
+  const ax = P[a * 4] as number;
+  const ay = P[a * 4 + 1] as number;
+  const az = P[a * 4 + 2] as number;
   let b = a;
   let bd = -1;
-  for (const p of pts) {
-    const d = (p.x - a.x) ** 2 + (p.y - a.y) ** 2 + (p.z - a.z) ** 2;
+  for (let i = 0; i < n; i++) {
+    const d = ((P[i * 4] as number) - ax) ** 2 + ((P[i * 4 + 1] as number) - ay) ** 2 + ((P[i * 4 + 2] as number) - az) ** 2;
     if (d > bd) {
       bd = d;
-      b = p;
+      b = i;
     }
   }
   // the point furthest from the line a b
-  const ux = b.x - a.x;
-  const uy = b.y - a.y;
-  const uz = b.z - a.z;
+  const ux = (P[b * 4] as number) - ax;
+  const uy = (P[b * 4 + 1] as number) - ay;
+  const uz = (P[b * 4 + 2] as number) - az;
   let c = a;
   let cd = -1;
-  for (const p of pts) {
-    const vx = p.x - a.x;
-    const vy = p.y - a.y;
-    const vz = p.z - a.z;
+  for (let i = 0; i < n; i++) {
+    const vx = (P[i * 4] as number) - ax;
+    const vy = (P[i * 4 + 1] as number) - ay;
+    const vz = (P[i * 4 + 2] as number) - az;
     const cx = uy * vz - uz * vy;
     const cy = uz * vx - ux * vz;
     const cz = ux * vy - uy * vx;
     const d = cx * cx + cy * cy + cz * cz;
     if (d > cd) {
       cd = d;
-      c = p;
+      c = i;
     }
   }
   // the point furthest from the middle of a, b, c on the other side
-  const mx = (a.x + b.x + c.x) / 3;
-  const my = (a.y + b.y + c.y) / 3;
-  const mz = (a.z + b.z + c.z) / 3;
+  const mx = (ax + (P[b * 4] as number) + (P[c * 4] as number)) / 3;
+  const my = (ay + (P[b * 4 + 1] as number) + (P[c * 4 + 1] as number)) / 3;
+  const mz = (az + (P[b * 4 + 2] as number) + (P[c * 4 + 2] as number)) / 3;
   let d4 = a;
   let dd = -1;
-  for (const p of pts) {
-    if (p === a || p === b || p === c) continue;
-    const d = (p.x - mx) ** 2 + (p.y - my) ** 2 + (p.z - mz) ** 2;
+  for (let i = 0; i < n; i++) {
+    if (i === a || i === b || i === c) continue;
+    const d = ((P[i * 4] as number) - mx) ** 2 + ((P[i * 4 + 1] as number) - my) ** 2 + ((P[i * 4 + 2] as number) - mz) ** 2;
     if (d > dd) {
       dd = d;
-      d4 = p;
+      d4 = i;
     }
   }
-  return [a, b, c, d4].filter((p, i, arr) => arr.indexOf(p) === i);
+  // a, b, c, d4 in that order, without repeats
+  let k = 0;
+  for (let q = 0; q < 4; q++) {
+    const i = q === 0 ? a : q === 1 ? b : q === 2 ? c : d4;
+    if (q === 1 && i === a) continue;
+    if (q === 2 && (i === a || i === b)) continue;
+    if (q === 3 && (i === a || i === b || i === c)) continue;
+    FT[k * 4] = P[i * 4] as number;
+    FT[k * 4 + 1] = P[i * 4 + 1] as number;
+    FT[k * 4 + 2] = P[i * 4 + 2] as number;
+    FT[k * 4 + 3] = P[i * 4 + 3] as number;
+    k++;
+  }
+  for (let j = 0; j < k * 4; j++) P[j] = FT[j] as number;
+  return k;
 }
 
-/** Projection of a hull's world corners on an axis: [min, max]. */
-function project(s: Shape3, x: number, y: number, z: number): [number, number] {
-  let lo = Infinity;
-  let hi = -Infinity;
-  const v = s.wv;
-  for (let j = 0; j < v.length; j += 3) {
-    const d = (v[j] as number) * x + (v[j + 1] as number) * y + (v[j + 2] as number) * z;
-    if (d < lo) lo = d;
-    if (d > hi) hi = d;
+/** What shapes A and B touch in, into `FD` and `FP` (the margin in `FS[S_MARGIN]`): the contact normal from A to B and the points on B's surface. A is the plane, or the hull of a hull–sphere pair. */
+function collideShapes(A: Shape3, B: Shape3): void {
+  FD.n = 0;
+  const margin = FS[S_MARGIN] as number;
+  if (A.kind === 2) {
+    const nx = A.lc[0] as number;
+    const ny = A.lc[1] as number;
+    const nz = A.lc[2] as number;
+    const d = A.lc[3] as number;
+    if (B.kind === 0) {
+      const s = nx * (B.wc[0] as number) + ny * (B.wc[1] as number) + nz * (B.wc[2] as number) - d - B.r;
+      if (s > margin) return;
+      FD.nx = nx;
+      FD.ny = ny;
+      FD.nz = nz;
+      FP[0] = (B.wc[0] as number) - B.r * nx;
+      FP[1] = (B.wc[1] as number) - B.r * ny;
+      FP[2] = (B.wc[2] as number) - B.r * nz;
+      FP[3] = s;
+      FD.n = 1;
+      return;
+    }
+    if (B.kind === 1) {
+      const wv = B.wv;
+      ensureFP(wv.length / 3);
+      const P = FP;
+      let k = 0;
+      for (let j = 0; j < wv.length; j += 3) {
+        const s = nx * (wv[j] as number) + ny * (wv[j + 1] as number) + nz * (wv[j + 2] as number) - d;
+        if (s <= margin) {
+          P[k * 4] = wv[j] as number;
+          P[k * 4 + 1] = wv[j + 1] as number;
+          P[k * 4 + 2] = wv[j + 2] as number;
+          P[k * 4 + 3] = s;
+          k++;
+        }
+      }
+      FD.nx = nx;
+      FD.ny = ny;
+      FD.nz = nz;
+      FD.n = reduce4(k);
+    }
+    return;
   }
-  return [lo, hi];
+  if (A.kind === 0 && B.kind === 0) {
+    const dx = (B.wc[0] as number) - (A.wc[0] as number);
+    const dy = (B.wc[1] as number) - (A.wc[1] as number);
+    const dz = (B.wc[2] as number) - (A.wc[2] as number);
+    const l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const s = l - A.r - B.r;
+    if (s > margin) return;
+    const nx = l > 1e-12 ? dx / l : 0;
+    const ny = l > 1e-12 ? dy / l : 0;
+    const nz = l > 1e-12 ? dz / l : 1;
+    FD.nx = nx;
+    FD.ny = ny;
+    FD.nz = nz;
+    FP[0] = (B.wc[0] as number) - B.r * nx;
+    FP[1] = (B.wc[1] as number) - B.r * ny;
+    FP[2] = (B.wc[2] as number) - B.r * nz;
+    FP[3] = s;
+    FD.n = 1;
+    return;
+  }
+  if (A.kind === 1 && B.kind === 0) hullSphere(A, B);
+  else if (A.kind === 1 && B.kind === 1) hullHull(A, B);
 }
 
 /** A hull against a sphere: the closest point of the hull to the sphere's centre. */
-function hullSphere(A: Shape3, B: Shape3, margin: number): { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] } | undefined {
+function hullSphere(A: Shape3, B: Shape3): void {
+  const margin = FS[S_MARGIN] as number;
   const cx = B.wc[0] as number;
   const cy = B.wc[1] as number;
   const cz = B.wc[2] as number;
   const v = A.wv;
-  let best: [number, number, number] | undefined;
+  let have = false;
+  let qbx = 0;
+  let qby = 0;
+  let qbz = 0;
   let bd = Infinity;
   let deepest = -Infinity;
   let deepFace = 0;
@@ -2147,31 +2503,64 @@ function hullSphere(A: Shape3, B: Shape3, margin: number): { nx: number; ny: num
       deepFace = k;
     }
     if (dist <= 0) continue;
-    const q = closestOnFace(v, f, nx, ny, nz, cx, cy, cz);
-    const d = (q[0] - cx) ** 2 + (q[1] - cy) ** 2 + (q[2] - cz) ** 2;
+    FS[S_N] = nx;
+    FS[S_N + 1] = ny;
+    FS[S_N + 2] = nz;
+    FS[S_PT] = cx;
+    FS[S_PT + 1] = cy;
+    FS[S_PT + 2] = cz;
+    closestOnFace(v, f);
+    const qx = FS[S_OUT] as number;
+    const qy = FS[S_OUT + 1] as number;
+    const qz = FS[S_OUT + 2] as number;
+    const d = (qx - cx) ** 2 + (qy - cy) ** 2 + (qz - cz) ** 2;
     if (d < bd) {
       bd = d;
-      best = q;
+      qbx = qx;
+      qby = qy;
+      qbz = qz;
+      have = true;
     }
   }
-  if (best) {
+  if (have) {
     const d = Math.sqrt(bd);
     const s = d - B.r;
-    if (s > margin) return undefined;
-    const nx = d > 1e-12 ? (cx - best[0]) / d : (A.wn[deepFace * 3] as number);
-    const ny = d > 1e-12 ? (cy - best[1]) / d : (A.wn[deepFace * 3 + 1] as number);
-    const nz = d > 1e-12 ? (cz - best[2]) / d : (A.wn[deepFace * 3 + 2] as number);
-    return { nx, ny, nz, pts: [{ x: cx - B.r * nx, y: cy - B.r * ny, z: cz - B.r * nz, s }] };
+    if (s > margin) return;
+    const nx = d > 1e-12 ? (cx - qbx) / d : (A.wn[deepFace * 3] as number);
+    const ny = d > 1e-12 ? (cy - qby) / d : (A.wn[deepFace * 3 + 1] as number);
+    const nz = d > 1e-12 ? (cz - qbz) / d : (A.wn[deepFace * 3 + 2] as number);
+    FD.nx = nx;
+    FD.ny = ny;
+    FD.nz = nz;
+    FP[0] = cx - B.r * nx;
+    FP[1] = cy - B.r * ny;
+    FP[2] = cz - B.r * nz;
+    FP[3] = s;
+    FD.n = 1;
+    return;
   }
   // the centre is inside: push out through the nearest face
   const nx = A.wn[deepFace * 3] as number;
   const ny = A.wn[deepFace * 3 + 1] as number;
   const nz = A.wn[deepFace * 3 + 2] as number;
-  return { nx, ny, nz, pts: [{ x: cx - B.r * nx, y: cy - B.r * ny, z: cz - B.r * nz, s: deepest - B.r }] };
+  FD.nx = nx;
+  FD.ny = ny;
+  FD.nz = nz;
+  FP[0] = cx - B.r * nx;
+  FP[1] = cy - B.r * ny;
+  FP[2] = cz - B.r * nz;
+  FP[3] = deepest - B.r;
+  FD.n = 1;
 }
 
-/** The point of a flat convex face nearest to (x, y, z). */
-function closestOnFace(v: Float64Array, f: Int32Array, nx: number, ny: number, nz: number, x: number, y: number, z: number): [number, number, number] {
+/** The point of a flat convex face nearest to the point in `FS[S_PT]`, with the face's normal in `FS[S_N]`: into `FS[S_OUT]`. */
+function closestOnFace(v: Float64Array, f: Int32Array): void {
+  const nx = FS[S_N] as number;
+  const ny = FS[S_N + 1] as number;
+  const nz = FS[S_N + 2] as number;
+  const x = FS[S_PT] as number;
+  const y = FS[S_PT + 1] as number;
+  const z = FS[S_PT + 2] as number;
   const o = (f[0] as number) * 3;
   const d = nx * (x - (v[o] as number)) + ny * (y - (v[o + 1] as number)) + nz * (z - (v[o + 2] as number));
   const px = x - d * nx;
@@ -2194,8 +2583,15 @@ function closestOnFace(v: Float64Array, f: Int32Array, nx: number, ny: number, n
       break;
     }
   }
-  if (inside) return [px, py, pz];
-  let best: [number, number, number] = [v[o] as number, v[o + 1] as number, v[o + 2] as number];
+  if (inside) {
+    FS[S_OUT] = px;
+    FS[S_OUT + 1] = py;
+    FS[S_OUT + 2] = pz;
+    return;
+  }
+  let bqx = v[o] as number;
+  let bqy = v[o + 1] as number;
+  let bqz = v[o + 2] as number;
   let bd = Infinity;
   for (let i = 0; i < f.length; i++) {
     const a = (f[i] as number) * 3;
@@ -2214,10 +2610,135 @@ function closestOnFace(v: Float64Array, f: Int32Array, nx: number, ny: number, n
     const dd = (qx - x) ** 2 + (qy - y) ** 2 + (qz - z) ** 2;
     if (dd < bd) {
       bd = dd;
-      best = [qx, qy, qz];
+      bqx = qx;
+      bqy = qy;
+      bqz = qz;
+    }
+  }
+  FS[S_OUT] = bqx;
+  FS[S_OUT + 1] = bqy;
+  FS[S_OUT + 2] = bqz;
+}
+
+/** The mean of a hull's world corners, into `FS` at `slot`. */
+function centreInto(s: Shape3, slot: number): void {
+  const v = s.wv;
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  const n = v.length / 3;
+  for (let j = 0; j < v.length; j += 3) {
+    x += v[j] as number;
+    y += v[j + 1] as number;
+    z += v[j + 2] as number;
+  }
+  FS[slot] = x / n;
+  FS[slot + 1] = y / n;
+  FS[slot + 2] = z / n;
+}
+
+/** The corner of a hull furthest along the axis in `FS[S_AXIS]` (its index in the corners, times three). */
+function supportOf(s: Shape3): number {
+  const x = FS[S_AXIS] as number;
+  const y = FS[S_AXIS + 1] as number;
+  const z = FS[S_AXIS + 2] as number;
+  const v = s.wv;
+  let best = 0;
+  let bd = -Infinity;
+  for (let j = 0; j < v.length; j += 3) {
+    const d = (v[j] as number) * x + (v[j + 1] as number) * y + (v[j + 2] as number) * z;
+    if (d > bd) {
+      bd = d;
+      best = j;
     }
   }
   return best;
+}
+
+/**
+ * One separating axis, in `FS[S_AXIS]`, of kind k (1 a face of A, 2 a face of B, 3 an edge pair, `i` the face or the pair):
+ * false when the hulls are apart along it by more than the margin, else the axis is kept in `HS` if it is the best so far.
+ */
+function satAxis(A: Shape3, B: Shape3, k: number, i: number): boolean {
+  const x = FS[S_AXIS] as number;
+  const y = FS[S_AXIS + 1] as number;
+  const z = FS[S_AXIS + 2] as number;
+  let a0 = Infinity;
+  let a1 = -Infinity;
+  const va = A.wv;
+  for (let j = 0; j < va.length; j += 3) {
+    const d = (va[j] as number) * x + (va[j + 1] as number) * y + (va[j + 2] as number) * z;
+    if (d < a0) a0 = d;
+    if (d > a1) a1 = d;
+  }
+  let b0 = Infinity;
+  let b1 = -Infinity;
+  const vb = B.wv;
+  for (let j = 0; j < vb.length; j += 3) {
+    const d = (vb[j] as number) * x + (vb[j + 1] as number) * y + (vb[j + 2] as number) * z;
+    if (d < b0) b0 = d;
+    if (d > b1) b1 = d;
+  }
+  // a face's own outward normal: how far the other hull is beyond that face (never turned round, so the face found
+  // is the one the other hull rests on); an edge axis points from A toward B
+  let sep: number;
+  let sx = x;
+  let sy = y;
+  let sz = z;
+  if (k === 1) sep = b0 - a1;
+  else if (k === 2) {
+    sep = a0 - b1;
+    sx = -x;
+    sy = -y;
+    sz = -z;
+  } else if (((FS[S_CB] as number) - (FS[S_CA] as number)) * x + ((FS[S_CB + 1] as number) - (FS[S_CA + 1] as number)) * y + ((FS[S_CB + 2] as number) - (FS[S_CA + 2] as number)) * z >= 0) sep = b0 - a1;
+  else {
+    sep = a0 - b1;
+    sx = -x;
+    sy = -y;
+    sz = -z;
+  }
+  if (sep > (FS[S_MARGIN] as number)) return false;
+  // edge axes win only when clearly better, so resting faces keep face contacts
+  const bias = k === 1 ? 0 : k === 2 ? 1e-4 : 0.01;
+  if (sep - bias > (HS[0] as number)) {
+    HS[0] = sep - bias;
+    HS[1] = sx;
+    HS[2] = sy;
+    HS[3] = sz;
+    HS[4] = k;
+    HS[5] = i;
+  }
+  return true;
+}
+
+/** Keeps the part of the polygon `src` (`n` points, x, y, z packed) where axis · p ≤ off (`FS[S_AXIS]`, `FS[S_OFF]`), into `dst`; returns how many points. */
+function clipPoly(src: Float64Array, n: number, dst: Float64Array): number {
+  const nx = FS[S_AXIS] as number;
+  const ny = FS[S_AXIS + 1] as number;
+  const nz = FS[S_AXIS + 2] as number;
+  const off = FS[S_OFF] as number;
+  let m = 0;
+  for (let i = 0; i < n; i++) {
+    const a = i * 3;
+    const b = ((i + 1) % n) * 3;
+    const da = nx * (src[a] as number) + ny * (src[a + 1] as number) + nz * (src[a + 2] as number) - off;
+    const db = nx * (src[b] as number) + ny * (src[b + 1] as number) + nz * (src[b + 2] as number) - off;
+    if (da <= 0) {
+      dst[m * 3] = src[a] as number;
+      dst[m * 3 + 1] = src[a + 1] as number;
+      dst[m * 3 + 2] = src[a + 2] as number;
+      m++;
+    }
+    if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+      const t = da / (da - db);
+      dst[m * 3] = (src[a] as number) + t * ((src[b] as number) - (src[a] as number));
+      dst[m * 3 + 1] = (src[a + 1] as number) + t * ((src[b + 1] as number) - (src[a + 1] as number));
+      dst[m * 3 + 2] = (src[a + 2] as number) + t * ((src[b + 2] as number) - (src[a + 2] as number));
+      m++;
+    }
+  }
+  return m;
 }
 
 /**
@@ -2225,50 +2746,28 @@ function closestOnFace(v: Float64Array, f: Int32Array, nx: number, ny: number, n
  * overlap gives the normal; a face axis gives points by clipping the other hull's most opposed face to the face's
  * sides, an edge axis the nearest points of the two edges.
  */
-function hullHull(A: Shape3, B: Shape3, margin: number): { nx: number; ny: number; nz: number; pts: { x: number; y: number; z: number; s: number }[] } | undefined {
-  const ca = centre(A);
-  const cb = centre(B);
-  let bestSep = -Infinity;
-  let bx = 0;
-  let by = 0;
-  let bz = 0;
-  let kind = 0; // 1 face of A, 2 face of B, 3 edges
-  let index = -1;
-  const test = (x: number, y: number, z: number, k: number, i: number, bias = 0): boolean => {
-    const [a0, a1] = project(A, x, y, z);
-    const [b0, b1] = project(B, x, y, z);
-    // a face's own outward normal: how far the other hull is beyond that face (never turned round, so the face found
-    // is the one the other hull rests on); an edge axis points from A toward B
-    let sep: number;
-    let sx = x;
-    let sy = y;
-    let sz = z;
-    if (k === 1) sep = b0 - a1;
-    else if (k === 2) {
-      sep = a0 - b1;
-      sx = -x;
-      sy = -y;
-      sz = -z;
-    } else if ((cb[0] - ca[0]) * x + (cb[1] - ca[1]) * y + (cb[2] - ca[2]) * z >= 0) sep = b0 - a1;
-    else {
-      sep = a0 - b1;
-      sx = -x;
-      sy = -y;
-      sz = -z;
-    }
-    if (sep > margin) return false;
-    if (sep - bias > bestSep) {
-      bestSep = sep - bias;
-      bx = sx;
-      by = sy;
-      bz = sz;
-      kind = k;
-      index = i;
-    }
-    return true;
-  };
-  for (let k = 0; k < A.faces.length; k++) if (!test(A.wn[k * 3] as number, A.wn[k * 3 + 1] as number, A.wn[k * 3 + 2] as number, 1, k)) return undefined;
-  for (let k = 0; k < B.faces.length; k++) if (!test(B.wn[k * 3] as number, B.wn[k * 3 + 1] as number, B.wn[k * 3 + 2] as number, 2, k, 1e-4)) return undefined;
+function hullHull(A: Shape3, B: Shape3): void {
+  const margin = FS[S_MARGIN] as number;
+  centreInto(A, S_CA);
+  centreInto(B, S_CB);
+  HS[0] = -Infinity;
+  HS[1] = 0;
+  HS[2] = 0;
+  HS[3] = 0;
+  HS[4] = 0;
+  HS[5] = -1;
+  for (let k = 0; k < A.faces.length; k++) {
+    FS[S_AXIS] = A.wn[k * 3] as number;
+    FS[S_AXIS + 1] = A.wn[k * 3 + 1] as number;
+    FS[S_AXIS + 2] = A.wn[k * 3 + 2] as number;
+    if (!satAxis(A, B, 1, k)) return;
+  }
+  for (let k = 0; k < B.faces.length; k++) {
+    FS[S_AXIS] = B.wn[k * 3] as number;
+    FS[S_AXIS + 1] = B.wn[k * 3 + 1] as number;
+    FS[S_AXIS + 2] = B.wn[k * 3 + 2] as number;
+    if (!satAxis(A, B, 2, k)) return;
+  }
   for (let i = 0; i < A.we.length; i += 3) {
     for (let j = 0; j < B.we.length; j += 3) {
       const ux = A.we[i] as number;
@@ -2286,19 +2785,38 @@ function hullHull(A: Shape3, B: Shape3, margin: number): { nx: number; ny: numbe
       x /= l;
       y /= l;
       z /= l;
-      // edge axes win only when clearly better, so resting faces keep face contacts
-      if (!test(x, y, z, 3, i * 100000 + j, 0.01)) return undefined;
+      FS[S_AXIS] = x;
+      FS[S_AXIS + 1] = y;
+      FS[S_AXIS + 2] = z;
+      if (!satAxis(A, B, 3, i * 100000 + j)) return;
     }
   }
+  const bestSep = HS[0] as number;
+  const bx = HS[1] as number;
+  const by = HS[2] as number;
+  const bz = HS[3] as number;
+  const kind = HS[4] as number;
+  const index = HS[5] as number;
   if (kind === 3) {
     // the deepest corner of B along -n and of A along n give the two edges' region: take the corner pair midpoint
-    const pa = support(A, bx, by, bz);
-    const pb = support(B, -bx, -by, -bz);
+    FS[S_AXIS] = bx;
+    FS[S_AXIS + 1] = by;
+    FS[S_AXIS + 2] = bz;
+    const ia = supportOf(A);
+    FS[S_AXIS] = -bx;
+    FS[S_AXIS + 1] = -by;
+    FS[S_AXIS + 2] = -bz;
+    const ib = supportOf(B);
     const s = bestSep + 0.002;
-    const qx = 0.5 * (pa[0] + pb[0] + s * bx);
-    const qy = 0.5 * (pa[1] + pb[1] + s * by);
-    const qz = 0.5 * (pa[2] + pb[2] + s * bz);
-    return { nx: bx, ny: by, nz: bz, pts: [{ x: qx, y: qy, z: qz, s }] };
+    FD.nx = bx;
+    FD.ny = by;
+    FD.nz = bz;
+    FP[0] = 0.5 * ((A.wv[ia] as number) + (B.wv[ib] as number) + s * bx);
+    FP[1] = 0.5 * ((A.wv[ia + 1] as number) + (B.wv[ib + 1] as number) + s * by);
+    FP[2] = 0.5 * ((A.wv[ia + 2] as number) + (B.wv[ib + 2] as number) + s * bz);
+    FP[3] = s;
+    FD.n = 1;
+    return;
   }
   // reference face on A (kind 1) or on B (kind 2)
   const ref = kind === 1 ? A : B;
@@ -2318,15 +2836,25 @@ function hullHull(A: Shape3, B: Shape3, margin: number): { nx: number; ny: numbe
       inF = k;
     }
   }
-  let poly: number[] = [];
   const f = inc.faces[inF] as Int32Array;
+  // a convex face clipped by a plane keeps at most one point more: room for every cut
+  const room = (f.length + rf.length + 2) * 3;
+  if (PA.length < room) {
+    PA = new Float64Array(room * 2);
+    PB = new Float64Array(room * 2);
+  }
+  let cur = PA;
+  let oth = PB;
+  let pn = f.length;
   for (let i = 0; i < f.length; i++) {
     const o = (f[i] as number) * 3;
-    poly.push(inc.wv[o] as number, inc.wv[o + 1] as number, inc.wv[o + 2] as number);
+    cur[i * 3] = inc.wv[o] as number;
+    cur[i * 3 + 1] = inc.wv[o + 1] as number;
+    cur[i * 3 + 2] = inc.wv[o + 2] as number;
   }
   // clip to the side planes of the reference face
   const rv = ref.wv;
-  for (let i = 0; i < rf.length && poly.length > 0; i++) {
+  for (let i = 0; i < rf.length && pn > 0; i++) {
     const a = (rf[i] as number) * 3;
     const b = (rf[(i + 1) % rf.length] as number) * 3;
     const ex = (rv[b] as number) - (rv[a] as number);
@@ -2341,71 +2869,43 @@ function hullHull(A: Shape3, B: Shape3, margin: number): { nx: number; ny: numbe
     const sz = ex * fny - ey * fnx;
     const sl = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1;
     // a little past the face's edge, so corners that lie on it (two equal boxes stacked) are kept
-    const off = (sx * (rv[a] as number) + sy * (rv[a + 1] as number) + sz * (rv[a + 2] as number)) / sl + 2 * SLOP;
-    poly = clipPoly(poly, sx / sl, sy / sl, sz / sl, off);
+    FS[S_OFF] = (sx * (rv[a] as number) + sy * (rv[a + 1] as number) + sz * (rv[a + 2] as number)) / sl + 2 * SLOP;
+    FS[S_AXIS] = sx / sl;
+    FS[S_AXIS + 1] = sy / sl;
+    FS[S_AXIS + 2] = sz / sl;
+    pn = clipPoly(cur, pn, oth);
+    const t = cur;
+    cur = oth;
+    oth = t;
   }
   const fo = (rf[0] as number) * 3;
   const plane = rnx * (rv[fo] as number) + rny * (rv[fo + 1] as number) + rnz * (rv[fo + 2] as number);
-  const pts: { x: number; y: number; z: number; s: number }[] = [];
-  for (let i = 0; i < poly.length; i += 3) {
-    const x = poly[i] as number;
-    const y = poly[i + 1] as number;
-    const z = poly[i + 2] as number;
+  ensureFP(pn);
+  const P = FP;
+  let k = 0;
+  for (let i = 0; i < pn; i++) {
+    const x = cur[i * 3] as number;
+    const y = cur[i * 3 + 1] as number;
+    const z = cur[i * 3 + 2] as number;
     const s = rnx * x + rny * y + rnz * z - plane;
     if (s > margin) continue;
-    if (kind === 1) pts.push({ x, y, z, s });
-    else {
+    if (kind === 1) {
+      P[k * 4] = x;
+      P[k * 4 + 1] = y;
+      P[k * 4 + 2] = z;
+    } else {
       // the point on B's surface: on the reference face, and the normal from A to B
-      pts.push({ x: x - s * rnx, y: y - s * rny, z: z - s * rnz, s });
+      P[k * 4] = x - s * rnx;
+      P[k * 4 + 1] = y - s * rny;
+      P[k * 4 + 2] = z - s * rnz;
     }
+    P[k * 4 + 3] = s;
+    k++;
   }
-  return { nx: bx, ny: by, nz: bz, pts: reduce4(pts) };
-}
-
-function centre(s: Shape3): [number, number, number] {
-  const v = s.wv;
-  let x = 0;
-  let y = 0;
-  let z = 0;
-  const n = v.length / 3;
-  for (let j = 0; j < v.length; j += 3) {
-    x += v[j] as number;
-    y += v[j + 1] as number;
-    z += v[j + 2] as number;
-  }
-  return [x / n, y / n, z / n];
-}
-
-function support(s: Shape3, x: number, y: number, z: number): [number, number, number] {
-  const v = s.wv;
-  let best = 0;
-  let bd = -Infinity;
-  for (let j = 0; j < v.length; j += 3) {
-    const d = (v[j] as number) * x + (v[j + 1] as number) * y + (v[j + 2] as number) * z;
-    if (d > bd) {
-      bd = d;
-      best = j;
-    }
-  }
-  return [v[best] as number, v[best + 1] as number, v[best + 2] as number];
-}
-
-/** Keeps the part of a polygon (packed x, y, z) where n · p ≤ off. */
-function clipPoly(poly: number[], nx: number, ny: number, nz: number, off: number): number[] {
-  const out: number[] = [];
-  const n = poly.length / 3;
-  for (let i = 0; i < n; i++) {
-    const a = i * 3;
-    const b = ((i + 1) % n) * 3;
-    const da = nx * (poly[a] as number) + ny * (poly[a + 1] as number) + nz * (poly[a + 2] as number) - off;
-    const db = nx * (poly[b] as number) + ny * (poly[b + 1] as number) + nz * (poly[b + 2] as number) - off;
-    if (da <= 0) out.push(poly[a] as number, poly[a + 1] as number, poly[a + 2] as number);
-    if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
-      const t = da / (da - db);
-      out.push((poly[a] as number) + t * ((poly[b] as number) - (poly[a] as number)), (poly[a + 1] as number) + t * ((poly[b + 1] as number) - (poly[a + 1] as number)), (poly[a + 2] as number) + t * ((poly[b + 2] as number) - (poly[a + 2] as number)));
-    }
-  }
-  return out;
+  FD.nx = bx;
+  FD.ny = by;
+  FD.nz = bz;
+  FD.n = reduce4(k);
 }
 
 /** A quaternion for a turn of `angle` about a unit axis (exact maths). */

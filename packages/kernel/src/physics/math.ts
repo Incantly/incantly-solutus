@@ -7,59 +7,175 @@
 
 const PI = 3.141592653589793;
 const HALF_PI = 1.5707963267948966;
-/** π/2 split in three parts (Cody and Waite), so `x - k π/2` keeps its digits for |x| up to about 1e9. */
-const PIO2_1 = 1.5707963267341256;
-const PIO2_2 = 6.077100506506192e-11;
-const PIO2_3 = 2.0222662487959506e-21;
 
-/** sin on [-π/4, π/4], Taylor to x^17 (error under 1e-17 there). */
-function sinKernel(x: number): number {
-  const z = x * x;
-  return x * (1 + z * (-1 / 6 + z * (1 / 120 + z * (-1 / 5040 + z * (1 / 362880 + z * (-1 / 39916800 + z * (1 / 6227020800 + z * (-1 / 1307674368000 + z * (1 / 355687428096000)))))))));
-}
+/*
+ * sin and cos (PH-52). The angle is cut by multiples of π/2 with π/2 in pieces short enough that each product with the
+ * whole number k is exact (28 bits for k under 2^25, which is |x| under 5e7; 20 bits up to |x| of 1.3e10, past which the
+ * products round and the answer is good only to the digits the angle itself has), and each subtraction keeps its rounding
+ * error, so the reduced angle is a double and a tail below its last digit. The two kernels are the C library's (odd and
+ * even polynomials in the angle with the tail added in), which are within 1 ulp. The earlier version split π/2 in three
+ * with a third piece that was the tail of a different second piece: up to 1,308 ulp near a zero of sin.
+ * Seven pieces of 28 bits (196 bits of π/2) and nine of 20 bits are enough for an angle to land within 1e-19 of a multiple of
+ * π/2 and still have its sine to the last digit.
+ * Only `+ − × ÷` and `Math.floor` and `Math.abs` are used.
+ */
 
-/** cos on [-π/4, π/4], Taylor to x^18. */
-function cosKernel(x: number): number {
-  const z = x * x;
-  return 1 + z * (-1 / 2 + z * (1 / 24 + z * (-1 / 720 + z * (1 / 40320 + z * (-1 / 3628800 + z * (1 / 479001600 + z * (-1 / 87178291200 + z * (1 / 20922789888000 + z * (-1 / 6402373705728000)))))))));
-}
+/** π/2 in pieces of 28 bits, each rounded to nearest (so signed): the sum is π/2 to 1e-58. */
+const PIECES_28 = Float64Array.of(1.570796325802803, 9.920935808982456e-10, -1.2177051813189564e-18, 3.521559869972398e-27, -4.789197941557448e-36, -1.7504543305126363e-44, -4.2044856437608114e-54);
+/** π/2 in pieces of 20 bits, for k from 2^25 up. */
+const PIECES_20 = Float64Array.of(1.5707969665527344, -6.397585821105167e-7, 7.443550983921021e-13, -3.503432494600968e-19, -1.9034898098620926e-25, 8.47842697846967e-32, 6.81898737670971e-39, 4.916229952449383e-45, 2.167418113251577e-51);
 
-/** Reduces x to r in [-π/4, π/4] and the quadrant k mod 4. */
-function reduce(x: number): { r: number; q: number } {
+const S1 = -1.66666666666666324348e-1;
+const S2 = 8.33333333332248946124e-3;
+const S3 = -1.98412698298579493134e-4;
+const S4 = 2.75573137070700676789e-6;
+const S5 = -2.50507602534068634195e-8;
+const S6 = 1.58969099521155010221e-10;
+const C1 = 4.16666666666666019037e-2;
+const C2 = -1.38888888888741095749e-3;
+const C3 = 2.48015872894767294178e-5;
+const C4 = -2.75573143513906633035e-7;
+const C5 = 2.08757232129817482790e-9;
+const C6 = -1.13596475577881948265e-11;
+
+/**
+ * What the reduction and the kernels hand each other (numbers in a call that is not inlined are heap numbers, and the
+ * world calls `sincos` for every body in every step): 0 the tail, 1 the quadrant, 2 the reduced angle, 3 its sine, 4 its cosine, 5 the angle given to `prepare` and `reduce`.
+ */
+const K = new Float64Array(8);
+
+
+/** `K[5]` minus the nearest multiple of π/2, in about [-π/4, π/4], into `K[2]`, with the part below its last digit in `K[0]` and the multiple mod 4 in `K[1]`. */
+function reduce(): void {
+  const x = K[5] as number;
   const k = Math.floor(x / HALF_PI + 0.5);
-  const r = x - k * PIO2_1 - k * PIO2_2 - k * PIO2_3;
-  const q = ((k % 4) + 4) % 4;
-  return { r, q };
+  K[1] = ((k % 4) + 4) % 4;
+  // each product k × piece is exact, and each subtraction is done with its rounding error kept
+  const P = k > -33554432 && k < 33554432 ? PIECES_28 : PIECES_20;
+  let h = x - k * (P[0] as number);
+  let l = 0;
+  for (let i = 1; i < P.length; i++) {
+    const b = -(k * (P[i] as number));
+    const s = h + b;
+    const v = s - h;
+    l += h - (s - v) + (b - v);
+    h = s;
+  }
+  const s = h + l;
+  const v = s - h;
+  K[0] = h - (s - v) + (l - v);
+  K[2] = s;
+}
+
+/** sin(x + y) into `K[3]`, for x = `K[2]` with |x| up to π/4 and a tiny y = `K[0]`. */
+function kernelSin(): void {
+  const x = K[2] as number;
+  const y = K[0] as number;
+  const z = x * x;
+  const v = z * x;
+  const r = S2 + z * (S3 + z * (S4 + z * (S5 + z * S6)));
+  K[3] = x - (z * (0.5 * y - v * r) - y - v * S1);
+}
+
+/** cos(x + y) into `K[4]`, for x = `K[2]` and y = `K[0]` (the 20-bit `qx` makes `1 - qx` exact). */
+function kernelCos(): void {
+  const x = K[2] as number;
+  const y = K[0] as number;
+  const a = Math.abs(x);
+  if (a < 7.450580596923828e-9) {
+    K[4] = 1;
+    return;
+  }
+  const z = x * x;
+  const r = z * (C1 + z * (C2 + z * (C3 + z * (C4 + z * (C5 + z * C6)))));
+  if (a < 0.3) {
+    K[4] = 1 - (0.5 * z - (z * r - x * y));
+    return;
+  }
+  const qx = Math.floor(0.5 * z * 1048576) / 1048576;
+  K[4] = 1 - qx - (0.5 * z - qx - (z * r - x * y));
+}
+
+/** The angle for the kernels: x itself when it is within about π/4, else reduced (tail in `K[0]`, quadrant in `K[1]`). */
+function prepare(): void {
+  const x = K[5] as number;
+  if (x > -0.78 && x < 0.78) {
+    K[0] = 0;
+    K[1] = 0;
+    K[2] = x;
+  } else reduce();
 }
 
 export function sin(x: number): number {
   if (!Number.isFinite(x)) return Number.NaN;
-  const { r, q } = reduce(x);
-  if (q === 0) return sinKernel(r);
-  if (q === 1) return cosKernel(r);
-  if (q === 2) return -sinKernel(r);
-  return -cosKernel(r);
+  K[5] = x;
+  prepare();
+  const q = K[1] as number;
+  if (q === 0) {
+    kernelSin();
+    return K[3] as number;
+  }
+  if (q === 1) {
+    kernelCos();
+    return K[4] as number;
+  }
+  if (q === 2) {
+    kernelSin();
+    return -(K[3] as number);
+  }
+  kernelCos();
+  return -(K[4] as number);
 }
 
 export function cos(x: number): number {
   if (!Number.isFinite(x)) return Number.NaN;
-  const { r, q } = reduce(x);
-  if (q === 0) return cosKernel(r);
-  if (q === 1) return -sinKernel(r);
-  if (q === 2) return -cosKernel(r);
-  return sinKernel(r);
+  K[5] = x;
+  prepare();
+  const q = K[1] as number;
+  if (q === 0) {
+    kernelCos();
+    return K[4] as number;
+  }
+  if (q === 1) {
+    kernelSin();
+    return -(K[3] as number);
+  }
+  if (q === 2) {
+    kernelCos();
+    return -(K[4] as number);
+  }
+  kernelSin();
+  return K[3] as number;
 }
 
 /** sin and cos of one angle in one reduction, written into `out` as [sin, cos]. */
 export function sincos(x: number, out: Float64Array | number[]): void {
-  if (!Number.isFinite(x)) {
+  K[5] = x;
+  sincosOfK(out);
+}
+
+/**
+ * `sincos` of `angles[i]`. The angle is read here and not passed: a number passed to a call that is not inlined is a heap
+ * number, and the plane's world asks for the turn of every body in every small step (design 11.4).
+ */
+export function sincosAt(angles: Float64Array, i: number, out: Float64Array | number[]): void {
+  K[5] = angles[i] as number;
+  sincosOfK(out);
+}
+
+/** sin and cos of `K[5]` into `out`. */
+function sincosOfK(out: Float64Array | number[]): void {
+  if (!Number.isFinite(K[5])) {
     out[0] = Number.NaN;
     out[1] = Number.NaN;
     return;
   }
-  const { r, q } = reduce(x);
-  const s = sinKernel(r);
-  const c = cosKernel(r);
+  prepare();
+  const q = K[1] as number;
+  kernelSin();
+  kernelCos();
+  const s = K[3] as number;
+  const c = K[4] as number;
   if (q === 0) {
     out[0] = s;
     out[1] = c;
@@ -136,8 +252,9 @@ function pow2(k: number): number {
 
 export function exp(x: number): number {
   if (Number.isNaN(x)) return Number.NaN;
-  if (x > 709.78) return Infinity;
-  if (x < -745.13) return 0;
+  // the edges of the platform's `Math.exp`: the largest argument with a finite answer, the smallest with a non-zero one
+  if (x > 709.782712893384) return Infinity;
+  if (x < -745.1332191019412) return 0;
   const k = Math.floor(x * INV_LN2 + 0.5);
   const r = x - k * LN2_HI - k * LN2_LO; // |r| ≤ ln2 / 2
   // Taylor to r^14 on |r| ≤ 0.347: error under 1e-17

@@ -40,7 +40,8 @@ export type {
   BoundArg, RuleFactory, TableProblem, TableProblemKind, CheckTableOptions, DuplicateName, ConstValue,
   ArgFacts, CallCheck, FormCheck, Refusal,
 } from './table';
-export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, PLATFORM_MATH } from './builtins';
+export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, setExactMath, PLATFORM_MATH } from './builtins';
+export { EXACT_MATH } from './exact-math';
 export type { MathLib, ConstantSpec } from './builtins';
 
 // Names
