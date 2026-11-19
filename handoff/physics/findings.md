@@ -262,3 +262,29 @@ PH-35 is fixed for the default grid (24³ meets Node 2 ms and Chrome 8 ms; seek 
 - PH-47: `ownedCells` (plane and space) now sends `cellForMove(cell, transfer)` (`commands/physics/types.ts`, replacing `collectBuffers`): a copy of every typed array in the cell's value (`forces`, `xs`, `ys`, `zs`, `heights`, `density`, `temp`, and lists of them), and the copy's buffer is what the reply moves. The worker's own figure keeps its arrays, so a cell that did not change is sent again next frame without a detached buffer, and its readouts read whole arrays. A cell with no typed array is sent as it is. `ownedCells` is the only place a worker reply lists buffers (`PhysicsWorkerState.cellsAt` is the only reply that moves any), so it covers cells, drops, waves, cloth points, smoke and fire grids. The 3 failing tests of `physics-worker.test.ts` pass unchanged. A copy a frame is the price (the page's frame copy, not memory kept by a step). Regression tests: in the plane and in space, a body asleep for 150 frames with liquid in the worker (no `worker_crashed`, the worker's own `forces` array whole, `b.force("gravity")` and `b.force("normal")` right in the worker and on the page and equal to a figure that never used a worker), and a test that no buffer the reply moves is one the worker's figure holds. Both fail on `d9c460b` and pass now.
 - PH-49: `physicsGridSimd(figure?)` (true when every grid in space the figure has runs the SIMD build, false for the scalar build or the TypeScript loops, undefined with no grid in space; with no figure, whether a grid built now would: `physicsGridSimdReady` in `kernels.ts`) and `setPhysicsGridSimd(on)` are exported from the kernel. Regression test `physics-grid-simd.test.ts`: a fire 24³ played 4 s with SIMD, without it and with the kernels off gives the same readouts and the same `density` and `temp` arrays every second, and each figure reports its build.
 - Physics set after the fixes: `npx vitest run packages/kernel/test/spec/physics packages/sdk apps/studio/test/physics.test.ts apps/studio/test/space.test.ts`: 35 files, 729 tests, all pass. `lib.rs` is unchanged, so the wasm is not rebuilt and the hash test and `physics-kernels-grid.test.ts` pass as they were.
+
+## Review of round 10 (2026-11-19, one round)
+
+Read: builder notes "Round 10" (F1 to F15), `test-report.md` "Round 10" (75 new tests, 2 fail), design 10.2, 11.2, 11.4.
+The cross-browser check passes (7 films, Chromium, Firefox and WebKit, kernels on and off, equal every second).
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-50 | `language/exact-math.ts` `exp` | `exp(709.782712893384)` is `Infinity`; the platform gives `1.797…e308` (design 10.2: the platform's answer at the domain edges) | tester failure 1 | medium | open |
+| PH-51 | `language/exact-math.ts` `pow` | `pow(2, k)` wrong for whole k from −1074 to −1001 (subnormal results): `pow(2, −1074)` is 0 | tester failure 2 | medium | open |
+| PH-52 | `physics/math.ts` `sin`, `cos` (F14) | The third π/2 piece of the reduction is wrong: up to 1,308 ulp near a zero of sin. Exact across browsers, but wrong maths | builder notes F14 | high | open (fix: changes every film's bits; product owner advised to fix before films are saved) |
+| PH-53 | driver, `world2.ts`, `world3.ts` (F13, F5) | Awake bodies make garbage: 3 collector runs in 2,500 steps (300 boxes in the plane), 139 (100 boxes in space) | builder notes F13 | high | open |
+| PH-54 | driver (F1) | A change to a body's property rebuilds the world and replays the film: 68 ms (Node), 260 ms (Chrome 4×) for 300 bodies at 20 s, against 1 ms for one line | builder notes F1 | high | to be implemented (next speed job) |
+| PH-55 | sleeping bodies (F2) | 900 sleeping bodies cost 0.9 ms a frame: sleeping bodies are not free | builder notes F2 | high | to be implemented (next speed job) |
+| PH-56 | car on hills (F4) | 0.19 ms (0.12), Chrome 1.0 ms (0.5) | builder notes F4 | medium | to be implemented (next speed job) |
+| PH-57 | 3D boxes awake (F5), worst frames (F7), wake storm (F12) | 1.7 ms mean (1.5); worst frame 15.9 ms; wake storm worst 15.7 ms | builder notes | medium | to be implemented (next speed job) |
+| PH-58 | `joints2.ts` hinge (F10) | A hinge pendulum loses 72.6% of its energy in 1,000 s (2% asked) | builder notes F10 | medium | to be implemented |
+| PH-59 | seek with sleeping off (F11) | Worst seek 31 ms (25); 70 ms with sleeping off | builder notes F11 | low | to be implemented |
+| PH-60 | chain let go level (F3) | 200 hinged links folding on themselves: 100 to 290 ms a frame | builder notes F3 | medium | to be implemented |
+| PH-61 | calm stack sag (F9) | 106 mm sag while settling; the design check wants the top box within 1 mm of where it was placed | builder notes F9 | low | to be implemented |
+
+**Fixes for PH-50 to PH-53** (the one fix round): PH-50 and PH-51 so the tester's 2 failing tests pass unchanged; PH-52
+by the correct three-piece (or four-piece) π/2 split, checked to 1 ulp against `Math.sin` over 100,000 inputs in
+[−1e5, 1e5], and the films' new hashes still equal across Chromium, Firefox and WebKit (`cross-browser.mjs`); PH-53 by the
+PH-15 patterns (no numbers through calls, no closures, arrays, `for…of` or strings in a step), so the two bench rows show 0
+collections. PH-54 to PH-61 are the next speed job, after the merge.
