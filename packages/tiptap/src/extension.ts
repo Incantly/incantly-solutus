@@ -1,6 +1,7 @@
 /** The `Incantly` extension: its options, and the two nodes configured with them (design 6). */
 import { Extension } from '@tiptap/core';
 import { IncantlyFigure } from './figure-node';
+import { IncantlyFormula } from './formula-node';
 import type { TiptapError } from './errors';
 import { DEFAULT_OPTIONS } from './types';
 import type { IncantlyTiptapOptions } from './types';
@@ -38,7 +39,7 @@ export const Incantly = Extension.create<IncantlyTiptapOptions, IncantlyStorage>
 
   addExtensions() {
     const options = resolveOptions(this.options);
-    return [IncantlyFigure.configure(options)];
+    return [IncantlyFigure.configure(options), IncantlyFormula.configure(options)];
   },
 
   addProseMirrorPlugins() {

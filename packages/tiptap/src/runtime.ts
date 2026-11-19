@@ -1,5 +1,6 @@
 /** What one editor owns: its scheduler and its figure store, made on first use and freed with the editor. */
 import type { Editor } from '@tiptap/core';
+import type { FigureNodeView } from './node-view';
 import { EditorScheduler } from './scheduler';
 import { FigureStore } from './store';
 import type { IncantlyTiptapOptions } from './types';
@@ -10,6 +11,13 @@ export class EditorRuntime {
   readonly scheduler: EditorScheduler;
   /** The id of a figure that was just inserted by "Ask AI for a figure": its AI box opens when it is selected. */
   askOnNext: string | undefined;
+  /** The figure node views of this editor, so a job (the AI) can reach the view of a figure by its id. */
+  readonly views = new Set<FigureNodeView>();
+
+  viewOf(id: string): FigureNodeView | undefined {
+    for (const v of this.views) if (v.figureId === id) return v;
+    return undefined;
+  }
 
   constructor(
     readonly editor: Editor,

@@ -12,6 +12,7 @@ import type { LineResult, MountedApp } from '@incantly/sdk';
 import { FIGURE_DEFAULTS, FULL_WIDTH_PX, HEIGHT_MAX, HEIGHT_MIN, SCRIPT_HEADER, checkAttrs, isPictureUrl } from './attrs';
 import type { IncantlyFigureAttrs } from './attrs';
 import { CodePanel } from './code-panel';
+import { askIncantly } from './ai';
 import { tiptapError } from './errors';
 import type { TiptapError } from './errors';
 import { PICTURE_LIMIT, pictureOf } from './picture';
@@ -97,6 +98,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.doc = view.dom.ownerDocument;
     ensureStyles(this.doc);
     this.runtime = runtimeOf(editor, options);
+    this.runtime.views.add(this);
     const h = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLElementTagNameMap[K] => {
       const el = this.doc.createElement(tag);
       el.className = cls;
@@ -729,13 +731,39 @@ export class FigureNodeView implements NodeView, SchedulerView {
     reportError(this.editor, this.options, e);
   }
 
-  /** Round 4 replaces this with the AI job. */
+  /** The AI box sends a request; the answer shows under the box, and the lines show in the panel as they arrive. */
   async ask(request: string): Promise<void> {
-    const ok = this.editor.commands.askIncantly(this.figureId, request);
-    if (!ok) {
-      const e = (this.editor.storage as unknown as Record<string, { lastError?: TiptapError | null } | undefined>)['incantly']?.lastError;
-      this.toolbar?.message(e?.message ?? 'The AI could not start.');
-    }
+    const r = await askIncantly(this.editor, this.figureId, request);
+    if (!r.ok && r.detail?.['superseded'] !== true) this.aiStatus(r.hint ? `${r.message} ${r.hint}` : r.message, false);
+  }
+
+  /** The AI starts: the live figure goes back to the node's script, and the panel opens to show the lines. */
+  beginAi(base: string): void {
+    if (this.app) this.loadLines(base);
+    this.applied = base;
+    if (this.writable) this.ensurePanel().open(base);
+  }
+
+  /** The AI's lines so far: the figure already has them; the panel shows them. */
+  progressAi(script: string): void {
+    this.applied = script;
+    this.panel?.showStreamed(script);
+  }
+
+  /** What the AI box says, and whether it is waiting for an answer. */
+  aiStatus(text: string, busy: boolean): void {
+    if (!this.writable) return;
+    const tb = this.ensureToolbar();
+    tb.message(text);
+    tb.setBusy(busy);
+  }
+
+  /** The AI request ended without a commit: the live figure shows the node's script again. */
+  resetToNode(): void {
+    const script = this.nodeScript();
+    if (this.app && this.applied !== script) this.loadLines(script);
+    this.applied = script;
+    this.panel?.showStreamed(script);
   }
 
   /** Adds an element of the view's own interface, so the editor leaves its events alone. */
@@ -978,6 +1006,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.destroyed = true;
     this.wantsMount = false;
     this.editor.off('update', this.onEditorUpdate);
+    this.runtime.views.delete(this);
     this.panel?.dispose();
     this.toolbar?.el.remove();
     if (this.noticeTimer !== undefined) clearTimeout(this.noticeTimer);

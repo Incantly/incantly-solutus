@@ -10,19 +10,28 @@ function base64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-/** The picture of `app` at `width` by `height` pixels, or `undefined` when it cannot be made or is too large. */
-export async function pictureOf(app: App, mode: AppModeId, width: number, height: number, env?: ExportEnv): Promise<string | undefined> {
+export type PictureResult = { readonly ok: true; readonly url: string } | { readonly ok: false; readonly reason: string };
+
+/** The picture of `app` at `width` by `height` pixels, or the reason it could not be made. */
+export async function makePicture(app: App, mode: AppModeId, width: number, height: number, env?: ExportEnv): Promise<PictureResult> {
   try {
     const png = mode === 'graphing3d';
     const w = Math.max(1, Math.round(width));
     const h = Math.max(1, Math.round(height));
     const r = await app.export(png ? { format: 'png', width: w, height: h, view: '3d' } : { format: 'svg', width: w, height: h }, env);
-    if (!r.ok) return undefined;
+    if (!r.ok) return { ok: false, reason: r.message };
     let url: string;
     if (png) url = `data:image/png;base64,${base64(new Uint8Array(await r.blob.arrayBuffer()))}`;
     else url = `data:image/svg+xml;base64,${base64(new TextEncoder().encode(r.text ?? (await r.blob.text())))}`;
-    return url.length <= PICTURE_LIMIT ? url : undefined;
-  } catch {
-    return undefined;
+    if (url.length > PICTURE_LIMIT) return { ok: false, reason: `The picture is ${Math.ceil(url.length / 1024)} KB; the limit is ${PICTURE_LIMIT / 1024} KB.` };
+    return { ok: true, url };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : 'The picture could not be made.' };
   }
+}
+
+/** The picture, or `undefined` when it cannot be made or is too large. */
+export async function pictureOf(app: App, mode: AppModeId, width: number, height: number, env?: ExportEnv): Promise<string | undefined> {
+  const r = await makePicture(app, mode, width, height, env);
+  return r.ok ? r.url : undefined;
 }
