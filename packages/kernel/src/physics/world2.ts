@@ -9,7 +9,7 @@
 import type { Manifold, Poses, Shape2, WorldManifold } from './collide2';
 import { collideCircles, collidePolygonCircle, collidePolygons, newManifold, newWorldManifold, worldManifold } from './collide2';
 import type { Pt } from './geom2';
-import { sincos } from './math';
+import { sincosAt } from './math';
 
 export const BodyType = { Static: 0, Kinematic: 1, Dynamic: 2 } as const;
 export type BodyType = (typeof BodyType)[keyof typeof BodyType];
@@ -601,7 +601,7 @@ export class World2 implements Poses {
   gone = new Set<number>();
 
   setRot(i: number): void {
-    sincos(this.ang[i] as number, this.sc);
+    sincosAt(this.ang, i, this.sc);
     this.qs[i] = this.sc[0] as number;
     this.qc[i] = this.sc[1] as number;
   }
