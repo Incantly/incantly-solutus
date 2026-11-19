@@ -9,7 +9,7 @@
 import type { Manifold, Poses, Shape2, WorldManifold } from './collide2';
 import { collideCircles, collidePolygonCircle, collidePolygons, newManifold, newWorldManifold, worldManifold } from './collide2';
 import type { Pt } from './geom2';
-import { sincos } from './math';
+import { sincosAt } from './math';
 
 export const BodyType = { Static: 0, Kinematic: 1, Dynamic: 2 } as const;
 export type BodyType = (typeof BodyType)[keyof typeof BodyType];
@@ -634,7 +634,7 @@ export class World2 implements Poses {
   gone = new Set<number>();
 
   setRot(i: number): void {
-    sincos(this.ang[i] as number, this.sc);
+    sincosAt(this.ang, i, this.sc);
     this.qs[i] = this.sc[0] as number;
     this.qc[i] = this.sc[1] as number;
   }
@@ -728,8 +728,11 @@ export class World2 implements Poses {
       }
     }
     const np = this.pairCount;
-    if (np > 16) this.pairs.subarray(0, np).sort();
-    else {
+    if (np > 16) {
+      // the whole array is sorted with Infinity after the pairs: `subarray` would make a typed-array view every step
+      this.pairs.fill(Infinity, np);
+      this.pairs.sort();
+    } else {
       // a few pairs (a quiet world): insertion sort, and no typed-array view made for the engine's sort
       const pairs = this.pairs;
       for (let i = 1; i < np; i++) {
@@ -786,7 +789,8 @@ export class World2 implements Poses {
     const old = this.contactMap;
     const next = this.spareMap;
     const list = this.spareList;
-    list.length = 0;
+    // (emptied with `pop`: `length = 0` frees the store and the pushes below make one again, a few KB every step)
+    while (list.length > 0) list.pop();
     const stamp = ++this.contactStamp;
     const ns = this.shapes.length;
     let points = 0;

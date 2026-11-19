@@ -101,6 +101,7 @@ Rules:
 ## 6. Measuring
 
 - Every package has a benchmark suite, run in CI, with the targets in section 1 as limits. A regression past 10% fails the build.
+- The physics benches (`packages/kernel/bench/physics.bench.ts`, `physics-checks.bench.ts`, `exact-math.bench.ts`, `chrome-physics.mjs`, `cross-browser.mjs`) have one row for each line of `docs/features/physics/design.md` 11.2 and 11.4; the rows that fail say so there, with the numbers.
 - The studio has a performance panel: frame time, kernel time, draw calls, triangles, live figures and memory.
 - The scheduler keeps stats as the legacy one did: registered, near, live, peak live, mounts, saves, and time from mount to first drawing.
 

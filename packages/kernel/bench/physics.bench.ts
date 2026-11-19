@@ -12,7 +12,7 @@ import type { Water2 } from '../src/physics/water2';
 import { WaterForces } from '../src/physics/water2';
 import type { World2 } from '../src/physics/world2';
 import type { World3 } from '../src/physics/world3';
-import { CommandRegistry, Figure, geometry, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../src/index';
+import { CommandRegistry, Figure, geometry, getMathLib, physics3Of, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setExactMath, setPhysicsKernels } from '../src/index';
 
 const REG = (() => {
   const r = new CommandRegistry();
@@ -858,4 +858,257 @@ describe('smoke and fire in space (design 9.8, 11.2, round 11B)', () => {
       }
     });
   }
+});
+
+/* ------------------------------ bodies (design 11.2 rows of the bodies; round 10, task 10.1) ------------------------------ */
+
+/** 300 boxes at rest on the ground, and a ball beside them: the "apply one line" row. */
+const BOXES_AND_BALL = [...BOXES, 'ball = Body(Circle((-22, 0.4), 0.3))'];
+/** 300 boxes in 15 rows of 20, dropped at once on the ground. */
+const PILE = ['g = Ground()', 'boxes = Bodies(Seq(Box((1.25 mod(k, 20) - 12, 1.5 + 1.25 floor(k / 20)), 1, 1), k, 0, 299))'];
+/** 900 boxes at rest (they sleep) and 100 balls that start 300 m up (`range` lets them be there): 100 fall while 900 sleep. */
+const MOST_ASLEEP = [
+  'g = Ground()',
+  'world with range = 400',
+  'boxes = Bodies(Seq(Box((1.2 mod(k, 60) - 35, 0.5 + 1.1 floor(k / 60)), 1, 1), k, 0, 899))',
+  'rain = Bodies(Seq(Circle((1.1 mod(k, 50) - 27, 300 + 1.1 floor(k / 50)), 0.3), k, 0, 99))',
+];
+/** 200 links of 0.2 m in a chain from a wall, hanging 40 m down and swung sideways, none allowed to sleep. */
+const CHAIN = [
+  'world with sleep = false',
+  'wall = Box((0, 46), 1, 1)',
+  'wall with solid = true',
+  'links = Bodies(Seq(Box((0, 44.9 - 0.2 (k - 1)), 0.08, 0.2), k, 1, 200), speed = (2, 0))',
+  'top = Hinge(wall, links[1], (0, 45))',
+  'joints = Seq(Hinge(links[k - 1], links[k], (0, 45 - 0.2 (k - 1))), k, 2, 200)',
+];
+/** The same 200 links of 0.25 m let go level from a wall, 50 m long: they whip down and fold on themselves. */
+const CHAIN_LEVEL = [
+  'wall = Box((-26, 40), 1, 1)',
+  'wall with solid = true',
+  'links = Bodies(Seq(Box((-24.875 + 0.25 (k - 1), 40), 0.25, 0.08), k, 1, 200))',
+  'top = Hinge(wall, links[1], (-25, 40))',
+  'joints = Seq(Hinge(links[k - 1], links[k], (-25 + 0.25 (k - 1), 40)), k, 2, 200)',
+];
+/** A car on a curve cut into 2,000 ground pieces (a domain of 300 m at 8 pieces a metre). */
+const CAR_ON_HILLS = [
+  'world with range = 150',
+  'hills(x) = 1.5 sin(0.12 x) + 0.8 sin(0.31 x)',
+  'hills with solid = true',
+  'chassis = Body(Box((0, 5), 3, 0.6), mass = 400)',
+  'front = Wheel(chassis, (1.1, 4.2), 0.45)',
+  'back = Wheel(chassis, (-1.1, 4.2), 0.45)',
+  'car = Vehicle(chassis, [front, back], motor = 0.6)',
+];
+/** 100 boxes in space, in a 10 × 10 grid at three heights, falling and landing, none allowed to sleep. */
+const BOXES3 = ['g = Ground()', 'world with sleep = false', 'boxes = Bodies(Seq(Box((1.3 mod(k, 10) - 6, 1.3 floor(k / 10) - 6, 2 + 1.2 mod(k, 3)), 1, 1, 1), k, 0, 99))'];
+
+/** Frames of 1/60 s from 0 to `seconds`: the mean of each film second, the slowest of those, the 95% frame and the worst frame, ms. */
+function perSecond(f: Figure, seconds: number): { slowest: number; mean: number; p95: number; worst: number; means: number[] } {
+  const means: number[] = [];
+  const all: number[] = [];
+  for (let s = 0; s < seconds; s++) {
+    let sum = 0;
+    for (let k = 1; k <= 60; k++) {
+      const a = performance.now();
+      f.setClock((s * 60 + k) / 60);
+      const dt = performance.now() - a;
+      sum += dt;
+      all.push(dt);
+    }
+    means.push(sum / 60);
+  }
+  const sortedAll = sorted(all);
+  return {
+    slowest: Math.max(...means),
+    mean: all.reduce((a, b) => a + b, 0) / all.length,
+    p95: sortedAll[Math.floor(sortedAll.length * 0.95)] as number,
+    worst: sortedAll[sortedAll.length - 1] as number,
+    means,
+  };
+}
+
+/** 100 seeks to times spread over a 60 s film, in a fixed order that jumps back and forth: each seek's ms. */
+function seeks(f: Figure): number[] {
+  const times: number[] = [];
+  for (let i = 0; i < 100; i++) {
+    const t = ((i * 37) % 100) * 0.59 + 0.3;
+    const a = performance.now();
+    f.setClock(t);
+    times.push(performance.now() - a);
+  }
+  return sorted(times);
+}
+
+describe('bodies (design 11.2)', () => {
+  it('apply one physics line: `ball with bounce = 0.9` in a figure with 300 bodies, the median of 50 under 0.25 ms (Node)', { retry: 2 }, () => {
+    const f = load(BOXES_AND_BALL);
+    for (let k = 1; k <= 20 * 60; k++) f.setClock(k / 60);
+    expect(physicsOf(f).world?.awakeCount()).toBeLessThan(5);
+    const ms: number[] = [];
+    const after: number[] = [];
+    for (let k = 0; k < 50; k++) {
+      const t = performance.now();
+      const r = f.apply(`ball with bounce = ${k % 2 === 0 ? 0.9 : 0.91}`);
+      const t1 = performance.now();
+      f.flush();
+      ms.push(t1 - t);
+      after.push(performance.now() - t1);
+      expect(r.ok).toBe(true);
+    }
+    const s = sorted(ms);
+    const a = sorted(after);
+    console.log(
+      `one line in a figure with 300 bodies: apply median ${(s[25] as number).toFixed(3)} ms, 95% ${(s[47] as number).toFixed(3)} ms, worst ${(s[49] as number).toFixed(3)} ms (budget 0.25 ms); the flush after it: median ${(a[25] as number).toFixed(3)} ms, worst ${(a[49] as number).toFixed(3)} ms`,
+    );
+    expect(s[25]).toBeLessThan(0.25);
+  });
+
+  it('2D pile-up: 300 boxes dropped at once, the slowest second of the film averages under 1.5 ms a frame (Node)', { retry: 2 }, () => {
+    const f = load(PILE);
+    const r = perSecond(f, 30);
+    console.log(`2D pile-up, 300 boxes: slowest second ${r.slowest.toFixed(3)} ms (second ${r.means.indexOf(r.slowest)}), mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(2)} ms (budget 1.5 ms)`);
+    expect(physicsOf(f).world?.n).toBe(301);
+    expect(r.slowest).toBeLessThan(1.5);
+  });
+
+  it('2D, most asleep: 1,000 bodies of which 900 slept and 100 fall, a frame under 0.75 ms (Node)', { retry: 2 }, () => {
+    const f = load(MOST_ASLEEP);
+    for (let k = 1; k <= 4 * 60; k++) f.setClock(k / 60);
+    const w = physicsOf(f).world;
+    // the balls have been falling for 4 s (78 m of 300): 900 boxes are asleep, 100 balls awake
+    const awake = w?.awakeCount() ?? -1;
+    expect(awake).toBeGreaterThanOrEqual(100);
+    expect(awake).toBeLessThan(110);
+    const r = frames(f, 4, 7);
+    console.log(`2D, 900 asleep and 100 falling: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms, awake ${w?.awakeCount()} (budget 0.75 ms)`);
+    expect(r.mean).toBeLessThan(0.75);
+  });
+
+  it('2D chain of hinges: 200 links from a wall, a frame under 1 ms (Node)', { retry: 2 }, () => {
+    const f = load(CHAIN);
+    const r = frames(f, 0, 20);
+    console.log(`2D chain of 200 hinged links: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms, joints ${physicsOf(f).world?.joints.length} (budget 1 ms)`);
+    expect(physicsOf(f).world?.joints.length).toBe(200);
+    expect(r.mean).toBeLessThan(1);
+  });
+
+  it('2D chain of hinges, let go level: the same 200 links whipping down from a wall, a frame under 1 ms (Node)', () => {
+    const f = load(CHAIN_LEVEL);
+    const r = frames(f, 0, 8);
+    console.log(`2D chain of 200 hinged links let go level, 8 s: mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms (budget 1 ms)`);
+    expect(r.mean).toBeLessThan(1);
+  }, 240_000);
+
+  it('2D car on hills: a curve of 2,000 ground pieces, a frame under 0.12 ms (Node)', { retry: 2 }, () => {
+    const f = load(CAR_ON_HILLS);
+    f.setClock(1 / 60);
+    const w = physicsOf(f).world;
+    expect(w?.shapes.length).toBeGreaterThanOrEqual(2000);
+    const r = frames(load(CAR_ON_HILLS), 2, 30);
+    console.log(`2D car on 2,000 ground pieces: mean ${r.mean.toFixed(4)} ms, 95% ${r.p95.toFixed(4)} ms, worst ${r.worst.toFixed(3)} ms (budget 0.12 ms)`);
+    expect(r.mean).toBeLessThan(0.12);
+  });
+
+  it('3D boxes, all awake: 100 boxes falling and landing, a frame under 1.5 ms (Node)', { retry: 2 }, () => {
+    const f = load(BOXES3);
+    const r = perSecond(f, 10);
+    const w = physics3Of(f).world;
+    console.log(`3D, 100 boxes, none asleep: slowest second ${r.slowest.toFixed(3)} ms, mean ${r.mean.toFixed(3)} ms, 95% ${r.p95.toFixed(3)} ms, worst ${r.worst.toFixed(3)} ms, awake at 10 s ${w?.awakeCount()} (budget 1.5 ms)`);
+    expect(w?.awakeCount()).toBe(100);
+    expect(r.mean).toBeLessThan(1.5);
+  });
+
+  it('seek anywhere in a 60 s film with 300 bodies, warm: the 95% seek of 100 under 25 ms (Node)', () => {
+    const f = load(PILE);
+    for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+    const s = seeks(f);
+    console.log(`seek, 300 bodies: median ${(s[50] as number).toFixed(1)} ms, 95% ${(s[95] as number).toFixed(1)} ms, worst ${(s[99] as number).toFixed(1)} ms (budget 25 ms)`);
+    expect(s[95]).toBeLessThan(25);
+  });
+
+  it('restart at 60 s with 300 bodies: the first frame after it under 16 ms, the world back at its start within 60 frames (Node)', { retry: 2 }, () => {
+    const f = load(PILE);
+    for (let k = 1; k <= 60 * 60; k++) f.setClock(k / 60);
+    // the start of the same film, played in another figure
+    const fresh = load(PILE);
+    for (let k = 1; k <= 60; k++) fresh.setClock(k / 60);
+    const b0 = fresh.value('boxes') as { y: number }[];
+    const r = f.apply('Restart()');
+    expect(r.ok).toBe(true);
+    let first = 0;
+    let frame = 0;
+    for (; frame < 60; frame++) {
+      const a = performance.now();
+      f.setClock(60 + (frame + 1) / 60);
+      if (frame === 0) first = performance.now() - a;
+    }
+    const b1 = f.value('boxes') as { y: number }[];
+    // after 60 frames the world is where the fresh film is after its first second
+    let worstDy = 0;
+    for (let i = 0; i < b0.length; i++) worstDy = Math.max(worstDy, Math.abs((b1[i] as { y: number }).y - (b0[i] as { y: number }).y));
+    console.log(`restart at 60 s, 300 bodies: first frame ${first.toFixed(2)} ms, behind after 60 frames: ${f.driversNeedFrames()}, the worst box differs from a fresh film's first second by ${worstDy.toExponential(2)} m`);
+    expect(first).toBeLessThan(16);
+    expect(f.driversNeedFrames()).toBe(false);
+    // (the reset lands on a step of the grid, so the two films are not the same to the bit: they must be the same film to a few millimetres)
+    expect(worstDy).toBeLessThan(0.05);
+  });
+});
+
+/* ------------------------------ formulas on the exact maths (design 10.2 item 4; round 10, task 10.5) ------------------------------ */
+
+/** 300 boxes pushed by a force rule that reads the clock through `sin` and `cos`, never asleep. */
+const FORCE_RULE = (() => {
+  const l = ['g = Ground()', 'world with sleep = false'];
+  for (let k = 0; k < 300; k++) l.push(`b${k} = Body(Box((${(1.25 * (k % 20) - 12).toFixed(2)}, ${(0.5 + 1.25 * Math.floor(k / 20)).toFixed(2)}), 1, 1))`, `b${k} with force = (3 sin(t), 2 cos(2 t))`);
+  return l;
+})();
+
+describe('formulas on the exact maths (design 10.2 item 4)', () => {
+  it('a force rule with sin and cos on 300 bodies runs within 10% of the time it takes on the platform maths', { retry: 2 }, () => {
+    const run = (exact: boolean): number => {
+      setExactMath(exact);
+      try {
+        // the same film in each: mean of a frame over 6 s after 1 s
+        return frames(load(FORCE_RULE), 1, 7).mean;
+      } finally {
+        setExactMath(true);
+      }
+    };
+    // alternate the two three times and keep the least of each, so the machine's drift is not counted
+    let exact = Infinity;
+    let platform = Infinity;
+    for (let k = 0; k < 3; k++) {
+      platform = Math.min(platform, run(false));
+      exact = Math.min(exact, run(true));
+    }
+    console.log(`force = (3 sin(t), 2 cos(2 t)) on 300 bodies: a frame ${exact.toFixed(3)} ms on the exact maths, ${platform.toFixed(3)} ms on the platform's (${((100 * exact) / platform - 100).toFixed(1)}%)`);
+    expect(exact).toBeLessThan(platform * 1.1);
+  });
+
+  it('the same formulas on 200,000 calls of each function: the time of the exact maths against the platform', () => {
+    const lib = { exact: getMathLib() };
+    const xs = Array.from({ length: 1000 }, (_, i) => 0.001 + i * 0.0137);
+    const names = ['sin', 'cos', 'tan', 'atan', 'exp', 'log', 'sinh', 'pow'] as const;
+    const rows: string[] = [];
+    for (const n of names) {
+      const time = (m: typeof Math): number => {
+        let sink = 0;
+        const t = performance.now();
+        for (let r = 0; r < 200; r++) {
+          for (let i = 0; i < xs.length; i++) {
+            const x = xs[i] as number;
+            sink += n === 'pow' ? m.pow(x, 1.7) : (m[n] as (x: number) => number)(x * 0.1);
+          }
+        }
+        if (Number.isNaN(sink)) throw new Error('NaN');
+        return performance.now() - t;
+      };
+      const best = (m: typeof Math): number => Math.min(time(m), time(m), time(m));
+      const e = best(lib.exact as unknown as typeof Math);
+      const p = best(Math);
+      rows.push(`${n} ${((e * 1e6) / 200000).toFixed(0)} ns against ${((p * 1e6) / 200000).toFixed(0)} ns`);
+    }
+    console.log(`per call, exact against platform: ${rows.join(', ')}`);
+  });
 });

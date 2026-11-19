@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  EXACT_MATH,
   PLATFORM_MATH,
   ScratchFigure,
   SourceMap,
@@ -640,8 +641,11 @@ describe('LANG-SM-13: one MathLib for every result', () => {
     return r.value.defined ? (fig.valueOf(name) as number) : undefined;
   }
 
-  it('LANG-SM-13: the platform library is installed at the start', () => {
-    expect(original).toBe(PLATFORM_MATH);
+  it('LANG-SM-13: the exact library is installed at the start', () => {
+    // docs/features/physics/design.md 10.2 item 4: "Since round 10 the compiled functions run
+    // `packages/kernel/src/language/exact-math.ts` (installed by default; `setExactMath(false)` brings back `Math` for a test)."
+    expect(original).toBe(EXACT_MATH);
+    expect(original).not.toBe(PLATFORM_MATH);
   });
 
   it('LANG-SM-13: a folded constant call and a recompiled one agree after the library changes', () => {
