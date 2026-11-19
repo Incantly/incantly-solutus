@@ -46,7 +46,7 @@ const FLAG = ['g = Ground()', 'flag = Cloth((0, 0, 4), (3, 0, 0), (0, 0, -2), 64
 const NET = ['g = Ground()', 'net = Cloth((-2, -2, 3), (4, 0, 0), (0, 4, 0), 32, 32, mass = 1, pins = "corners", tears = 1.5)', 'rock = Body(Sphere((0.2, 0.1, 5), 0.5), mass = 20)'];
 
 /** Fire in space, 24 cells a side, with a crate that burns on it. */
-const FIRE_SPACE = ['g = Ground()', 'blaze = Fire((0, 0, 0))', 'crate = Body(Box((0.4, 0, 0.3), 0.6, 0.6, 0.6), mass = 1, burns = 20, ignite = 150)'];
+const FIRE_SPACE = ['g = Ground()', 'blaze = Fire((0, 0, 0))', 'crate = Body(Box((0.1, 0, 0.3), 0.6, 0.6, 0.6), mass = 1, burns = 20, ignite = 150)', 'Ignite(crate)'];
 
 /** Smoke in the plane, blown past a ball with a light body in it. */
 const SMOKE = [

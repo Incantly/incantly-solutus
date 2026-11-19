@@ -3,10 +3,12 @@
  * returns the hash of the world after every second of film, with the Rust loops on or off, and the whole state of the
  * world at one second when asked, so a difference between two browsers can be traced to its first value.
  */
-import { CommandRegistry, Figure, geometry, initPhysicsKernels, physics3Of, physicsKernelsActive, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setPhysicsKernels } from '../../src/index';
+import { CommandRegistry, Figure, geometry, initPhysicsKernels, physics3Of, physicsKernelsActive, physicsOf, registerAnimation, registerFunctions, registerLists, registerNumbers, registerPhysics, registerSpace, setExactMath, setPhysicsKernels } from '../../src/index';
 import { FILMS, hashWorld } from '../films';
 
 const compiled = await initPhysicsKernels();
+// `?exact=off` plays the films on the platform's own maths in formulas (the way it was before round 10)
+if (new URLSearchParams(location.search).get('exact') === 'off') setExactMath(false);
 
 const commands = new CommandRegistry();
 geometry.registerGeometry(commands);

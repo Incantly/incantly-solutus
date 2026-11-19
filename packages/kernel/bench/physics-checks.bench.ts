@@ -347,6 +347,23 @@ describe('same result, long run and no garbage (design 11.4)', () => {
     });
   }
 
+  it('the films do what they are named for: the net tears and the crate burns', () => {
+    const net = FILMS.find((f) => f.title === 'net that tears');
+    const fire = FILMS.find((f) => f.title.startsWith('fire in space'));
+    if (!net || !fire) throw new Error('a film is missing');
+    const a = load([...net.lines, 'torn = net.torn']);
+    const b = load([...fire.lines, 'bn = crate.burning']);
+    let burning: unknown;
+    for (let k = 1; k <= 60 * 20; k++) {
+      a.setClock(k / 60);
+      b.setClock(k / 60);
+      if (k === 3 * 60) burning = b.value('bn');
+    }
+    console.log(`the net has ${String(a.value('torn'))} torn links after 20 s, the crate is burning after 3 s: ${String(burning)}`);
+    expect(a.value('torn') as number).toBeGreaterThan(0);
+    expect(burning).toBe(true);
+  });
+
   it('long run: 10 minutes of film of 300 bodies, the heap after the checkpoint cap stops growing (the last 3 minutes against the 3 before)', { timeout: 1_200_000 }, () => {
     const f = load(['world with sleep = false', ...PILE]);
     const d = physicsOf(f) as unknown as { cpBytes: number };

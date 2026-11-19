@@ -7,7 +7,7 @@
  * Run from the repository root:
  *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright node packages/kernel/bench/cross-browser.mjs
  *     [--browsers chromium,firefox,webkit] [--seconds 60] [--films 0,1,2,3,4,5,6]
- *     [--chromium-path P] [--firefox-path P] [--webkit-path P] [--firefox-no-sandbox]
+ *     [--chromium-path P] [--firefox-path P] [--webkit-path P] [--firefox-no-sandbox] [--exact off]
  *
  * Playwright is not a dependency of the repository (docs/design/libraries.md). Each `--*-path` is the executable of a
  * browser build when Playwright's own lookup does not find it. `--firefox-no-sandbox` turns off the content sandbox, for a
@@ -64,7 +64,7 @@ try {
     const logs = [];
     page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
     page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`));
-    await page.goto(`${base}cross.html`, { waitUntil: 'networkidle' });
+    await page.goto(`${base}cross.html${arg('exact', 'on') === 'off' ? '?exact=off' : ''}`, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => 'crossInfo' in window, null, { timeout: 60_000 });
     const info = await page.evaluate(() => window.crossInfo);
     pages[name] = page;
