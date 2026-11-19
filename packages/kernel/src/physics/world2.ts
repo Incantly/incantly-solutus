@@ -364,9 +364,18 @@ export class World2 implements Poses {
       if (sh.kind !== old.kind || sh.lx.length !== old.lx.length) return false;
       this.shapes[s0 + k] = sh;
     }
+    if (b < this.upFresh.length) this.upFresh[b] = 0;
     this.updateShapes(b);
     return true;
   }
+
+  /**
+   * The pose and speeds each body's shapes were last placed from (PH-55): when all seven are the same bits, the corners,
+   * normals and boxes `updateShapes` would make are the ones already there, so it returns at once. A sleeping body (900 of
+   * them in a pile) costs seven reads a step instead of its corners.
+   */
+  private upFresh = new Uint8Array(0);
+  private upPose = new Float64Array(0);
 
   /** World-space corners and normals and the fat box of each shape of body b. */
   updateShapes(b: number): void {
@@ -374,6 +383,27 @@ export class World2 implements Poses {
     const s = this.qs[b] as number;
     const x = this.px[b] as number;
     const y = this.py[b] as number;
+    {
+      if (this.upFresh.length !== this.px.length) {
+        this.upFresh = new Uint8Array(this.px.length);
+        this.upPose = new Float64Array(7 * this.px.length);
+      }
+      const P = this.upPose;
+      const o = 7 * b;
+      const vxb = this.vx[b] as number;
+      const vyb = this.vy[b] as number;
+      const wb = this.w[b] as number;
+      // (`Object.is`: the same bits, so −0 and 0 are told apart)
+      if (this.upFresh[b] === 1 && Object.is(P[o], x) && Object.is(P[o + 1], y) && Object.is(P[o + 2], c) && Object.is(P[o + 3], s) && Object.is(P[o + 4], vxb) && Object.is(P[o + 5], vyb) && Object.is(P[o + 6], wb)) return;
+      P[o] = x;
+      P[o + 1] = y;
+      P[o + 2] = c;
+      P[o + 3] = s;
+      P[o + 4] = vxb;
+      P[o + 5] = vyb;
+      P[o + 6] = wb;
+      this.upFresh[b] = 1;
+    }
     const h = 1 / 120;
     const margin = 4 * LINEAR_SLOP + h * (Math.sqrt((this.vx[b] as number) ** 2 + (this.vy[b] as number) ** 2) + Math.abs(this.w[b] as number) * (this.reach[b] as number));
     const s0 = this.shape0[b] as number;
@@ -521,6 +551,7 @@ export class World2 implements Poses {
       this.addUpImpulses();
     }
     // 5. fast bodies: swept against walls over the whole step
+    this.wallsStale = true;
     for (let i = 0; i < n; i++) {
       if (this.type[i] !== BodyType.Dynamic || this.awake[i] === 0) continue;
       const ox = this.sx0[i] as number;
@@ -595,6 +626,8 @@ export class World2 implements Poses {
       this.minX[k] = Infinity;
       this.maxX[k] = -Infinity;
     }
+    // its boxes are no longer where its pose puts them: the next `updateShapes` must place them
+    if (i < this.upFresh.length) this.upFresh[i] = 0;
     this.gone.add(i);
   }
 
@@ -1590,6 +1623,7 @@ export class World2 implements Poses {
   private sweep(i: number, ox: number, oy: number): void {
     const nx = this.px[i] as number;
     const ny = this.py[i] as number;
+    this.sweepWalls(i, ox, oy, nx, ny);
     const dist = Math.sqrt((nx - ox) ** 2 + (ny - oy) ** 2);
     const ext = Math.max(this.extent[i] as number, 1e-3);
     const samples = Math.min(64, Math.ceil(dist / (0.25 * ext)));
@@ -1621,6 +1655,67 @@ export class World2 implements Poses {
 
   private probe = newManifold();
 
+  /**
+   * The wall shapes a sweep of body i from (ox, oy) to (nx, ny) can meet, in shape order (PH-55): those whose box meets the
+   * box its shapes cover over the whole move, grown by 1e-6 m. A shape outside it fails the box test of every pose of the
+   * sweep, so leaving it out changes nothing; the others are tested in the same order as before.
+   */
+  private sweepCand = new Int32Array(0);
+  private nSweepCand = 0;
+  private wallShapes = new Int32Array(0);
+  private nWallShapes = 0;
+  private wallsStale = true;
+
+  private sweepWalls(i: number, ox: number, oy: number, nx: number, ny: number): void {
+    const ns = this.shapes.length;
+    if (this.sweepCand.length < ns) this.sweepCand = new Int32Array(ns);
+    this.updateShapes(i);
+    const dx = ox - nx;
+    const dy = oy - ny;
+    const s0 = this.shape0[i] as number;
+    const sn = this.shapeN[i] as number;
+    let lx = Infinity;
+    let ly = Infinity;
+    let hx = -Infinity;
+    let hy = -Infinity;
+    for (let k = s0; k < s0 + sn; k++) {
+      const a = this.minX[k] as number;
+      const b = this.maxX[k] as number;
+      const c = this.minY[k] as number;
+      const d = this.maxY[k] as number;
+      const a0 = dx < 0 ? a + dx : a;
+      const b0 = dx > 0 ? b + dx : b;
+      const c0 = dy < 0 ? c + dy : c;
+      const d0 = dy > 0 ? d + dy : d;
+      if (a0 < lx) lx = a0;
+      if (b0 > hx) hx = b0;
+      if (c0 < ly) ly = c0;
+      if (d0 > hy) hy = d0;
+    }
+    const pad = 1e-6 + 1e-9 * (Math.abs(lx) + Math.abs(hx) + Math.abs(ly) + Math.abs(hy));
+    lx -= pad;
+    ly -= pad;
+    hx += pad;
+    hy += pad;
+    // the shapes that are not of a dynamic body, in shape order, once a step (walls and movers do not move in the sweeps)
+    if (this.wallsStale) {
+      if (this.wallShapes.length < ns) this.wallShapes = new Int32Array(ns);
+      let w = 0;
+      for (let s = 0; s < ns; s++) if (this.type[(this.shapes[s] as Shape2).body] !== BodyType.Dynamic) this.wallShapes[w++] = s;
+      this.nWallShapes = w;
+      this.wallsStale = false;
+    }
+    let m = 0;
+    for (let q = 0; q < this.nWallShapes; q++) {
+      const s = this.wallShapes[q] as number;
+      const B = this.shapes[s] as Shape2;
+      if (B.body === i) continue;
+      if ((this.maxX[s] as number) < lx || (this.minX[s] as number) > hx || (this.maxY[s] as number) < ly || (this.minY[s] as number) > hy) continue;
+      this.sweepCand[m++] = s;
+    }
+    this.nSweepCand = m;
+  }
+
   private overlapsWallAt(i: number, x: number, y: number): boolean {
     const sx = this.px[i] as number;
     const sy = this.py[i] as number;
@@ -1632,9 +1727,9 @@ export class World2 implements Poses {
     const sn = this.shapeN[i] as number;
     for (let k = s0; k < s0 + sn && !hit; k++) {
       const A = this.shapes[k] as Shape2;
-      for (let s = 0; s < this.shapes.length && !hit; s++) {
+      for (let q = 0; q < this.nSweepCand && !hit; q++) {
+        const s = this.sweepCand[q] as number;
         const B = this.shapes[s] as Shape2;
-        if (this.type[B.body] === BodyType.Dynamic || B.body === i) continue;
         if ((this.maxX[k] as number) < (this.minX[s] as number) || (this.maxX[s] as number) < (this.minX[k] as number)) continue;
         if ((this.maxY[k] as number) < (this.minY[s] as number) || (this.maxY[s] as number) < (this.minY[k] as number)) continue;
         const m = this.probe;
@@ -2106,6 +2201,8 @@ export class World2 implements Poses {
         this.maxX[q] = -Infinity;
       }
     }
+    // a loaded world places every shape again (a body that was gone and is back has empty boxes from its removal)
+    this.upFresh.fill(0);
     for (let i = 0; i < this.n; i++) if (!this.gone.has(i)) this.updateShapes(i);
   }
 }
