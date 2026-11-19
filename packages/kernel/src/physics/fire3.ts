@@ -324,8 +324,11 @@ export function fireSource3(g: Smoke3, h: number): void {
 export function coolFire3(g: Smoke3, h: number): void {
   const heat = (g.fire as FireParams).heat;
   const k = (COOL * h) / (heat * heat * heat);
-  const T = g.T;
+  const { T, src, own } = g;
+  // the source keeps its cells at `heat`: they do not cool this step (design 9.8)
+  const keep = g.sourced && g.making;
   for (let c = 0; c < T.length; c++) {
+    if (keep && src[c] === 1 && (own[c] as number) < 0) continue;
     const t = T[c] as number;
     if (!(t > 0)) {
       if (t < 0) T[c] = 0;

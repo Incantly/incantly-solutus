@@ -196,6 +196,10 @@ export class ClothSet {
   afx: Float64Array;
   afy: Float64Array;
   afz: Float64Array;
+  /** The air (m/s) at each point, in space with a grid's flow: the Rust air loop's input (PH-48). */
+  private airX: Float64Array;
+  private airY: Float64Array;
+  private airZ: Float64Array;
   /** Tethers: point, pin, length. */
   tePoint: Int32Array;
   tePin: Int32Array;
@@ -332,6 +336,10 @@ export class ClothSet {
     this.afx = P.f();
     this.afy = P.f();
     this.afz = P.f();
+    // the air at each point in space when a grid's flow is the air (filled once a step, read by the Rust air loop)
+    this.airX = M.f64(dim === 3 ? np : 0);
+    this.airY = M.f64(dim === 3 ? np : 0);
+    this.airZ = M.f64(dim === 3 ? np : 0);
     const L = new Stagger(nl, 6, arena);
     this.la = L.i();
     this.lb = L.i();
@@ -482,6 +490,7 @@ export class ClothSet {
           pinFx: at(this.pinFx), pinFy: at(this.pinFy), pinFz: at(this.pinFz), tePoint: at(this.tePoint), tePin: at(this.tePin), teJ: at(this.teJ), teL2: at(this.teL2),
           chain: at(this.chain), chNx: at(this.chNx), chNy: at(this.chNy), chNz: at(this.chNz), chD: at(this.chD), chU: at(this.chU), chR: at(this.chR),
           hullIdx: at(this.hullIdx), hullPl: at(this.hullPl), hullOut: at(this.hullOut), hullPar: at(this.hullPar), kp: at(this.kp),
+          airX: at(this.airX), airY: at(this.airY), airZ: at(this.airZ),
     };
   }
 
@@ -1689,6 +1698,25 @@ export class ClothSet {
       p[KP.windY] = this.windY;
       p[KP.windZ] = this.dim === 2 ? 0 : this.windZ;
       kf.air_forces(o.x, o.y, o.z, o.vx, o.vy, o.vz, o.w, o.ta, o.tb, o.tc, o.triCut, o.pinOf, o.afx, o.afy, o.afz, c.t0, t1, o.kp);
+      return;
+    }
+    if (kf && this.dim === 3) {
+      // the air of a grid in space, which depends on the place: read at every point here (each face reads it at its first
+      // corner, as below), then the same face loop in Rust (PH-48)
+      const { airX, airY, airZ } = this;
+      const e = c.p0 + c.n;
+      for (let i = c.p0; i < e; i++) {
+        ar[0] = x[i] as number;
+        ar[1] = y[i] as number;
+        ar[2] = z[i] as number;
+        this.airAt(air);
+        airX[i] = air[0] as number;
+        airY[i] = air[1] as number;
+        airZ[i] = air[2] as number;
+      }
+      const o = this.ko;
+      this.kp[KP.hs] = hs;
+      kf.air_forces_field(o.x, o.y, o.z, o.vx, o.vy, o.vz, o.w, o.ta, o.tb, o.tc, o.triCut, o.pinOf, o.afx, o.afy, o.afz, o.airX, o.airY, o.airZ, c.t0, t1, o.kp);
       return;
     }
     for (let t = c.t0; t < t1; t++) {
@@ -3407,6 +3435,7 @@ interface KOffsets {
   readonly tePoint: number; readonly tePin: number; readonly teJ: number; readonly teL2: number; readonly chain: number;
   readonly chNx: number; readonly chNy: number; readonly chNz: number; readonly chD: number; readonly chU: number; readonly chR: number;
   readonly hullIdx: number; readonly hullPl: number; readonly hullOut: number; readonly hullPar: number; readonly kp: number;
+  readonly airX: number; readonly airY: number; readonly airZ: number;
 }
 
 /** The bytes of arena a set of these sizes takes (every region rounded up to 64 bytes, and room to spare). */
@@ -3416,7 +3445,7 @@ function arenaBytes(np: number, nl: number, nt: number, npin: number, nte: numbe
     Stagger.bytes(np, 19) + Stagger.bytes(nl, 6) + 128 +
     b(np, 4) + b(np, 1) + b(nl, 8) + b(nl, 1) + 3 * b(nt, 4) + b(nt, 1) + b(npin, 4) + 3 * b(npin, 8) + 3 * b(nte, 4) + b(nte, 8) +
     b(ropeTotal, 4) + 6 * b(ropeLongest, 8) +
-    (dim === 3 ? b(np, 4) + b(HULL_PLANES, 8) : 0) + 2 * b(8, 8) + b(KP.size, 8) +
+    (dim === 3 ? b(np, 4) + b(HULL_PLANES, 8) + 3 * b(np, 8) : 0) + 2 * b(8, 8) + b(KP.size, 8) +
     NeighbourGrid3.arenaBytes(Math.max(16, np), false) + 8192
   );
 }

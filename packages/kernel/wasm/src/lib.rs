@@ -453,6 +453,86 @@ pub unsafe extern "C" fn air_forces(
     t1: i32,
     p: *const f64,
 ) {
+    air_impl(
+        x,
+        y,
+        z,
+        vx,
+        vy,
+        vz,
+        w,
+        ta,
+        tb,
+        tc,
+        tri_cut,
+        pin_of,
+        afx,
+        afy,
+        afz,
+        core::ptr::null(),
+        core::ptr::null(),
+        core::ptr::null(),
+        t0,
+        t1,
+        p,
+    );
+}
+
+/// `ClothSet.airForces` with a grid's flow as the air (PH-48): the same face loop, with the air at each face read at its
+/// first corner from `air_x`, `air_y`, `air_z` instead of the steady wind.
+#[no_mangle]
+pub unsafe extern "C" fn air_forces_field(
+    x: *const f64,
+    y: *const f64,
+    z: *const f64,
+    vx: *const f64,
+    vy: *const f64,
+    vz: *const f64,
+    w: *const f64,
+    ta: *const i32,
+    tb: *const i32,
+    tc: *const i32,
+    tri_cut: *const u8,
+    pin_of: *const i32,
+    afx: F,
+    afy: F,
+    afz: F,
+    air_x: *const f64,
+    air_y: *const f64,
+    air_z: *const f64,
+    t0: i32,
+    t1: i32,
+    p: *const f64,
+) {
+    air_impl(
+        x, y, z, vx, vy, vz, w, ta, tb, tc, tri_cut, pin_of, afx, afy, afz, air_x, air_y, air_z, t0, t1, p,
+    );
+}
+
+unsafe fn air_impl(
+    x: *const f64,
+    y: *const f64,
+    z: *const f64,
+    vx: *const f64,
+    vy: *const f64,
+    vz: *const f64,
+    w: *const f64,
+    ta: *const i32,
+    tb: *const i32,
+    tc: *const i32,
+    tri_cut: *const u8,
+    pin_of: *const i32,
+    afx: F,
+    afy: F,
+    afz: F,
+    air_x: *const f64,
+    air_y: *const f64,
+    air_z: *const f64,
+    t0: i32,
+    t1: i32,
+    p: *const f64,
+) {
+    let field = !air_x.is_null();
     let hs = ld(p, P_HS);
     let wind_x = ld(p, P_WX);
     let wind_y = ld(p, P_WY);
@@ -466,6 +546,11 @@ pub unsafe extern "C" fn air_forces(
         let a = li(ta, t);
         let b = li(tb, t);
         let e = li(tc, t);
+        let (wind_x, wind_y, wind_z) = if field {
+            (ld(air_x, a), ld(air_y, a), ld(air_z, a))
+        } else {
+            (wind_x, wind_y, wind_z)
+        };
         let nx: f64;
         let ny: f64;
         let nz: f64;
@@ -1255,6 +1340,9 @@ const G_DROPS: i32 = 39;
 const G_NDROPS: i32 = 41;
 const G_SRCON: i32 = 42;
 const G_HOLD: i32 = 43;
+/// The counts of the even and odd off-stencil cells, kept between the two parts of a split projection.
+const G_NF0: i32 = 44;
+const G_NF1: i32 = 45;
 
 const F_X0: i32 = 0;
 const F_Y0: i32 = 1;
@@ -1279,6 +1367,8 @@ const F_OUT: i32 = 17;
 const OMEGA: f64 = 1.8;
 const KEEP: f64 = 1.0 - OMEGA;
 const PASSES: i32 = 20;
+/// Passes in the first part of a split grid step (design 9.8; `SMOKE3_PASSES_A` in `smoke3.ts`).
+const PASSES_A: i32 = 0;
 const SCALE_CAP: f64 = 0.005;
 /// The fire's numbers (`fire2.ts`).
 const IGNITE: f64 = 150.0;
@@ -2309,6 +2399,9 @@ pub unsafe extern "C" fn grid3_fire(gi: *const i32, gf: *const f64) {
             let fs = lf(f, c) + add;
             sf(f, c, if fs < 1.0 { fs } else { 1.0 });
             sf(t, c, heat);
+            // the source keeps its cells at `heat`: they do not cool this step (design 9.8)
+            c += 1;
+            continue;
         }
         // coolFire3
         let tc = lf(t, c);
@@ -2464,132 +2557,44 @@ pub unsafe extern "C" fn grid3_solid_faces(gi: *const i32, gf: *const f64) {
 /// gradient taken off the faces.
 #[no_mangle]
 pub unsafe extern "C" fn grid3_project(gi: *const i32, gf: *const f64) {
+    project_part(gi, gf, 0);
+}
+
+/// The first part of `Smoke3.project` in a split grid step (design 9.8): the rows' air spans, the cells off the plain
+/// stencil and the first `PASSES_A` passes; the counts of the off-stencil cells are kept in the integer block.
+#[no_mangle]
+pub unsafe extern "C" fn grid3_project_a(gi: *const i32, gf: *const f64) {
+    project_part(gi, gf, 1);
+}
+
+/// The second part: the other passes and the gradient taken off the faces.
+#[no_mangle]
+pub unsafe extern "C" fn grid3_project_b(gi: *const i32, gf: *const f64) {
+    project_part(gi, gf, 2);
+}
+
+/// The red-black passes `from` to `to` of `Smoke3.project` (a split grid step runs them in two calls, design 9.8).
+unsafe fn pressure_passes(gi: *const i32, from: i32, to: i32, nf0: i32, nf1: i32, ax: f64, ay: f64, az: f64) {
     let n = li(gi, G_N);
     let nn = n * n;
-    let w1 = n + 1;
     let s = n + 2;
     let ss = s * s;
-    let own = at(gi, G_OWN) as *const i32;
     let p = at(gi, G_P) as *mut f32;
-    let div = at(gi, G_DIV) as *mut f32;
-    let wl = at(gi, G_WL) as *mut f32;
-    let wr = at(gi, G_WR) as *mut f32;
-    let wd = at(gi, G_WD) as *mut f32;
-    let wu = at(gi, G_WU) as *mut f32;
-    let wb = at(gi, G_WB) as *mut f32;
-    let wf = at(gi, G_WF) as *mut f32;
-    let inv = at(gi, G_INV) as *mut f32;
-    let fix = at(gi, G_FIX) as *mut i32;
+    let div = at(gi, G_DIV) as *const f32;
+    let wl = at(gi, G_WL) as *const f32;
+    let wr = at(gi, G_WR) as *const f32;
+    let wd = at(gi, G_WD) as *const f32;
+    let wu = at(gi, G_WU) as *const f32;
+    let wb = at(gi, G_WB) as *const f32;
+    let wf = at(gi, G_WF) as *const f32;
+    let inv = at(gi, G_INV) as *const f32;
+    let fix = at(gi, G_FIX) as *const i32;
     let fixed = at(gi, G_FIXED) as *mut f32;
-    let row_lo = at(gi, G_ROWLO) as *mut i32;
-    let row_hi = at(gi, G_ROWHI) as *mut i32;
-    let u = at(gi, G_U) as *mut f32;
-    let v = at(gi, G_V) as *mut f32;
-    let w = at(gi, G_W) as *mut f32;
-    let dx = ld(gf, F_DX);
-    let dy = ld(gf, F_DY);
-    let dz = ld(gf, F_DZ);
-    let wx = 1.0 / (dx * dx);
-    let wy = 1.0 / (dy * dy);
-    let wz = 1.0 / (dz * dz);
-    let ip = 1.0 / (2.0 * wx + 2.0 * wy + 2.0 * wz);
-    let ax = OMEGA * ip * wx;
-    let ay = OMEGA * ip * wy;
-    let az = OMEGA * ip * wz;
-    let idx = 1.0 / dx;
-    let idy = 1.0 / dy;
-    let idz = 1.0 / dz;
-    let mut nf0 = 0;
-    let mut nf1 = 0;
+    let row_lo = at(gi, G_ROWLO) as *const i32;
+    let row_hi = at(gi, G_ROWHI) as *const i32;
     let half = n * nn;
-    let mut k = 0;
-    while k < n {
-        let mut j = 0;
-        while j < n {
-            // the span of air in this row: the solid cells outside it (a floor, a wall) are not solved, only held at p = 0
-            let c0 = (k * n + j) * n;
-            let mut lo = 0;
-            while lo < n && li(own, c0 + lo) >= 0 {
-                lo += 1;
-            }
-            let mut hi = n;
-            while hi > lo && li(own, c0 + hi - 1) >= 0 {
-                hi -= 1;
-            }
-            si(row_lo, k * n + j, lo);
-            si(row_hi, k * n + j, hi);
-            let qrow = ((k + 1) * s + (j + 1)) * s + 1;
-            if lo > 0 {
-                zero_f32(p, qrow, qrow + lo);
-            }
-            if hi < n {
-                zero_f32(p, qrow + hi, qrow + n);
-            }
-            let mut i = lo;
-            while i < hi {
-                let c = c0 + i;
-                let q = qrow + i;
-                let odd = (i + j + k) & 1;
-                if li(own, c) >= 0 {
-                    sf(inv, q, 0.0);
-                    sf(div, q, 0.0);
-                    sf(p, q, 0.0);
-                    if odd == 0 {
-                        si(fix, nf0, q);
-                        nf0 += 1;
-                    } else {
-                        si(fix, half + nf1, q);
-                        nf1 += 1;
-                    }
-                    i += 1;
-                    continue;
-                }
-                let l = if i == 0 || li(own, c - 1) < 0 { wx } else { 0.0 };
-                let r = if i == n - 1 || li(own, c + 1) < 0 { wx } else { 0.0 };
-                let d = if j == 0 || li(own, c - n) < 0 { wy } else { 0.0 };
-                let t = if j == n - 1 || li(own, c + n) < 0 { wy } else { 0.0 };
-                let b = if k == 0 || li(own, c - nn) < 0 { wz } else { 0.0 };
-                let f = if k == n - 1 || li(own, c + nn) < 0 { wz } else { 0.0 };
-                let dv = (lf(u, (k * n + j) * w1 + i + 1) - lf(u, (k * n + j) * w1 + i)) * idx
-                    + (lf(v, (k * w1 + j + 1) * n + i) - lf(v, (k * w1 + j) * n + i)) * idy
-                    + (lf(w, c + nn) - lf(w, c)) * idz;
-                // a cell a body has just left held p = 0: start it from the mean of its neighbours (read from the pressure alone)
-                if lf(p, q) == 0.0 {
-                    let s6 = lf(p, q - 1) + lf(p, q + 1) + lf(p, q - s) + lf(p, q + s) + lf(p, q - ss) + lf(p, q + ss);
-                    if s6 != 0.0 {
-                        sf(p, q, s6 / 6.0);
-                    }
-                }
-                if l != 0.0 && r != 0.0 && d != 0.0 && t != 0.0 && b != 0.0 && f != 0.0 {
-                    sf(div, q, OMEGA * ip * dv);
-                    i += 1;
-                    continue;
-                }
-                let sum = l + r + d + t + b + f;
-                let iq = if sum > 0.0 { OMEGA / sum } else { 0.0 };
-                sf(wl, q, if i == 0 { 0.0 } else { l * iq });
-                sf(wr, q, if i == n - 1 { 0.0 } else { r * iq });
-                sf(wd, q, if j == 0 { 0.0 } else { d * iq });
-                sf(wu, q, if j == n - 1 { 0.0 } else { t * iq });
-                sf(wb, q, if k == 0 { 0.0 } else { b * iq });
-                sf(wf, q, if k == n - 1 { 0.0 } else { f * iq });
-                sf(inv, q, iq);
-                sf(div, q, iq * dv);
-                if odd == 0 {
-                    si(fix, nf0, q);
-                    nf0 += 1;
-                } else {
-                    si(fix, half + nf1, q);
-                    nf1 += 1;
-                }
-                i += 1;
-            }
-            j += 1;
-        }
-        k += 1;
-    }
-    let mut pass = 0;
-    while pass < PASSES {
+    let mut pass = from;
+    while pass < to {
         let mut colour = 0;
         while colour < 2 {
             let f0 = if colour == 0 { 0 } else { half };
@@ -2649,6 +2654,153 @@ pub unsafe extern "C" fn grid3_project(gi: *const i32, gf: *const f64) {
             colour += 1;
         }
         pass += 1;
+    }
+}
+
+/// `part` 0: the whole projection; 1: setup and the first `PASSES_A` passes; 2: the rest and the gradient.
+unsafe fn project_part(gi: *const i32, gf: *const f64, part: i32) {
+    let n = li(gi, G_N);
+    let nn = n * n;
+    let w1 = n + 1;
+    let s = n + 2;
+    let ss = s * s;
+    let own = at(gi, G_OWN) as *const i32;
+    let p = at(gi, G_P) as *mut f32;
+    let div = at(gi, G_DIV) as *mut f32;
+    let wl = at(gi, G_WL) as *mut f32;
+    let wr = at(gi, G_WR) as *mut f32;
+    let wd = at(gi, G_WD) as *mut f32;
+    let wu = at(gi, G_WU) as *mut f32;
+    let wb = at(gi, G_WB) as *mut f32;
+    let wf = at(gi, G_WF) as *mut f32;
+    let inv = at(gi, G_INV) as *mut f32;
+    let fix = at(gi, G_FIX) as *mut i32;
+    let row_lo = at(gi, G_ROWLO) as *mut i32;
+    let row_hi = at(gi, G_ROWHI) as *mut i32;
+    let u = at(gi, G_U) as *mut f32;
+    let v = at(gi, G_V) as *mut f32;
+    let w = at(gi, G_W) as *mut f32;
+    let dx = ld(gf, F_DX);
+    let dy = ld(gf, F_DY);
+    let dz = ld(gf, F_DZ);
+    let wx = 1.0 / (dx * dx);
+    let wy = 1.0 / (dy * dy);
+    let wz = 1.0 / (dz * dz);
+    let ip = 1.0 / (2.0 * wx + 2.0 * wy + 2.0 * wz);
+    let ax = OMEGA * ip * wx;
+    let ay = OMEGA * ip * wy;
+    let az = OMEGA * ip * wz;
+    let idx = 1.0 / dx;
+    let idy = 1.0 / dy;
+    let idz = 1.0 / dz;
+    let mut nf0 = 0;
+    let mut nf1 = 0;
+    let half = n * nn;
+    let mut k = 0;
+    if part != 2 {
+        while k < n {
+            let mut j = 0;
+            while j < n {
+                // the span of air in this row: the solid cells outside it (a floor, a wall) are not solved, only held at p = 0
+                let c0 = (k * n + j) * n;
+                let mut lo = 0;
+                while lo < n && li(own, c0 + lo) >= 0 {
+                    lo += 1;
+                }
+                let mut hi = n;
+                while hi > lo && li(own, c0 + hi - 1) >= 0 {
+                    hi -= 1;
+                }
+                si(row_lo, k * n + j, lo);
+                si(row_hi, k * n + j, hi);
+                let qrow = ((k + 1) * s + (j + 1)) * s + 1;
+                if lo > 0 {
+                    zero_f32(p, qrow, qrow + lo);
+                }
+                if hi < n {
+                    zero_f32(p, qrow + hi, qrow + n);
+                }
+                let mut i = lo;
+                while i < hi {
+                    let c = c0 + i;
+                    let q = qrow + i;
+                    let odd = (i + j + k) & 1;
+                    if li(own, c) >= 0 {
+                        sf(inv, q, 0.0);
+                        sf(div, q, 0.0);
+                        sf(p, q, 0.0);
+                        if odd == 0 {
+                            si(fix, nf0, q);
+                            nf0 += 1;
+                        } else {
+                            si(fix, half + nf1, q);
+                            nf1 += 1;
+                        }
+                        i += 1;
+                        continue;
+                    }
+                    let l = if i == 0 || li(own, c - 1) < 0 { wx } else { 0.0 };
+                    let r = if i == n - 1 || li(own, c + 1) < 0 { wx } else { 0.0 };
+                    let d = if j == 0 || li(own, c - n) < 0 { wy } else { 0.0 };
+                    let t = if j == n - 1 || li(own, c + n) < 0 { wy } else { 0.0 };
+                    let b = if k == 0 || li(own, c - nn) < 0 { wz } else { 0.0 };
+                    let f = if k == n - 1 || li(own, c + nn) < 0 { wz } else { 0.0 };
+                    let dv = (lf(u, (k * n + j) * w1 + i + 1) - lf(u, (k * n + j) * w1 + i)) * idx
+                        + (lf(v, (k * w1 + j + 1) * n + i) - lf(v, (k * w1 + j) * n + i)) * idy
+                        + (lf(w, c + nn) - lf(w, c)) * idz;
+                    // a cell a body has just left held p = 0: start it from the mean of its neighbours (read from the pressure alone)
+                    if lf(p, q) == 0.0 {
+                        let s6 = lf(p, q - 1) + lf(p, q + 1) + lf(p, q - s) + lf(p, q + s) + lf(p, q - ss) + lf(p, q + ss);
+                        if s6 != 0.0 {
+                            sf(p, q, s6 / 6.0);
+                        }
+                    }
+                    if l != 0.0 && r != 0.0 && d != 0.0 && t != 0.0 && b != 0.0 && f != 0.0 {
+                        sf(div, q, OMEGA * ip * dv);
+                        i += 1;
+                        continue;
+                    }
+                    let sum = l + r + d + t + b + f;
+                    let iq = if sum > 0.0 { OMEGA / sum } else { 0.0 };
+                    sf(wl, q, if i == 0 { 0.0 } else { l * iq });
+                    sf(wr, q, if i == n - 1 { 0.0 } else { r * iq });
+                    sf(wd, q, if j == 0 { 0.0 } else { d * iq });
+                    sf(wu, q, if j == n - 1 { 0.0 } else { t * iq });
+                    sf(wb, q, if k == 0 { 0.0 } else { b * iq });
+                    sf(wf, q, if k == n - 1 { 0.0 } else { f * iq });
+                    sf(inv, q, iq);
+                    sf(div, q, iq * dv);
+                    if odd == 0 {
+                        si(fix, nf0, q);
+                        nf0 += 1;
+                    } else {
+                        si(fix, half + nf1, q);
+                        nf1 += 1;
+                    }
+                    i += 1;
+                }
+                j += 1;
+            }
+            k += 1;
+        }
+        si(gi as *mut i32, G_NF0, nf0);
+        si(gi as *mut i32, G_NF1, nf1);
+    } else {
+        nf0 = li(gi, G_NF0);
+        nf1 = li(gi, G_NF1);
+    }
+    pressure_passes(
+        gi,
+        if part == 2 { PASSES_A } else { 0 },
+        if part == 1 { PASSES_A } else { PASSES },
+        nf0,
+        nf1,
+        ax,
+        ay,
+        az,
+    );
+    if part == 1 {
+        return;
     }
     // take the gradient off every face between two air cells, or an air cell and the open air outside (p = 0 there)
     k = 0;
@@ -2866,7 +3018,13 @@ pub unsafe extern "C" fn grid3_advect_smoke(gi: *const i32, gf: *mut f64) {
         let out = (h * outflow(gi, gf)) / (dx * dy * dz);
         let mut f = (before - out) / after;
         let swirl = ld(gf, F_SWIRL);
-        let cap = if swirl > 0.0 { SCALE_CAP * (1.0 + swirl) } else { SCALE_CAP };
+        // 0.5% for each 1/60 s of the step (a grid in space steps 1/30 s, design 9.8)
+        let per = h * 60.0;
+        let cap = if swirl > 0.0 {
+            SCALE_CAP * per * (1.0 + swirl)
+        } else {
+            SCALE_CAP * per
+        };
         if f > 1.0 + cap {
             f = 1.0 + cap;
         } else if f < 1.0 - cap {
@@ -2949,6 +3107,38 @@ unsafe fn sum_cells(gi: *const i32, gf: *mut f64, slot: i32) {
         c += 1;
     }
     st(gf, F_OUT, m);
+}
+
+/// A fire grid's readouts in one sweep of its cells (PH-48): the hottest `T` (as `grid3_hottest`) in `gf[F_OUT]`, the
+/// cells above 500 degrees (as `grid3_flames`) in `gf[F_OUT + 1]`, and the sums of `F` and of `s` in index order (as
+/// `sum_cells`) in `gf[F_OUT + 2]` and `gf[F_OUT + 3]`. Each is the same operations in the same order as its own loop.
+#[no_mangle]
+pub unsafe extern "C" fn grid3_fire_readouts(gi: *const i32, gf: *mut f64) {
+    let t = at(gi, G_T) as *const f32;
+    let f = at(gi, G_F) as *const f32;
+    let s = at(gi, G_S) as *const f32;
+    let total = li(gi, G_N) * li(gi, G_N) * li(gi, G_N);
+    let mut hot = 0.0;
+    let mut flames = 0;
+    let mut fuel = 0.0;
+    let mut smoke = 0.0;
+    let mut c = 0;
+    while c < total {
+        let tc = lf(t, c);
+        if tc > hot {
+            hot = tc;
+        }
+        if tc > FLAME_AT {
+            flames += 1;
+        }
+        fuel += lf(f, c);
+        smoke += lf(s, c);
+        c += 1;
+    }
+    st(gf, F_OUT, hot);
+    st(gf, F_OUT + 1, flames as f64);
+    st(gf, F_OUT + 2, fuel);
+    st(gf, F_OUT + 3, smoke);
 }
 
 #[no_mangle]

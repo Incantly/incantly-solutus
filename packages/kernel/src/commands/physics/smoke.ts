@@ -13,6 +13,7 @@ import type { CommandSpec, FormCheck, ParamSpec, Refusal } from '../../language/
 import { FLAME_AT, FUEL_GONE, IGNITE_AT, flameCells, fuelSum, hottest } from '../../physics/fire2';
 import type { SmokeOut } from './flip';
 import { flameCells3, fuelSum3, hottest3 } from '../../physics/fire3';
+import { GF } from '../../physics/wasm/kernels';
 import type { SmokeSource2 } from '../../physics/smoke2';
 import { Smoke2, markSource } from '../../physics/smoke2';
 import type { SmokeSource3 } from '../../physics/smoke3';
@@ -433,11 +434,25 @@ export function smokeValue3(spec: SmokeSpec, g: Smoke3, out?: SmokeOut): SmokeVa
     temp = out.temp.next(g.T.length);
     temp.set(g.T);
   } else temp = new Float32Array(g.T);
-  const mass = g.mass();
+  // (with the Rust loops, the four cell readouts in one sweep: the same numbers as one at a time, PH-48)
+  const kn = g.kn;
+  let mass: number;
+  let top: number;
+  let fuel: number;
+  let flames: number;
+  if (kn) {
+    kn.fn.grid3_fire_readouts(kn.gi, kn.gf);
+    top = kn.F[GF.out] as number;
+    flames = kn.F[GF.out + 1] as number;
+    fuel = (kn.F[GF.out + 2] as number) * g.dx * g.dy * g.dz;
+    mass = (kn.F[GF.out + 3] as number) * g.dx * g.dy * g.dz;
+  } else {
+    mass = g.mass();
+    top = hottest3(g.T);
+    fuel = fuelSum3(g);
+    flames = flameCells3(g.T);
+  }
   const speed = g.maxSpeed();
-  const top = hottest3(g.T);
-  const fuel = fuelSum3(g);
-  const flames = flameCells3(g.T);
   const stopped = !(g.sourced && g.making);
   const fire: FireValue = { schema: 'Smoke', spec: spec as FireValue['spec'], density, mass, speed, temp, hottest: top, burning: flames > 0, fuel, flames, out: g.alive && stopped && !(top > IGNITE_AT) && fuel < FUEL_GONE };
   return fire;
