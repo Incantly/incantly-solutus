@@ -77,7 +77,7 @@ export function evaluateExpr(app: App, expr: string, format: string, node?: stri
   if (!spec) return fail(`"${format}" is not a format.`, `Use one of: ${FORMAT_WORDS}.`);
   if (expr.trim() === '') return fail('The formula has no expression.', 'Write an expression such as Area(p).');
   try {
-    const p = preview(expr, app.figure);
+    const p = preview(expr, app.figure.view);
     if (!p.ok) return fail(p.error.message, p.error.hint);
     const g = p.ghost;
     if (g && spec.kind !== 'auto') {

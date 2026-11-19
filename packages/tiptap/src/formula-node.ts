@@ -40,12 +40,13 @@ const text = (x: unknown): string => (typeof x === 'string' ? x : '');
 
 /** A glyph measure from a canvas where there is one, else a rough table. */
 function measureFor(doc: Document): math.Measure {
-  let ctx: CanvasRenderingContext2D | null = null;
-  try {
-    ctx = doc.createElement('canvas').getContext('2d');
-  } catch {
-    ctx = null;
-  }
+  const ctx = ((): CanvasRenderingContext2D | null => {
+    try {
+      return doc.createElement('canvas').getContext('2d');
+    } catch {
+      return null;
+    }
+  })();
   if (!ctx) return math.roughMeasure;
   const c = ctx;
   return (s, font, px) => {
