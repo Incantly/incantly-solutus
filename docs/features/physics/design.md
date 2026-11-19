@@ -700,6 +700,19 @@ film stays exact) to halve the memory and the copy. It runs in the physics worke
 - **After the review (round 11B fix round, `handoff/physics/findings.md` PH-30 to PH-34).** (1) **`Ignite` of a sheet** reaches the space driver: the argument that names an object has no value of its own in the call, so the action read the sheet as a plane thing and refused it with `not_burnable`; it reads the object's value now (a sheet, and a solid shape in space, are told by what they are). (2) **The `torn` notice of a burning sheet** comes: the cloth step clears its count of links torn in the step, and the burnt cells' links were torn before that step, so the count was lost; they are torn after the step, as in the plane (a burning sheet's links in space tear one step later than in the build before, so films of burning sheets in space change a little). (3) **B021 in space** keeps its suggestion `fire = Fire(b.pos)` when the figure already has its one grid in space: the line is refused with `limit`, so the check that offers only lines that would work dropped it. `no_fire_grid` now keeps a suggestion refused for `limit` alone (a plane figure with its 64 × 64 cells used has the same case), and in space the hint says a figure has one smoke or fire grid, so the line should change the grid it has. (4) **Bodies in space count toward the 64 burnable things**, with sheets and solid shapes: the 65th is refused with `limit` by `burns = …` or `with burns`, each item of a list counts. (5) **A solid shape in space that burns** (`p with burns = true`, a number of seconds, `ignite`) is a burnable unit like the plane's: `true` is 10 s a m³ of its volume (at least 1 s), its place is the middle of its box, and a plane, the floor or terrain cannot burn. Once burnt it leaves the world, its cell reads `undefined` with the reason `burnt` (shown once as the notice `burnt`), the grids mark their walls again, the sleeping bodies whose boxes meet it wake (`World3.wakeAround`, used for burnt bodies too, in place of a search of the touching pairs, which made a list each time), and a seek back before the burn gives it back. A rule is told to be a solid by its `solid` style when it is computed, not by the scan of the driver (a rule whose value was not kept before the shelf burnt gave a world built again without the shelf, so the film started over; the driver also keeps the value the rule has when the shelf burns. The plane's driver has the same two guards).
 - **Drawing** is 12.1 ("Smoke and fire in space").
 - **Cost.** A 24³ grid, Float32, 20 passes: about 3.7 ms a smoke step in Node, so a frame is about 4 ms (the plan's budget was 2 ms): the pressure passes alone are 1.3 ms. 32³ is 9 ms, the flag over a fire 5 ms, a seek 130 ms median (11.2). With the loops in Rust (task 10.10, 11.6 "As built, round 2") a step is about 1.5 ms, 32³ 3.6 ms, the flag over a fire 2.7 ms and a seek 45 ms.
+- **30 steps a second, in two halves (finding PH-48).** The grid in space steps 30 times a second of film (`h = 1/30`),
+  each step split in two halves a frame apart, so a frame pays half a grid step. The first half (at world step
+  `n % 4 = 2` with the default step of 1/120 s) marks the solids, carries the flow, lifts, swirls, burns the fire's cells,
+  holds the solid faces and sets up the projection; the burnable things swap heat with the grid right after it, where
+  the solids were just marked. The second half (at `n % 4 = 0`) does the 20 pressure passes and the gradient, carries
+  the smoke and finds the drag. A checkpoint is a multiple of the grid's step, so it never falls between the halves.
+  Readouts between the halves show the fire's `T` and `F` of the new step and the smoke of the last one. The plane's
+  grid keeps 60 steps a second (9.4). Three rules changed with the longer step, in the TypeScript loops and the Rust
+  ones alike: the mass kept by the smoke's carrying may be scaled by 0.5% for each 1/60 s of the step (1% a step here);
+  the source's cells keep its `heat` and do not cool in the step that set them; and a body that burns has its weight in
+  that step's force readout from its new mass. Early stopping of the pressure passes was tried and dropped: after 20
+  passes a cell still moves by 15 to 40 times any useful bound, so no pass is ever skipped. Splitting the pressure by
+  colour for SIMD gave nothing.
 
 ## 10. Time, exact replay and seeking
 
@@ -860,6 +873,18 @@ All four missed their goals by about a factor of two. A smoke step was about 3.7
 | Seek anywhere in a 60 s film, fire 24³, warm | | | | 120 ms | 101 ms median, 208 worst | 45 ms median, 86 worst |
 
 The 24³ fire and the 32³ fire meet their Node goals and the 24³ fire its Chrome goal. The 32³ fire (194%) and the flag over a fire (148%) are still over in Chrome, the flag over a fire by 8% in Node (11.6 lists what is left to try). A checkpoint is 399.7 KB; 200 grid steps make no collection, with the kernels on and off.
+
+**Measured (finding PH-48: the grid in space at 30 steps a second in two halves, the cloth's air in Rust, the fire's
+readouts in one sweep).** The same Chrome script, CPU 4× slower, two runs; Node mean of a frame:
+
+| Scene | Goal (Chrome ×4) | Chrome | Node |
+|---|---|---|---|
+| Fire in space, 24³ | 8 ms | 3.1 ms (95% 3.6) | 0.8 ms |
+| Fire in space, 32³ | 8 ms | 7.3 ms (95% 8.0 to 8.1) | 1.9 ms |
+| 64 × 32 flag over a fire, 24³ | 8 ms | 7.0 to 7.2 ms (95% 7.6 to 8.0) | 1.9 ms |
+| Cloth in water, 64 × 32 and 2,000 drops | 8 ms | 6.7 to 6.9 ms (95% 7.7 to 8.0) | |
+
+Every fire and cloth row of 11.2 is within its Chrome goal.
 
 ### 11.3 Hard limits
 
