@@ -136,8 +136,9 @@ function pow2(k: number): number {
 
 export function exp(x: number): number {
   if (Number.isNaN(x)) return Number.NaN;
-  if (x > 709.78) return Infinity;
-  if (x < -745.13) return 0;
+  // the edges of the platform's `Math.exp`: the largest argument with a finite answer, the smallest with a non-zero one
+  if (x > 709.782712893384) return Infinity;
+  if (x < -745.1332191019412) return 0;
   const k = Math.floor(x * INV_LN2 + 0.5);
   const r = x - k * LN2_HI - k * LN2_LO; // |r| ≤ ln2 / 2
   // Taylor to r^14 on |r| ≤ 0.347: error under 1e-17

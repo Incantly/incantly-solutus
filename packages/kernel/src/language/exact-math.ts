@@ -688,7 +688,7 @@ function scale2(v: number, k: number): number {
     n -= 1023;
   }
   while (n < -1000) {
-    r *= 1.1125369292536007e-308;
+    r *= 2.2250738585072014e-308;
     n += 1022;
   }
   let p = 1;
