@@ -60,10 +60,16 @@ interface IncantlyFigureAttrs {
 ## 6. Commands
 
 ```ts
-editor.commands.insertIncantlyFigure({ script?: string; mode?: AppModeId; height?: number });
+editor.commands.insertIncantlyFigure({ script?: string; mode?: AppModeId; height?: number; id?: string; caption?: string });
 editor.commands.updateIncantlyFigure(id: string, patch: Partial<IncantlyFigureAttrs>);
-editor.commands.askIncantly(id: string, request: string);   // AI, needs a server URL in the options
+editor.commands.askIncantly(id: string, request: string);   // AI, needs a server URL (or an aiTransport) in the options
+editor.commands.insertIncantlyFormula({ expr: string; figure?: string; format?: string });
 ```
+
+- `insertIncantlyFigure` takes the mode from `mode`, else from the script's `# incantly 1 mode=…` header, else the `defaultMode` option. `id` and `caption` are for hosts that make their own.
+- `updateIncantlyFigure` merges the patch into the node's attributes and checks the result as in 2 (`bad_attrs`); on a failure, or an unknown id, it returns `false`, changes nothing and reports the error. The `id` cannot be changed. A patch of only `picture` is not an undo step.
+- `askIncantly` returns `false` with `ai_unavailable` when there is neither `server` nor `aiTransport`.
+- Every error is also given to `onError` and kept in `editor.storage.incantly.lastError`.
 
 Extension options:
 
@@ -74,6 +80,8 @@ interface IncantlyTiptapOptions {
   readonly liveLimit?: number;       // default 3
   readonly defaultMode?: AppModeId;  // default 'figure'
   readonly sound?: boolean;          // default false: figures stay silent until a reader turns sound on
+  readonly onError?: (error: TiptapError) => void;   // every error the extension reports, in the format of docs/features/errors/
+  readonly aiTransport?: AiTransport;                // replaces the HTTP client for the AI (tests, other hosts); see 9
 }
 ```
 
