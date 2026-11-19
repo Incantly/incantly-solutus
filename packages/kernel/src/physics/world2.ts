@@ -695,8 +695,11 @@ export class World2 implements Poses {
       }
     }
     const np = this.pairCount;
-    if (np > 16) this.pairs.subarray(0, np).sort();
-    else {
+    if (np > 16) {
+      // the whole array is sorted with Infinity after the pairs: `subarray` would make a typed-array view every step
+      this.pairs.fill(Infinity, np);
+      this.pairs.sort();
+    } else {
       // a few pairs (a quiet world): insertion sort, and no typed-array view made for the engine's sort
       const pairs = this.pairs;
       for (let i = 1; i < np; i++) {
@@ -753,7 +756,8 @@ export class World2 implements Poses {
     const old = this.contactMap;
     const next = this.spareMap;
     const list = this.spareList;
-    list.length = 0;
+    // (emptied with `pop`: `length = 0` frees the store and the pushes below make one again, a few KB every step)
+    while (list.length > 0) list.pop();
     const stamp = ++this.contactStamp;
     const ns = this.shapes.length;
     let points = 0;
