@@ -134,3 +134,29 @@ No failing tests for 10.10, so there are no findings for the fixer. What is cove
 Not testable from the public API: the SIMD build (`setPhysicsGridSimd` is not exported from `packages/kernel/src/index.ts`), so "on" is whichever build Node picks. `physicsKernelsActive` for a figure with no WebAssembly is not asserted (the docs give no value).
 
 Seen while running the physics set, not caused by 10.10: `packages/sdk/test/spec/physics-worker.test.ts` has 3 failing tests (`a world with liquid runs whole in the worker ...`, `a push made on the page goes to the worker as an @input line ...`, `a worker that stops hands the world back to the page ...`), all `DataCloneError: Cannot transfer object of unsupported type` at `structuredClone(reply, { transfer })` in the test's same-thread channel. They fail the same with the kernels switched off, the file is unchanged since round 6, and Node 26.0.0 is the runtime here (the repo asks for Node 22 or later). The scene is a plane liquid, which the Rust grid does not touch. Needs a check on the integrator's Node version.
+
+## Round 10
+
+Tests: `packages/kernel/test/spec/exact-math.test.ts` (new, 75 tests: 73 pass, 2 fail) and `packages/kernel/test/spec/language/regressions.test.ts` (LANG-SM-13 now expects `EXACT_MATH`, the default of design 10.2 item 4; passes). Full suite: 213 files (212 pass), 8,931 tests pass, 2 fail (both below), 11 skipped. `npm run lint` passes. Node 26.0.0.
+
+What is covered: the default library is `EXACT_MATH` and `setExactMath(false)` / `(true)` switch it; each of the 21 functions against `Math` over seeded sweeps of 20,000 inputs in each range of builder-notes "10.5: error against `Math`" (bounds of design 10.2: 1 ulp, and 3 for `tan`, `asin`, `acos`, the hyperbolic functions and `hypot`), with ulp distance taken from the bits; NaN, ±Infinity, ±0 and the domain edges equal to `Math`'s (`Object.is`) for every function and every pair; exact results stay exact; a figure reading `sin(t)`, `cos(2 t)`, `exp(t / 3)` gives the same bits on two fresh figures and equals `EXACT_MATH`, equals `Math`'s with `setExactMath(false)`, and moves within the ulp bound when the maths is switched.
+
+### R10.1 `exp` overflows at the top edge of its domain
+
+- Test: `special cases equal Math's > exp: NaN, ±Infinity, ±0 and the domain edges`.
+- Doc line: design 10.2 item 4, "gives `Math`'s answer for NaN, the infinities, the signed zeros and the edges of its domain"; builder-notes 10.5 lists "709.78 to 711" among the special cases that equal `Math`.
+- Input: `exp(709.782712893384)` (the largest argument whose answer is finite).
+- Code gave: `Infinity`. `Math.exp` gave `1.7976931348622732e+308`. The other edge inputs (709.78, 710, 711, -700, -745.13, -745.2, -746, ±1e22, ±1e308) agree.
+
+### R10.2 `pow(2, k)` is wrong for k from -1074 to -1001
+
+- Test: `the exact results stay exact > pow(2, k) is 2^k, and the small whole exponents are exact`.
+- Doc line: design 10.2 item 4 / builder-notes 10.5, "the exact results stay exact (… `pow(2, k)` …)"; also "gives `Math`'s answer" (`Math.pow(2, k)` is exact for every whole k from -1074 to 1023).
+- Input: every whole k from -1074 to 1023. 74 fail, all with k from -1074 to -1001 (the subnormal results and the 73 normal ones just above them).
+- Code gave: half of the right answer, or 0 at the end: `pow(2, -1074)` gave `0` (Math: `5e-324`), `pow(2, -1073)` gave `5e-324` (Math: `1e-323`), `pow(2, -1022)` gave `1.1125369292536007e-308` (Math: `2.2250738585072014e-308`), `pow(2, -1001)` gave `2.3331590462580472e-302` (Math: `4.6663180925160944e-302`). k = -1000 and above are exact. The random sweep of `pow` does not reach this range (x in [0.01, 100], y in [-20, 20]).
+
+### Notes (no test failed on these)
+
+- Bounds used are design 10.2's ("2 to 3" is taken as 3). The builder notes' table has 2 for most of those functions and 3 for `tanh`; a tighter bound would not have failed on the 20,000 seeded inputs of this round but was not asserted, as the design text does not state it.
+- `exp(1)` gives `2.7182818284590455` and `Math.exp(1)` `2.718281828459045` (1 ulp, inside the bound).
+- `y` is a reserved name in a figure's formulas, so the constant-argument test uses `val`.
