@@ -211,7 +211,7 @@ they do not clash with the open garbage batch (PH-24, PH-25 and any it adds).
 | PH-32 | B021 in space | `no_fire_grid` has no `suggest` when the figure has a fire elsewhere; errors.md wants `Fire(b.pos)`. | Tester failure 3. | medium | fixed (9a68f48) |
 | PH-33 | limits in space | Bodies in space with `burns` are not counted: 130 accepted (design 11.3: 64 burnable things a figure, all kinds together). | Tester failure 4. | medium | fixed (9a68f48) |
 | PH-34 | `burn3.ts`, `driver3.ts` | Solid shapes that burn in space are not built (R11 item 4, design 9.7 "A solid shape"). | Builder notes, "Left out". | medium | fixed (9a68f48) |
-| PH-35 | `smoke3.ts` speed | Every grid-in-space row is about 2× its goal: 24³ 4.0 ms Node (2), 15.5 ms Chrome 4× (8); 32³ 9.1 (4), 35.3 (8); flag over a fire 5.1 (2.5), 20.7 (8); seek 128 ms median (120). By design 11.6 the grid in space moves to Rust (approved by the product owner). | Builder notes, design 11.6. | high | to be implemented (next job: Rust for the grid in space) |
+| PH-35 | `smoke3.ts` speed | Every grid-in-space row is about 2× its goal: 24³ 4.0 ms Node (2), 15.5 ms Chrome 4× (8); 32³ 9.1 (4), 35.3 (8); flag over a fire 5.1 (2.5), 20.7 (8); seek 128 ms median (120). By design 11.6 the grid in space moves to Rust (approved by the product owner). | Builder notes, design 11.6. | high | fixed for 24³ (3c2c1f7), rest in PH-48 |
 | PH-36 | `world3.ts` `load` | `World3.load` re-normalises the quaternion of a body that burnt away, so `worldHash` can differ by about 1e-16 after a seek (no readout depends on it). Same class as PH-22, PH-23. | Builder notes. | low | to be implemented |
 
 **Fixes for PH-30 to PH-34** (the one fix round): make the tester's 6 failing tests pass without changing them, fix
@@ -232,3 +232,33 @@ Not fixed in this round (PH-35 and PH-36 stay as listed above). Found while fixi
 | Id | Where | What | Evidence | Harm | Status |
 |---|---|---|---|---|---|
 | PH-40 | `driver.ts`, `driver3.ts` `buildBurn`, `burnCentre`; `cloth.ts` `named9` | `flag with burns = true` (design 9.7's own example) and `with ignite` on a cloth are accepted and do nothing, in the plane and in space: a sheet's `burns` is read from its spec (the `Cloth(…, burns = x)` argument) and never from its `with` style, as a body's and a shape's are. `Ignite(flag)` right after it is refused with `not_burnable`, and a sheet that is meant to burn does not. | `g = Ground()`, `cold = Fire(Box((0, 2), 4, 4), 32)`, `flag = Cloth(Box((0, 2), 1.2, 1), 10, 6, mass = 0.2, pins = "top")`, `flag with burns = true`, `Ignite(flag)`: `not_burnable`. The same in space. | medium | to be implemented (read `burns` and `ignite` from the style over the spec as `bodyBurn` does; the cloth's `tears` for the engine comes from `spec.burns` in `clothDef`, so the spec must be changed too, or the style read where the cloth set is built) |
+
+## Review of 10.10 Rust grid in space (2026-11-19, one round)
+
+Read: builder notes 10.10, design 11.6 round 2, `test-report.md` 10.10 (41 new tests, all pass). Ran
+`packages/sdk/test/spec/physics-worker.test.ts` on this branch, on integration and on older commits.
+
+| Id | Where | What | Evidence | Harm | Status |
+|---|---|---|---|---|---|
+| PH-47 | `commands/physics/types.ts` `collectBuffers`, `driver.ts` / `driver3.ts` `ownedCells`, `packages/sdk/src/worker/physics-worker.ts` | The worker moves (transfers) the typed arrays of the cells it owns, but keeps the same arrays in its own figure. A cell that did not change since the last frame still holds a buffer that is now detached, so the next frame's transfer list has a detached buffer and `postMessage` throws `DataCloneError`; the worker's own readouts of that cell (`b.force`) read an empty array. 3 tests of `physics-worker.test.ts` fail on integration `b58cfa0`, also on `650e922` and `8677d89`, on Node 22, 24 and 26. | A probe of the transfer list: one frame lists `ArrayBuffer:0:detached` beside the drops' arrays. | high | fixed (bd21d83) |
+| PH-48 | `smoke3.ts`, cloth | Still over goal in Chrome with the CPU 4× slower: fire 32³ about 16 ms (8), flag over a fire about 12 ms (8); Node flag over a fire 2.7 ms (2.5). The flag's part is the cloth in TypeScript. | Builder notes 10.10. | medium | to be implemented |
+| PH-49 | `physics/wasm/kernels.ts` | The SIMD build cannot be chosen or seen through the public API, so tests cannot check it against the scalar build. | Tester report 10.10. | low | fixed (bd21d83) |
+
+PH-35 is fixed for the default grid (24³ meets Node 2 ms and Chrome 8 ms; seek 45 ms median); the rest is PH-48.
+
+**Fixes for PH-47 and PH-49** (the one fix round):
+
+- PH-47: the worker must never send a buffer it keeps. In `ownedCells` (plane and space), for each typed array a cell
+  value holds, put a copy of it into the outgoing cell and transfer the copy (the worker's own figure keeps its arrays);
+  skip copies of nothing that is detached. Find every place a worker reply transfers buffers (cells, smoke grids, drops,
+  waves, cloth, fire temperatures) and do the same. Design 9.6: one line saying the worker sends copies it moves. The 3
+  failing tests must pass unchanged; regression test: a figure whose body sleeps (its cell does not change) for 60
+  frames in the worker, then reads `b.force` in the worker and on the page, both right.
+- PH-49: export `physicsGridSimd(): boolean | undefined` (true when the grid in space uses the SIMD build) and a test
+  switch `setPhysicsGridSimd(on)`, then a regression test: the same fire 24³ film with SIMD on and off, every second.
+
+**As fixed (fix round of 10.10, commit bd21d83):**
+
+- PH-47: `ownedCells` (plane and space) now sends `cellForMove(cell, transfer)` (`commands/physics/types.ts`, replacing `collectBuffers`): a copy of every typed array in the cell's value (`forces`, `xs`, `ys`, `zs`, `heights`, `density`, `temp`, and lists of them), and the copy's buffer is what the reply moves. The worker's own figure keeps its arrays, so a cell that did not change is sent again next frame without a detached buffer, and its readouts read whole arrays. A cell with no typed array is sent as it is. `ownedCells` is the only place a worker reply lists buffers (`PhysicsWorkerState.cellsAt` is the only reply that moves any), so it covers cells, drops, waves, cloth points, smoke and fire grids. The 3 failing tests of `physics-worker.test.ts` pass unchanged. A copy a frame is the price (the page's frame copy, not memory kept by a step). Regression tests: in the plane and in space, a body asleep for 150 frames with liquid in the worker (no `worker_crashed`, the worker's own `forces` array whole, `b.force("gravity")` and `b.force("normal")` right in the worker and on the page and equal to a figure that never used a worker), and a test that no buffer the reply moves is one the worker's figure holds. Both fail on `d9c460b` and pass now.
+- PH-49: `physicsGridSimd(figure?)` (true when every grid in space the figure has runs the SIMD build, false for the scalar build or the TypeScript loops, undefined with no grid in space; with no figure, whether a grid built now would: `physicsGridSimdReady` in `kernels.ts`) and `setPhysicsGridSimd(on)` are exported from the kernel. Regression test `physics-grid-simd.test.ts`: a fire 24³ played 4 s with SIMD, without it and with the kernels off gives the same readouts and the same `density` and `temp` arrays every second, and each figure reports its build.
+- Physics set after the fixes: `npx vitest run packages/kernel/test/spec/physics packages/sdk apps/studio/test/physics.test.ts apps/studio/test/space.test.ts`: 35 files, 729 tests, all pass. `lib.rs` is unchanged, so the wasm is not rebuilt and the hash test and `physics-kernels-grid.test.ts` pass as they were.

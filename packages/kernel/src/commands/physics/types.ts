@@ -3,6 +3,7 @@
  * (`./driver`) writes a body's pose into its value after each pass.
  */
 import type {} from '../../contracts/values';
+import type { Cell } from '../../graph/types';
 import type { ShapeDef2 } from '../../physics/world2';
 
 declare module '../../contracts/values' {
@@ -130,20 +131,50 @@ export const DEFAULT_WORLD: WorldValue = Object.freeze({
 
 export const SHOW_WORDS = ['bodies', 'forces', 'speeds', 'contacts', 'none'] as const;
 
-/** The typed arrays inside a cell's value, to move to the page from the physics worker instead of copying (design 9.6). */
-export function collectBuffers(v: unknown, out: ArrayBuffer[], depth: number): void {
-  if (depth > 3 || typeof v !== 'object' || v === null) return;
+const BUFFER_KEYS = ['forces', 'xs', 'ys', 'zs', 'heights', 'density', 'temp'] as const;
+
+/**
+ * A copy of a cell's value for the physics worker's reply (design 9.6): every typed array in it is copied, the copy's
+ * buffer is added to `out` to move to the page, and the worker's own arrays stay whole (a cell that did not change
+ * is sent again next frame, and the worker reads it). A value with no typed array is returned as it is.
+ */
+export function copyForMove(v: unknown, out: ArrayBuffer[], depth: number): unknown {
+  if (depth > 3 || typeof v !== 'object' || v === null) return v;
   if (ArrayBuffer.isView(v)) {
-    const b = v.buffer;
-    if (b instanceof ArrayBuffer && !out.includes(b)) out.push(b);
-    return;
+    if (v instanceof DataView) return v;
+    const copy = (v as unknown as { slice(): ArrayBufferView }).slice();
+    const b = copy.buffer;
+    if (b instanceof ArrayBuffer) out.push(b);
+    return copy;
   }
   if (Array.isArray(v)) {
-    for (const x of v) collectBuffers(x, out, depth + 1);
-    return;
+    let list: unknown[] | undefined;
+    for (let i = 0; i < v.length; i++) {
+      const x = copyForMove(v[i], out, depth + 1);
+      if (x !== v[i]) {
+        list ??= v.slice();
+        list[i] = x;
+      }
+    }
+    return list ?? v;
   }
-  for (const k of ['forces', 'xs', 'ys', 'zs', 'heights', 'density', 'temp'] as const) {
-    const x = (v as Record<string, unknown>)[k];
-    if (x !== undefined) collectBuffers(x, out, depth + 1);
+  let made: Record<string, unknown> | undefined;
+  const o = v as Record<string, unknown>;
+  for (const k of BUFFER_KEYS) {
+    const x = o[k];
+    if (x === undefined) continue;
+    const y = copyForMove(x, out, depth + 1);
+    if (y !== x) {
+      made ??= { ...o };
+      made[k] = y;
+    }
   }
+  return made ?? v;
+}
+
+/** The cell as the worker sends it: a defined cell's value copied by `copyForMove`, its buffers added to `out`. */
+export function cellForMove(c: Cell, out: ArrayBuffer[]): Cell {
+  if (!c.defined) return c;
+  const value = copyForMove(c.value, out, 0);
+  return value === c.value ? c : { defined: true, value };
 }

@@ -28,6 +28,7 @@ import type { Ty } from '../../language/types';
 import { makePolygon } from '../geometry/polygons';
 import { polyhedron } from '../space/solids';
 import { polygonMass } from '../../physics/geom2';
+import { physicsGridSimdReady } from '../../physics/wasm/kernels';
 import { cos, sin } from '../../physics/math';
 import { FORCE_KINDS } from '../../physics/world2';
 import { PhysicsDriver } from './driver';
@@ -114,7 +115,7 @@ export function worldDriverOf(figure: Figure): PhysicsDriver | Physics3Driver {
 const DRIVERS3 = new WeakMap<object, Physics3Driver>();
 
 /**
- * Do the figure's cloth and liquid solvers run the Rust loops (design 11.6)? `true` when every solver the figure has now
+ * Do the figure's cloth, liquid and smoke-grid solvers run the Rust loops (design 11.6)? `true` when every solver the figure has now
  * does, `false` when one runs the TypeScript loops (kernels off, WebAssembly missing or failed to load, a solver built
  * before they were ready), `undefined` when the figure has no cloth or liquid solver yet. A figure whose physics runs in
  * a worker has no solver on its page: ask the worker's own figure (its reply carries the answer, `remoteInfo.kernels`).
@@ -127,7 +128,26 @@ export function physicsKernelsActive(figure: Figure): boolean | undefined {
     const sets: { readonly usesKernels: boolean }[] = [];
     if (d.cloth) sets.push(d.cloth);
     if (d instanceof Physics3Driver && d.fluid) sets.push(d.fluid);
+    if (d instanceof Physics3Driver) for (const sm of d.smokeMembers) sets.push(sm.grid);
     for (const s of sets) answer = (answer ?? true) && s.usesKernels;
+  }
+  return answer;
+}
+
+/**
+ * Does the grid in space run the SIMD build of the Rust loops (design 11.6 round 2)? With a figure: `true` when every
+ * smoke or fire grid in space it has now does, `false` when one runs the scalar build or the TypeScript loops (kernels
+ * off, SIMD switched off with `setPhysicsGridSimd(false)`, an engine without SIMD, a grid built before the module was
+ * ready), `undefined` when the figure has no grid in space (or, for a figure whose physics runs in a worker, none on
+ * the page). With no figure: whether a grid built now would (`physicsGridSimdReady`).
+ */
+export function physicsGridSimd(figure?: Figure): boolean | undefined {
+  if (!figure) return physicsGridSimdReady();
+  const drivers = [...figure.worldDrivers(), DRIVERS3.get(figure)];
+  let answer: boolean | undefined;
+  for (const d of drivers) {
+    if (!(d instanceof Physics3Driver)) continue;
+    for (const sm of d.smokeMembers) answer = (answer ?? true) && sm.grid.usesSimd;
   }
   return answer;
 }

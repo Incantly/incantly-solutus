@@ -9,6 +9,7 @@
 import { COOLING, DROP_COOLS, FLAME_AT, IGNITE_AT, LIFT_PER_DEGREE, RAMP, SINK_PER_SMOKE } from './fire2';
 import type { FireParams } from './fire2';
 import type { Smoke3 } from './smoke3';
+import { GF, GI, GRID_OF } from './wasm/kernels';
 
 /*
  * The plane's numbers, held in constants of this file: the loops below read them in every cell, and a binding imported
@@ -33,6 +34,12 @@ export interface DropsView3 {
 
 /** `T` and `F` are carried back along the flow, as smoke is, from the air cells round the point only (no mass rescaling). */
 export function advectFire3(g: Smoke3, h: number): void {
+  const kn = g.kn;
+  if (kn) {
+    kn.fn.grid3_advect_fire(kn.gi, kn.gf);
+    g.swapFire();
+    return;
+  }
   const n = g.n;
   const nn = n * n;
   const W1 = n + 1;
@@ -111,6 +118,11 @@ export function advectFire3(g: Smoke3, h: number): void {
 
 /** Heat lifts and smoke sinks along +z: a = 0.01 T − 0.5 s on each face across z, from the mean of the two cells beside it. */
 export function fireLift3(g: Smoke3, h: number): void {
+  const kn = g.kn;
+  if (kn) {
+    kn.fn.grid3_fire_lift(kn.gi, kn.gf);
+    return;
+  }
   const n = g.n;
   const nn = n * n;
   const { T, s, w } = g;
@@ -141,6 +153,11 @@ export function fireLift3(g: Smoke3, h: number): void {
 export function confine3(g: Smoke3, h: number): void {
   const n = g.n;
   if (n < 3) return;
+  const kn = g.kn;
+  if (kn) {
+    kn.fn.grid3_swirl(kn.gi, kn.gf);
+    return;
+  }
   const nn = n * n;
   const W1 = n + 1;
   const { u, v, w, own, ca, cb, cc, oa, ob, oc, om } = g;
@@ -241,6 +258,29 @@ export function confine3(g: Smoke3, h: number): void {
   }
 }
 
+/**
+ * Burning, the source, cooling and water, in the step's order. With the Rust loops they are one call: each cell's burning,
+ * source and cooling read and write that cell only, so one pass over the cells gives the bits of three; the cells the drops
+ * are in go to it as a list, and it takes them in drop order.
+ */
+export function fireStep3(g: Smoke3, h: number, drops: DropsView3 | undefined): void {
+  const kn = g.kn;
+  const cells = g.dropCells;
+  if (kn && (!drops || drops.n <= cells.length)) {
+    let m = 0;
+    if (drops) {
+      for (; m < drops.n; m++) cells[m] = g.cellOfDrop(drops.x, drops.y, drops.z, m);
+    }
+    kn.I[GI.ndrops] = m;
+    kn.fn.grid3_fire(kn.gi, kn.gf);
+    return;
+  }
+  burnFuel3(g, h);
+  fireSource3(g, h);
+  coolFire3(g, h);
+  quench3(g, drops);
+}
+
 /** Fuel burns where it is hot enough: it makes heat and smoke (design 9.7 step 4). */
 export function burnFuel3(g: Smoke3, h: number): void {
   const fire = g.fire as FireParams;
@@ -307,7 +347,7 @@ export function quench3(g: Smoke3, drops: DropsView3 | undefined): void {
   if (!drops || drops.n === 0) return;
   const { T, F, own } = g;
   for (let m = 0; m < drops.n; m++) {
-    const c = g.cellAt(drops.x[m] as number, drops.y[m] as number, drops.z[m] as number);
+    const c = g.cellOfDrop(drops.x, drops.y, drops.z, m);
     if (c < 0 || (own[c] as number) >= 0) continue;
     wet[c] = 1;
     const t = T[c] as number;
@@ -318,6 +358,11 @@ export function quench3(g: Smoke3, drops: DropsView3 | undefined): void {
 
 /** The hottest cell, °C. */
 export function hottest3(T: Float32Array): number {
+  const kn = GRID_OF.get(T);
+  if (kn) {
+    kn.fn.grid3_hottest(kn.gi, kn.gf);
+    return kn.F[GF.out] as number;
+  }
   let m = 0;
   for (let c = 0; c < T.length; c++) if ((T[c] as number) > m) m = T[c] as number;
   return m;
@@ -325,6 +370,11 @@ export function hottest3(T: Float32Array): number {
 
 /** The fuel in the grid: Σ F × dx × dy × dz. */
 export function fuelSum3(g: Smoke3): number {
+  const kn = g.kn;
+  if (kn) {
+    kn.fn.grid3_fuel_sum(kn.gi, kn.gf);
+    return (kn.F[GF.out] as number) * g.dx * g.dy * g.dz;
+  }
   let m = 0;
   const F = g.F;
   for (let c = 0; c < F.length; c++) m += F[c] as number;
@@ -333,6 +383,11 @@ export function fuelSum3(g: Smoke3): number {
 
 /** Cells above 500 °C. */
 export function flameCells3(T: Float32Array): number {
+  const kn = GRID_OF.get(T);
+  if (kn) {
+    kn.fn.grid3_flames(kn.gi, kn.gf);
+    return kn.F[GF.out] as number;
+  }
   let k = 0;
   for (let c = 0; c < T.length; c++) if ((T[c] as number) > FLAME) k++;
   return k;

@@ -35,7 +35,7 @@ Apache-2.0 asks us to keep its licence and notice files and to mark changes we m
 
 | Tool | Job |
 |---|---|
-| Rust (`rustc`, `cargo`, the `wasm32-unknown-unknown` target), no crates | Builds `packages/kernel/src/physics/wasm/kernels-wasm.ts` from `packages/kernel/wasm/src/lib.rs` with `npm run build:wasm` (physics design 11.6, approved by the product owner on 2026-11-18). The generated file is committed with the SHA-256 of its bytes in its header, so the repository, CI and every other developer need no Rust; `node packages/kernel/wasm/build.mjs --check` tells whether it matches the source. The crate has no dependencies (`Cargo.lock` lists only itself), so nothing here ships a third-party licence. |
+| Rust (`rustc`, `cargo`, the `wasm32-unknown-unknown` target), no crates | Builds `packages/kernel/src/physics/wasm/kernels-wasm.ts` from `packages/kernel/wasm/src/lib.rs` with `npm run build:wasm` (physics design 11.6, approved by the product owner on 2026-11-18). The generated file is committed with the SHA-256 of its bytes in its header, so the repository, CI and every other developer need no Rust; `node packages/kernel/wasm/build.mjs --check` tells whether it matches the source. The crate has no dependencies (`Cargo.lock` lists only itself), so nothing here ships a third-party licence. The same source is built twice, without and with `-C target-feature=+simd128` (the second for the grid in space; both are in the generated file and give the same bits). |
 
 ## Not used
 

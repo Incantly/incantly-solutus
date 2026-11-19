@@ -54,7 +54,7 @@ try {
   await page.waitForFunction(() => 'physicsBench' in window, null, { timeout: 30_000 });
   const kernels = await page.evaluate(() => window.physicsKernels);
   out(`Chrome ${browser.version()}, CPU ×${rate}, ${warm} s warm-up, ${run} s of frames (two steps each)`);
-  out(`WebAssembly kernels: ${kernels.wanted ? 'on' : 'off'}, ${kernels.compiled ? 'compiled' : 'not compiled'}, ${kernels.running ? 'running' : 'not running'}`);
+  out(`WebAssembly kernels: ${kernels.wanted ? 'on' : 'off'}, ${kernels.compiled ? 'compiled' : 'not compiled'}, ${kernels.running ? 'running' : 'not running'}; grid in space: ${kernels.grid ? 'running' : 'not running'}${kernels.gridSimd ? ' with SIMD' : ''}`);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate });
   const over = [];

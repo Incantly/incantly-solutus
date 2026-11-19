@@ -29,7 +29,7 @@ const make = (lines: readonly string[]): Figure => {
 };
 
 /** A worker in the same thread: the handler answers at once, through structured clones with the buffers moved. */
-function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; moved: number[]; posts: ToWorker[] } {
+function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; moved: number[]; posts: ToWorker[]; state: PhysicsWorkerState } {
   const state = new PhysicsWorkerState();
   let cb: ((m: FromWorker) => void) | undefined;
   let onErr: ((why: string) => void) | undefined;
@@ -56,7 +56,7 @@ function sameThread(opts: { failAt?: number } = {}): { channel: PhysicsChannel; 
       cb = undefined;
     },
   };
-  return { channel, moved, posts };
+  return { channel, moved, posts, state };
 }
 
 const drops = (f: Figure): Float32Array => {
@@ -200,5 +200,65 @@ describe('the physics worker (design 9.6)', () => {
     host.frame(0.5);
     expect(asked).toBe(0);
     expect(physicsOf(page).world).toBeDefined();
+  });
+});
+
+/** A tank cut in two by a wall: water on the left, a box asleep on the floor on the right, and two readouts of its forces. */
+const SLEEPER = [
+  'tank = Polyline((-6, 6), (-6, 0), (6, 0), (6, 6))',
+  'tank with solid = true',
+  'wall = Segment((0, 0), (0, 4))',
+  'wall with solid = true',
+  'water = Liquid(Box((-4, 1), 3, 2), 400)',
+  'b = Body(Box((4, 0.5), 1, 1), mass = 2)',
+  'fg = b.force("gravity")',
+  'fn = b.force("normal")',
+];
+
+describe('what the worker moves is a copy (PH-47)', () => {
+  it('a body that sleeps for 60 frames reads its forces in the worker and on the page, and no frame throws', () => {
+    const page = make(SLEEPER);
+    const alone = make(SLEEPER);
+    const { channel, state, moved } = sameThread();
+    const host = new PhysicsWorkerHost(page, () => channel);
+    for (let k = 1; k <= 150; k++) {
+      const t = k / 60;
+      page.setClock(t);
+      host.frame(t);
+      alone.setClock(t);
+    }
+    expect(host.running).toBe(true);
+    expect(host.takeWarnings().map((x) => x.kind)).not.toContain('worker_crashed');
+    // the box is asleep (the readout in the cell did not change for many frames), and the frames still moved the drops
+    expect(physicsOf(page).remoteInfo.awake).toBe(0);
+    expect(Math.min(...moved.slice(2))).toBeGreaterThanOrEqual(1);
+    // in the worker: its own figure still holds whole arrays, and the readouts are right
+    const inside = (state as unknown as { figure: Figure }).figure;
+    const body = inside.value('b') as { forces?: Float64Array };
+    expect(body.forces?.byteLength).toBeGreaterThan(0);
+    const fg = inside.value('fg') as { x: number; y: number };
+    const fn = inside.value('fn') as { x: number; y: number };
+    expect(fg.y).toBeCloseTo(-2 * 9.8, 6);
+    expect(fn.y).toBeCloseTo(2 * 9.8, 3);
+    // on the page: the same readouts, and the same as a figure that never used a worker
+    expect(page.value('fg')).toEqual(fg);
+    expect(page.value('fn')).toEqual(fn);
+    expect(page.value('fn')).toEqual(alone.value('fn'));
+  });
+
+  it('the arrays in a reply are copies: the worker\'s own arrays are never detached by a frame', () => {
+    const page = make(SLEEPER);
+    const { state } = sameThread();
+    state.handle({ k: 'load', seq: 1, script: page.toScript() });
+    const inside = (state as unknown as { figure: Figure }).figure;
+    for (let k = 1; k <= 30; k++) {
+      const { reply, transfer } = state.handle({ k: 'frame', seq: 1 + k, t: k / 60, sets: [], lines: [] });
+      const water = inside.value('water') as { xs: Float32Array };
+      const held = water.xs.buffer;
+      for (const b of transfer) expect(b).not.toBe(held);
+      structuredClone(reply, { transfer });
+      expect(water.xs.byteLength).toBeGreaterThan(0);
+      expect(held.byteLength).toBeGreaterThan(0);
+    }
   });
 });

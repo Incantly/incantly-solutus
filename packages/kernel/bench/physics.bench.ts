@@ -820,28 +820,42 @@ describe('smoke and fire in space (design 9.8, 11.2, round 11B)', () => {
     expect((kb * 60) / 1024).toBeLessThan(32);
   });
 
-  it('a step of the grid in space makes no garbage after the first second (no collection runs)', async () => {
-    const f = load(['g = Ground()', 'blaze = Fire((0, 0, 0))', 'ball = Body(Sphere((0.6, 0, 1.2), 0.3), mass = 0.5)', 'stone = Body(Box((-0.5, 0, 0.5), 0.3, 0.3, 0.3), burns = 20, ignite = 150)']);
-    for (let k = 1; k <= 60; k++) f.setClock(k / 60);
-    const d = physics3Of(f);
-    const sm = d.smokeMembers[0];
-    const w = d.world;
-    if (!sm || !w) throw new Error('no grid in space');
-    const g = sm.grid;
-    const arrays = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
-    let gcs = 0;
-    const obs = new PerformanceObserver((list) => {
-      gcs += list.getEntries().length;
+  // kernels off first: a collection frees the Rust module of the row before, and the code that held it runs in the interpreter
+  for (const kernels of [false, true]) {
+    it(`a step of the grid in space makes no garbage after the first second (no collection runs), kernels ${kernels ? 'on' : 'off'}`, async () => {
+      setPhysicsKernels(kernels);
+      // as in the cloth rows: the Rust module of the row before goes now, before the warm-up makes the code again
+      collectNow();
+      try {
+        // with the Rust loops the water's list of drops is in the step too; the TypeScript loop over the drops makes memory in
+        // the test runner for a long while (it reads imported bindings through the loader), which is not what this row is about
+        const rain = kernels ? ['rain = Liquid(Box((0, 0, 2.2), 0.6, 0.6, 0.4), 200)'] : [];
+        const f = load(['g = Ground()', 'blaze = Fire((0, 0, 0))', 'ball = Body(Sphere((0.6, 0, 1.2), 0.3), mass = 0.5)', 'stone = Body(Box((-0.5, 0, 0.5), 0.3, 0.3, 0.3), burns = 20, ignite = 150)', ...rain]);
+        for (let k = 1; k <= 60; k++) f.setClock(k / 60);
+        const d = physics3Of(f);
+        const sm = d.smokeMembers[0];
+        const w = d.world;
+        if (!sm || !w) throw new Error('no grid in space');
+        const g = sm.grid;
+        expect(g.usesKernels).toBe(kernels);
+        const arrays = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
+        let gcs = 0;
+        const obs = new PerformanceObserver((list) => {
+          gcs += list.getEntries().length;
+        });
+        collectNow();
+        obs.observe({ entryTypes: ['gc'] });
+        for (let k = 0; k < 200; k++) g.step(w, 1 / 60, d.fluid?.ps);
+        await new Promise((r) => setTimeout(r, 50));
+        obs.disconnect();
+        console.log(`collections during 200 steps of a 24³ fire, kernels ${kernels ? 'on' : 'off'}: ${gcs}`);
+        // the grid swaps its two buffers each step: after an even number of steps, the very same arrays
+        const now = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
+        for (let i = 0; i < now.length; i++) expect(now[i] === arrays[i]).toBe(true);
+        expect(gcs).toBe(0);
+      } finally {
+        setPhysicsKernels(true);
+      }
     });
-    collectNow();
-    obs.observe({ entryTypes: ['gc'] });
-    for (let k = 0; k < 200; k++) g.step(w, 1 / 60);
-    await new Promise((r) => setTimeout(r, 50));
-    obs.disconnect();
-    console.log(`collections during 200 steps of a 24³ fire: ${gcs}`);
-    // the grid swaps its two buffers each step: after an even number of steps, the very same arrays
-    const now = [g.u, g.v, g.w, g.s, g.p, g.T, g.F, g.fx];
-    for (let i = 0; i < now.length; i++) expect(now[i] === arrays[i]).toBe(true);
-    expect(gcs).toBe(0);
-  });
+  }
 });
