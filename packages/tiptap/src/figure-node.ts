@@ -13,6 +13,7 @@ import type { IncantlyFigureAttrs } from './attrs';
 import { FIGURE_NAME, figuresIn, findFigure } from './doc';
 import { tiptapError } from './errors';
 import { aiUnavailable, startAsk } from './ai';
+import { createFigureView } from './node-view';
 import { reportError } from './report';
 import type { IncantlyTiptapOptions, InsertFigureOptions } from './types';
 import { DEFAULT_OPTIONS } from './types';
@@ -138,6 +139,10 @@ export const IncantlyFigure = Node.create<IncantlyTiptapOptions>({
       },
       ...children,
     ] as unknown as ['figure', Record<string, string>, ...unknown[]];
+  },
+
+  addNodeView() {
+    return createFigureView(this.editor, this.options);
   },
 
   addCommands() {
