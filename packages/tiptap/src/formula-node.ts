@@ -1,12 +1,12 @@
 /**
- * The `incantlyFormula` node (design 1.8): an inline atom that shows the live value of an expression read from a
+ * The `incantlyFormula` node (design 11): an inline atom that shows the live value of an expression read from a
  * figure in the document, as typeset text; with no figure it shows the expression as a maths text. A failing
  * expression shows itself with an error mark, and the message on hover.
  */
 import { Node } from '@tiptap/core';
 import type { Editor, NodeViewRenderer } from '@tiptap/core';
 import type { Node as PmNode } from '@tiptap/pm/model';
-import type { NodeView } from '@tiptap/pm/view';
+import type { EditorView, NodeView } from '@tiptap/pm/view';
 import { prettyText } from '@incantly/kernel';
 import { math } from '@incantly/view';
 import { tiptapError } from './errors';
@@ -83,9 +83,10 @@ export class FormulaNodeView implements NodeView {
     private readonly editor: Editor,
     private readonly options: IncantlyTiptapOptions,
     node: PmNode,
+    view: EditorView,
   ) {
     this.node = node;
-    this.doc = editor.view.dom.ownerDocument;
+    this.doc = view.dom.ownerDocument;
     addStyles(this.doc, 'incantly-tiptap-formula-style', FORMULA_CSS);
     this.runtime = runtimeOf(editor, options);
     this.dom = this.doc.createElement('span');
@@ -241,7 +242,7 @@ export const IncantlyFormula = Node.create<IncantlyTiptapOptions>({
   addNodeView(): NodeViewRenderer {
     const editor = this.editor;
     const options = this.options;
-    return ({ node }) => new FormulaNodeView(editor, options, node);
+    return ({ node, view }) => new FormulaNodeView(editor, options, node, view);
   },
 
   addCommands() {

@@ -1,5 +1,5 @@
 /**
- * Export (design 1.7): fresh pictures for every figure with no mount, and a Markdown writer. `editor.getHTML()` already
+ * Export (design 12): fresh pictures for every figure with no mount, and a Markdown writer. `editor.getHTML()` already
  * writes each figure as its picture with the script kept as data (the node's `renderHTML`).
  */
 import type { Editor, JSONContent } from '@tiptap/core';

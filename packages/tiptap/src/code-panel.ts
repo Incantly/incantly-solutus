@@ -262,6 +262,8 @@ export class CodePanel {
     this.foot.replaceChildren();
     const msg = this.doc.createElement('span');
     msg.textContent = 'Someone else changed this figure first, so their lines are shown. Your lines are kept below.';
+    const label = this.doc.createElement('strong');
+    label.textContent = 'Your lines';
     const box = this.doc.createElement('pre');
     box.className = 'inc-tt-kept';
     box.textContent = mine;
@@ -281,7 +283,7 @@ export class CodePanel {
     drop.className = 'inc-tt-btn';
     drop.textContent = 'Discard my lines';
     drop.addEventListener('click', () => this.clearConflict());
-    this.foot.append(msg, box, again, drop);
+    this.foot.append(msg, label, box, again, drop);
   }
 
   private clearConflict(): void {

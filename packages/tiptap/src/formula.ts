@@ -1,5 +1,5 @@
 /**
- * Reading the value of an expression from a figure (design 1.8) and writing it with a text format word of the
+ * Reading the value of an expression from a figure (design 11) and writing it with a text format word of the
  * text-logic area (`3sf`, `deg`, `pct`, ...). No Tiptap import. The figure is never changed: `preview` of the kernel
  * checks and evaluates a line against a figure without adding an object.
  */

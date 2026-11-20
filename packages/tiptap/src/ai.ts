@@ -1,5 +1,5 @@
 /**
- * The AI client (design 4 and 9, agent.md): the request to `@incantly/server`, the streamed lines, and the job that
+ * The AI client (design 4, 9 and 10, agent.md): the request to `@incantly/server`, the streamed lines, and the job that
  * applies them to a figure and commits the script once. The model writes only lines; the extension owns the document.
  */
 import type { Editor } from '@tiptap/core';
