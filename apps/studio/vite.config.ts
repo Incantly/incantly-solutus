@@ -7,7 +7,13 @@ export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
-    // the studio and the embed demo page
-    rollupOptions: { input: { main: fileURLToPath(new URL('index.html', import.meta.url)), embed: fileURLToPath(new URL('embed.html', import.meta.url)) } },
+    // the studio, the embed demo page and the notes demo page
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('index.html', import.meta.url)),
+        embed: fileURLToPath(new URL('embed.html', import.meta.url)),
+        notes: fileURLToPath(new URL('notes.html', import.meta.url)),
+      },
+    },
   },
 });
