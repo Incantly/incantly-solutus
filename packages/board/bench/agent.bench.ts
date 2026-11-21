@@ -32,6 +32,22 @@ function boardWith(n: number): Board {
   return board;
 }
 
+/** A headless board with `n` rects packed over the view (40 by 30 units, 20 by 15 apart): no spot in view is free. */
+function packedBoard(n: number): Board {
+  const board = must(createBoard({ agent: { reducedMotion: true } }));
+  const { core } = board;
+  const page = core.pages.current as string;
+  must(
+    core.store.change('host', (tx) => {
+      for (let i = 0; i < n; i++) {
+        const r = putNewShape(tx, core.store, { kind: 'rect', page, x: (i % 64) * 20, y: Math.floor(i / 64) * 15, props: { w: 40, h: 30 } });
+        if (!r.ok) throw new Error(r.message);
+      }
+    }, { history: false }),
+  );
+  return board;
+}
+
 /** Best of `runs` timed calls after `warm` warm-up calls, in ms. */
 async function best(fn: () => Promise<void> | void, runs = 12, warm = 3): Promise<number> {
   for (let i = 0; i < warm; i++) await fn();
@@ -124,6 +140,19 @@ describe('board agent tools (agent.md), Node, warm', () => {
     };
     const ms = await best(once);
     report("place 'free', 2,000 shapes around", ms, 'ms', FRAME_MS);
+    expect(ms).toBeLessThan(FRAME_MS);
+  });
+
+  it("placing 'free' in a view packed with 2,000 shapes (no spot left, the whole search runs) in under 16 ms", async () => {
+    const board = packedBoard(2000);
+    const runner = board.agent.runner;
+    const once = async (): Promise<void> => {
+      const results = must(await runner.run({ actions: [{ op: 'shape', kind: 'rect', at: 'free', w: 100, h: 60 }] }));
+      if (!results[0]?.ok) throw new Error('the placement failed');
+      must(board.core.history.undo());
+    };
+    const ms = await best(once);
+    report("place 'free', view packed, 2,000 shapes", ms, 'ms', FRAME_MS);
     expect(ms).toBeLessThan(FRAME_MS);
   });
 });

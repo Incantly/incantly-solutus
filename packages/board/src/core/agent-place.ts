@@ -103,19 +103,61 @@ function nearSpot(near: Bounds, side: Side, w: number, h: number, occupied: read
   return beside(far, side, w, h);
 }
 
-/** The nearest empty spot to the middle of the view that lies wholly in view; below all content when the view is full. */
-function freeSpot(view: Bounds, w: number, h: number, occupied: readonly Bounds[]): { x: number; y: number } {
-  const vw = view.maxX - view.minX;
-  const vh = view.maxY - view.minY;
-  const step = Math.max(24, vw / 40, vh / 40);
-  const cx = (view.minX + view.maxX) / 2;
-  const cy = (view.minY + view.maxY) / 2;
-  const spots: { x: number; y: number; d: number }[] = [];
-  for (let y = view.minY + PLACE_GAP; y + h <= view.maxY - PLACE_GAP + 0.001; y += step) {
-    for (let x = view.minX + PLACE_GAP; x + w <= view.maxX - PLACE_GAP + 0.001; x += step) spots.push({ x, y, d: Math.hypot(x + w / 2 - cx, y + h / 2 - cy) });
+/** Kept off an edge so a rounding error never puts a spot back inside the box it was moved clear of. */
+const EDGE = 1e-6;
+
+/** The `[from, to]` stretches of `[lo, hi]` that no open interval in `blocked` (sorted by start) covers. */
+function clearStretches(lo: number, hi: number, blocked: readonly (readonly [number, number])[]): [number, number][] {
+  const out: [number, number][] = [];
+  let at = lo;
+  for (const [from, to] of blocked) {
+    if (from > at) out.push([at, Math.min(from, hi)]);
+    if (to > at) at = to;
+    if (at > hi) return out;
   }
-  spots.sort((a, b) => a.d - b.d);
-  for (const s of spots) if (isFree(boxAt(s.x, s.y, w, h), occupied)) return { x: s.x, y: s.y };
+  if (at <= hi) out.push([at, hi]);
+  return out;
+}
+
+/**
+ * The nearest empty spot to the middle of the view that lies wholly in view; below all content when the view is full.
+ * A spot is where the box's corner may be: every shape forbids a rectangle of corners (its box grown by the new box's
+ * size and the air), so a spot lies on a row at the view's edge, the middle, or an edge of such a rectangle. Rows are
+ * tried nearest to the middle first, and on a row the clear stretches between the forbidden ones are cut at the corner
+ * nearest the middle; the search stops when the rows left cannot beat the spot found.
+ */
+function freeSpot(view: Bounds, w: number, h: number, occupied: readonly Bounds[]): { x: number; y: number } {
+  const lo = { x: view.minX + PLACE_GAP, y: view.minY + PLACE_GAP };
+  const hi = { x: view.maxX - PLACE_GAP - w, y: view.maxY - PLACE_GAP - h };
+  if (hi.x >= lo.x && hi.y >= lo.y) {
+    const want = { x: Math.min(hi.x, Math.max(lo.x, (view.minX + view.maxX - w) / 2)), y: Math.min(hi.y, Math.max(lo.y, (view.minY + view.maxY - h) / 2)) };
+    const forbidden: { x0: number; x1: number; y0: number; y1: number }[] = [];
+    const rows = new Set<number>([lo.y, hi.y, want.y]);
+    const edge = (y: number): void => {
+      if (y >= lo.y && y <= hi.y) rows.add(y);
+    };
+    for (const o of occupied) {
+      const f = { x0: o.minX - AIR - w - EDGE, x1: o.maxX + AIR + EDGE, y0: o.minY - AIR - h - EDGE, y1: o.maxY + AIR + EDGE };
+      if (f.x1 <= lo.x || f.x0 >= hi.x || f.y1 <= lo.y || f.y0 >= hi.y) continue;
+      forbidden.push(f);
+      edge(f.y0);
+      edge(f.y1);
+    }
+    forbidden.sort((a, b) => a.x0 - b.x0);
+    const ordered = [...rows].sort((a, b) => Math.abs(a - want.y) - Math.abs(b - want.y));
+    let best: { x: number; y: number; d: number } | undefined;
+    for (const y of ordered) {
+      if (best !== undefined && Math.abs(y - want.y) >= best.d) break;
+      const blocked: [number, number][] = [];
+      for (const f of forbidden) if (f.y0 < y && y < f.y1) blocked.push([f.x0, f.x1]);
+      for (const [from, to] of clearStretches(lo.x, hi.x, blocked)) {
+        const x = Math.min(to, Math.max(from, want.x));
+        const d = Math.hypot(x - want.x, y - want.y);
+        if (best === undefined || d < best.d) best = { x, y, d };
+      }
+    }
+    if (best !== undefined) return { x: best.x, y: best.y };
+  }
   let bottom = view.maxY;
   for (const o of occupied) bottom = Math.max(bottom, o.maxY);
   return { x: view.minX + PLACE_GAP, y: bottom + PLACE_GAP };
