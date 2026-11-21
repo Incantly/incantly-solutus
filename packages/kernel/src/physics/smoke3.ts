@@ -29,7 +29,7 @@ import { GF, GI, GRID_OF, KernelArena, PLAIN } from './wasm/kernels';
 import type { World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
 import { StateMachine } from '../contracts/state-machine';
-import { GRID_MACHINE } from './grid-life';
+import { GRID_MACHINE, restoreLife } from './grid-life';
 
 /** The most bodies the Rust solid-face loop has room for (design 11.3: 1,000 bodies), and the most drops the fire's water list holds (2,000). */
 const BODY_CAP = 1024;
@@ -1611,7 +1611,7 @@ export class Smoke3 {
   }
 
   load(src: Float64Array): void {
-    this.life.send(src[1] === 1 ? 'blowUp' : 'reset');
+    restoreLife(this.life, src[1] === 1);
     this.wallsMoved++;
     const nb = src[2] as number;
     this.alive = src[3] === 1;

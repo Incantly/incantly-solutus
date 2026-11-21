@@ -83,7 +83,9 @@ interface BoardPainter {
 - Every write is a **transaction**: `board.change(origin, fn)`. All the writes in one transaction are checked against the kind's schema, applied together, and sent to listeners as one diff `{ added, updated, removed }`. `origin` is `user`, `model`, `host` or `remote`, as for kernel lines.
 - **Reactivity**: listeners get diffs; derived values (geometry, bounds, the spatial index, page thumbnails) are cached per record and dropped when that record changes. Nothing recomputes for a record that did not change.
 - **History**: one undo stack per document. A transaction is one step; a drag or a stroke is one step however many samples it had. A model's transactions are steps too, so a learner can undo an agent. `history: false` writes (camera, selection, pictures) are not steps.
-- Limits: 10,000 shapes per page, 100 pages per document, 2 million ink points per page, 50 MB of assets per document. Over a limit, the transaction is refused (`errors.md`).
+- **Props are never written in place; a change writes a new record.** A stored record and its `props` are frozen (shallow) when they are written, so a write in place fails. Every copy of a record (duplicate page, and paste in round 3) gives the copy its own `props` and `meta` through `copyProps`, a deep copy of plain data and typed arrays, so a copy shares nothing with the original or with the undo history.
+- **Errors** have the shape of the SDK and the Tiptap extension, `{ ok: false, kind, message, hint?, detail? }`, not the kernel's line error (a board error has no line or column). `errors.md` lists the kinds.
+- Limits: 10,000 shapes per page, 100 pages per document, 2 million ink points per page, 50 MB of assets per document. Over a limit, the transaction is refused (`errors.md`); a load does not test the limits, so a board that a lowered limit would refuse still opens.
 
 Records:
 

@@ -70,6 +70,49 @@ tester.run('state-union-type', rules['state-union-type'], {
   ],
 });
 
+tester.run('state-table-refuses', rules['state-table-refuses'], {
+  valid: [
+    // rows differ
+    "const A_MACHINE: MachineTable<S, E> = { idle: { go: 'live' }, live: { stop: 'idle' } };",
+    // same events, different targets
+    "const A_MACHINE = { a: { go: 'x' }, b: { go: 'y' } };",
+    // same targets, different events
+    "const A_MACHINE = { a: { go: 'x' }, b: { run: 'x' } };",
+    // a row that refuses everything next to one that does not
+    "const A_MACHINE = { live: { close: 'closed' }, closed: {} };",
+    // one row cannot be compared with another
+    "const A_MACHINE = { only: { go: 'only' } };",
+    // not a *_MACHINE
+    "const TABLE = { a: { go: 'x' }, b: { go: 'x' } };",
+    // rows that are different names
+    'const A_MACHINE = { a: ROW_A, b: ROW_B };',
+    // a table that is not an object literal is out of reach of this rule
+    'const A_MACHINE = makeTable();',
+  ],
+  invalid: [
+    {
+      code: "const PAGES_MACHINE: MachineTable<S, E> = { a: ANY, b: ANY, c: ANY };",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = { a: { go: 'x', stop: 'y' }, b: { stop: 'y', go: 'x' } };",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = { a: { go: 'x' }, b: { go: 'x' } } as const;",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = Object.freeze({ a: { go: 'x' }, b: { go: 'x' } });",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: 'const A_MACHINE = { a: {}, b: {} };',
+      errors: [{ messageId: 'same' }],
+    },
+  ],
+});
+
 tester.run('state-table-required', rules['state-table-required'], {
   valid: ['transition(FIGURE_MACHINE, s, "go");', 'new StateMachine(machines.JOB_MACHINE, "idle");', 'canTransition(T_MACHINE, s, e);', 'other({}, s);'],
   invalid: [

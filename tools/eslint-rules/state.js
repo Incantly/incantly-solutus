@@ -181,6 +181,49 @@ export const tableRequired = {
   },
 };
 
+/** The table's object literal, through `as`, `satisfies` and `Object.freeze(...)`, or undefined. */
+function tableObject(init) {
+  let node = init;
+  for (;;) {
+    if (!node) return undefined;
+    if (node.type === 'TSAsExpression' || node.type === 'TSSatisfiesExpression' || node.type === 'TSNonNullExpression') node = node.expression;
+    else if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && memberName(node.callee) === 'freeze' && node.arguments.length === 1) node = node.arguments[0];
+    else break;
+  }
+  return node.type === 'ObjectExpression' ? node : undefined;
+}
+
+export const tableRefuses = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A *_MACHINE table must refuse some move: its rows may not all be the same.' },
+    schema: [],
+    messages: {
+      same: '`{{name}}` has the same row in every state, so it refuses nothing. A table that refuses nothing is a value: derive it, or write only the moves that may happen.',
+    },
+  },
+  create(context) {
+    const text = (node) => context.sourceCode.getText(node);
+    /** The row as sorted `event: target` texts, or undefined when it is not an object literal. */
+    const shapeOf = (value) => (value.type === 'ObjectExpression' ? value.properties.map(text).sort().join(',') : undefined);
+    return {
+      VariableDeclarator(node) {
+        if (node.id.type !== 'Identifier' || !/_MACHINE$/.test(node.id.name)) return;
+        const table = tableObject(node.init);
+        if (!table) return;
+        const rows = table.properties.filter((p) => p.type === 'Property');
+        if (rows.length < 2 || rows.length !== table.properties.length) return;
+        const values = rows.map((p) => p.value);
+        const same =
+          values.every((v) => v.type === 'Identifier') ? values.every((v) => v.name === values[0].name)
+            : values.every((v) => v.type === 'ObjectExpression') ? values.every((v) => shapeOf(v) === shapeOf(values[0]))
+              : false;
+        if (same) context.report({ node: node.id, messageId: 'same', data: { name: node.id.name } });
+      },
+    };
+  },
+};
+
 export const noStaleAfterAwait = {
   meta: {
     type: 'problem',

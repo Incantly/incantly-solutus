@@ -1,0 +1,11 @@
+{
+  "name": "@incantly/board",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The board: an endless, paged surface for teaching: pages, ink, shapes, figure cards and agent actions. The core has no DOM.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.ts"
+  }
+}

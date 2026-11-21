@@ -24,6 +24,7 @@ const stateRules = (level) => ({
   'incantly/state-transition-only': level,
   'incantly/state-union-type': level,
   'incantly/state-table-required': level,
+  'incantly/state-table-refuses': level,
   'incantly/state-no-stale-after-await': level,
 });
 
