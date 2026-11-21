@@ -45,7 +45,7 @@ The board has four layers. Layers 1 and 2 hold all logic and have no DOM, no tim
 | 3. Input | Turns pen, touch, mouse and keys into one stream of `InputSample` and `KeyInput` | `src/web/input.ts`: Pointer Events | `react-native-gesture-handler` stylus data |
 | 4. Drawing | Turns the core's draw list into pixels | `src/web/painter.ts` on the view package's WebGL 2 back-end, Canvas 2D as backup | A Skia surface that implements the same `BoardPainter` interface |
 
-The UI shell (toolbar, menus, page list) sits on top. On the web it is Web Components in `src/web/ui/`. It reads and writes the core only through its public API, so a host can replace it, and React Native writes its own.
+Layer 3 takes only events whose target is the board's own canvases or its card layer: a press on the shell's buttons, menus, panels or bars is not board input, and its moves and release are not heard either (BR-58). The UI shell (toolbar, menus, page list) sits on top. On the web it is Web Components in `src/web/ui/`. It reads and writes the core only through its public API, so a host can replace it, and React Native writes its own.
 
 The two contracts between layers:
 
@@ -219,6 +219,8 @@ When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from th
 - The card toolbar (edit lines, mode, play or pause, delete) is a bar over the selected card; edit lines is a panel with the script that writes through `setFigureScript`, so the live card follows the store like an undo does. A figure card in `readOnly` can be used (drag, play) but not changed.
 - React Native: the same card uses the SDK core with the Skia painter. No other change.
 - Double-click (or Enter) on a card gives it the input: drag points, move sliders. Esc gives the input back to the board.
+- The card layer is a DOM layer above the tiles, so it hides what the tiles draw under it. The painter's stack is: tiles, the card layer, the live stroke, the **top layer**, the overlay (selection, handles, guides). Each frame the board finds the shapes whose order is above a shown card (live or its picture) and whose box touches it (`core/card-over.ts`; a highlighter is below every shape and a card is never drawn over a card), and draws each on the top layer, clipped to the outlines of the cards it is above. The tiles still hold them, hidden by the card, so on screen nothing is drawn twice, and a stroke, an arrow or text drawn over a card shows over it. A shape that is between two cards that overlap is drawn over both (open: BR-62).
+- An arrow bound to a card ends 8 units short of the card's outline (`ARROW_GAP`), on the line it comes in on, so its head shows beside the card.
 - A live card draws the axes and grid its own figure asks for (`@axes`, `@grid`, as the mode's default sets them): the frame style belongs to each app, so a card and its picture look the same and two cards with different `@axes` on one board keep their own.
 
 ## 9. Camera, culling, tiles
@@ -292,7 +294,7 @@ Handwriting is read only when the model can read pictures (open question 1). Wit
 
 ### 11.2 Talking agent
 
-The live teacher (core design section 10) gets two more tools, `board` and `board_read` (`agent.md`). With them it writes text in a hand style or typed, draws shapes and arrows, makes pen strokes that animate as if drawn by hand, highlights or circles things, points with the laser, makes figure cards from lines, moves the camera, and changes page. It reads the board as a list of items with their places, so it can say "the triangle on the left".
+The live teacher (core design section 10) gets two more tools, `board` and `board_read` (`agent.md`). With them it writes text in a hand style or typed, draws shapes and arrows, makes pen strokes that animate as if drawn by hand, highlights or circles things, points with the laser, makes figure cards from lines, moves the camera, and changes page. It reads the board as a list of items with their places, so it can say "the triangle on the left". With no stroke font, a hand-style `write` is stored as a text shape in the hand font, revealed as if written; a `stroke` is stored as ink (BR-59). `'free'` placing looks for the nearest empty strip in view before it goes below the content, and the request to the server carries `allowEdit` every time.
 
 ### 11.3 The client
 

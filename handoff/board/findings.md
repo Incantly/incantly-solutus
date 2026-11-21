@@ -233,6 +233,8 @@ No new kind of hidden state was found in this round: the five new tables (B31 to
 
 #### BR-55. Ink and arrows are hidden under live cards
 
+- **Status:** Fixed in dc4916e. The cause was larger than the gap: `bindEnd` called `followArrow`, which read the bindings from the store, so the binding the same transaction had just put was not seen and an arrow the agent made with both ends stuck stayed with its ends at the shapes' middles (inside the card). `followArrow` now also takes the bindings the transaction put and skips the ones it removed. The ends stop `ARROW_GAP` (8 units) short of the outline (at most half the way). The top layer is a fourth canvas (`WebPainter.drawOverCards`) above the card layer, the live stroke and the tiles, below the overlay: the shapes above a shown card in order that touch it (`core/card-over.ts`) are drawn on it, clipped to the outline of each card they are above, so on screen nothing is drawn twice (the card hides the tile under it; no tile changes). It covers every shown card, live or picture, since both hide the tile. The live stroke canvas moved above the card layer, so a stroke shows while it grows. Tests: `fixes-round5.test.ts`, `bindings.test.ts`; bench row 0.096 ms a frame with 2,000 strokes over 3 cards. Screenshots: `round5-card-arrow.png`, `round5-fix-ink-over-card.png`, `round5-fix-ink-drawing-over-card.png`.
+
 - **Where:** `web/figures.ts` (the card layer is a DOM layer above the board's canvas), the painter.
 - **What:** the arrow from the circle to its answer card has its head under the card (`round5-card-arrow.png`); any ink, arrow or text drawn over a live card is hidden, though it is above the card in the page's order.
 - **Fix:**
@@ -242,19 +244,27 @@ No new kind of hidden state was found in this round: the five new tables (B31 to
 
 #### BR-56. The talk request drops `allowEdit: false`
 
+- **Status:** Fixed in 1c93f1a. `TalkRequest.allowEdit` is required and `talk` always writes it; `agent-panel.test.ts` checks `allowEdit` is `false` again.
+
 - **Fix:** the request body always has `allowEdit` (agent.md 3). Test: the tester's failing test; restore the strict check in `agent-panel.test.ts`.
 
 #### BR-57. `'free'` misses an empty strip in view
+
+- **Status:** Fixed in 7a2d91b. `freeSpot` takes each shape's box grown by the new box and the air as the corners that are not allowed, tries the rows at the edges of those boxes nearest the middle first, and on a row cuts the clear stretches at the corner nearest the middle; it stops when the rows left cannot beat the spot found. Tests: the tester's failing test, `place-round5.test.ts`. Bench: `'free'` with 2,000 shapes around 0.35 ms; with a view packed with 2,000 shapes (no spot, the whole search) 1.3 ms.
 
 - **Where:** `core/agent-place.ts` `freeSpot`.
 - **Fix:** search the view for the nearest spot the box fits in (scan rows and columns of the empty areas between the shapes' boxes, nearest to the view's centre first) before falling back below the view. Test: the tester's failing test. Bench row `'free'` with 2,000 shapes stays under 4 ms.
 
 #### BR-58. A click on a toolbar button leaves an ink dot
 
+- **Status:** Fixed in d10508d. `WebInput` takes an `accepts(target)` option; the board passes its surface and what is inside its painter (canvases, card layer), and a press that is not accepted is ignored together with its moves and its release. Not reproduced as written: the review's script clicked `[data-tool=pen]`, which matches the board's root element (it carries `data-tool` for the current tool), so the click landed on the middle of the board; a click on the real toolbar button (`.ib-tools [data-tool=pen]`), with a mouse or a pen, never reached the board, because the bars are siblings of the surface. The guard stays for anything put inside the surface. Tests: `input-round5.test.ts`. Screenshot: `round5-fix-toolbar-click.png` (a pen taps pen, rectangle, pen; the shape count stays).
+
 - **Where:** `web/input.ts`: pointer events from the shell's buttons reach the board.
 - **Fix:** the input layer takes only events whose target is the board's canvas or its card layer; events from the shell, menus, panels and bars are not board input. Test: a pointer down and up on a toolbar button with the pen chosen adds no shape.
 
 #### BR-59. Hand-style writing is text, not ink
+
+- **Status:** Docs only, as ruled, in `agent.md` 2 (the action list said "stored as normal ink" for `write`, the notes said text; now both say text for `write` and ink for `stroke`) and design 11.2. The code and its test (`agent-actions.test.ts`) already did this.
 
 - **Ruling:** with no stroke font, hand-style `write` is stored as a text shape in the hand font, revealed as if written; `stroke` is stored as ink. Write this in agent.md 2 and design 11.2.
 
@@ -262,3 +272,7 @@ No new kind of hidden state was found in this round: the five new tables (B31 to
 
 - **BR-60.** Shape fixing works one stroke at a time; a triangle drawn in three strokes is not recognised.
 - **BR-61.** The `agent.vision` picture has not been tried with a model (no server yet).
+- **BR-62.** A shape that is between two overlapping cards in order (above the lower, below the upper) is drawn on the top layer over both, because the clip is the union of the cards it is above; the upper card should cover it where they overlap.
+- **BR-63.** For the few frames after a stroke ends, the live stroke canvas (`holding`) and the top layer both draw it over a card, so a translucent stroke is a little darker there until the tile is drawn.
+- **BR-64.** The top layer's clip is the card's rectangle, but the card has rounded corners (10 px) and a shadow, so in the four corners the stroke is drawn twice (tile and top layer) for a translucent stroke.
+- **BR-65.** `followArrow` still reads the bindings of the store: a binding the transaction updates (rather than puts or removes) is read from the store, so an `update` of a binding's `props` in the same transaction is not seen.
