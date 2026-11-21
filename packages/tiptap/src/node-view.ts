@@ -212,16 +212,32 @@ export class FigureNodeView implements NodeView, SchedulerView {
       // a node that turned bad while live frees its figure and shows the message
       if (this.app) {
         this.wantsMount = false;
-        this.queue(() => this.unmountNow());
+        // good again before the queue runs (an undo): the figure stays as it is
+        this.queue(() => {
+          if (!this.wantsMount) this.unmountNow();
+        });
       }
       this.showBad(checked);
       return;
     }
+    const wasBad = this.box.dataset['state'] === 'bad';
     this.lastBad = '';
-    if (this.box.dataset['state'] === 'bad') this.box.dataset['state'] = 'placeholder';
+    if (wasBad) this.box.dataset['state'] = 'placeholder';
     this.syncStore(checked.value);
     if (!this.app) this.showPlaceholder(checked.value);
     else if (this.liveHost) this.box.dataset['state'] = 'live';
+    if (wasBad) this.askAgain();
+  }
+
+  /**
+   * A figure that was bad took no order, but the scheduler may still hold it as live or ready and will send nothing
+   * new: ask for the mount it should have now.
+   */
+  private askAgain(): void {
+    if (this.destroyed || this.dead) return;
+    const state = this.runtime.scheduler.stateOf(this)?.state;
+    if (state === 'live') this.goLive();
+    else if (state === 'ready') this.build();
   }
 
   private syncStore(a: IncantlyFigureAttrs): void {
@@ -809,11 +825,26 @@ export class FigureNodeView implements NodeView, SchedulerView {
     const wasThree = app.mode === 'graphing3d';
     const r = wasThree || a.mode === 'graphing3d' ? undefined : this.safe(() => app.setMode(a.mode));
     if (r?.ok) return;
-    this.wantsMount = false;
+    this.remount(() => undefined);
+  }
+
+  /**
+   * Frees the app and makes a new one. The figure keeps its place under the cap while it waits, so no other figure can
+   * take the place and the count never passes `liveLimit`. A `save` order that arrives first wins: the figure is
+   * freed and stays saved. `reader` gives the state to restore into the new app, if any.
+   */
+  private remount(reader: () => { readonly script: string; readonly readerScript: string } | undefined): void {
+    const app = this.app;
     this.queue(async () => {
-      this.saved = undefined;
+      if (this.destroyed || this.dead || !app || this.app !== app) return;
+      const wanted = this.wantsMount;
+      this.saved = reader();
       this.unmountNow();
-      if (this.destroyed || this.dead) return;
+      if (!wanted) {
+        this.saved = undefined;
+        this.box.dataset['state'] = 'saved';
+        return;
+      }
       this.wantsMount = true;
       await this.doMount();
     });
@@ -902,13 +933,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     const app = this.app;
     if (!app) return;
     // remount from the reader's state, the way a saved figure comes back
-    this.queue(async () => {
-      if (this.destroyed || this.app !== app) return;
-      this.saved = { script: this.applied, readerScript: this.safe(() => app.toScript()) ?? '' };
-      this.unmountNow();
-      this.wantsMount = true;
-      await this.doMount();
-    });
+    this.remount(() => ({ script: this.applied, readerScript: this.safe(() => app.toScript()) ?? '' }));
   }
 
   /** True when an event came from the view's own interface, which the editor must leave alone. */

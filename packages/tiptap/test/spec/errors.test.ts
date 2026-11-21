@@ -5,7 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MountedApp } from '@incantly/sdk';
-import { Viewport, boxOf, destroyAll, docOf, figureAttrs, figureJson, makeEditor, para, undoSteps, lastError } from './helpers';
+import type { Editor } from '@tiptap/core';
+import { Viewport, boxOf, destroyAll, docOf, figureAttrs, figureJson, makeEditor, para, posOf, undoSteps, lastError } from './helpers';
 
 const probe = vi.hoisted(() => ({
   apps: [] as MountedApp[],
@@ -270,5 +271,79 @@ describe('no error breaks the editor (R10.3)', () => {
     expect(() => editor.getHTML()).not.toThrow();
     expect(() => editor.getJSON()).not.toThrow();
     expect(() => editor.destroy()).not.toThrow();
+  });
+});
+
+/** Writes attributes straight into the node, as an undo or a collaborator's change does (a command would refuse a bad one). */
+const setAttrs = (editor: Editor, id: string, patch: Record<string, unknown>): void => {
+  const pos = posOf(editor, id);
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) throw new Error(`no node for ${id}`);
+  editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...patch }));
+};
+
+describe('a figure fixed after being bad (TT-R4)', () => {
+  it('mounts again in view, with no scroll, once its attributes are good', async () => {
+    const { editor } = makeEditor(one());
+    await tick(1500);
+    const box = boxOf(editor, 'fig_a') as HTMLElement;
+    expect(box.dataset['state']).toBe('live');
+    setAttrs(editor, 'fig_a', { mode: 'not-a-mode' });
+    await tick(1500);
+    expect(box.dataset['state']).toBe('bad');
+    expect(mounted()).toHaveLength(0);
+    setAttrs(editor, 'fig_a', { mode: 'graphing' });
+    await tick(1500);
+    expect(box.dataset['state']).toBe('live');
+    expect(mounted()).toHaveLength(1);
+    expect(mounted()[0]?.value('b')).toBe(2);
+  });
+
+  it('stays as it is when the node is good again before the figure was freed', async () => {
+    const { editor } = makeEditor(one());
+    await tick(1500);
+    const box = boxOf(editor, 'fig_a') as HTMLElement;
+    setAttrs(editor, 'fig_a', { mode: 'not-a-mode' });
+    setAttrs(editor, 'fig_a', { mode: 'graphing' });
+    await tick(1500);
+    expect(box.dataset['state']).toBe('live');
+    expect(mounted()).toHaveLength(1);
+  });
+});
+
+describe('a remount under the live cap (TT-R5)', () => {
+  it('does not mount a figure again that is being saved, and never passes the cap', async () => {
+    const { editor } = makeEditor(docOf(...['fig_a', 'fig_b', 'fig_c'].map((id) => figureJson({ id, script: 'a = 1\nb = a + 1', mode: 'graphing', height: 200 })), para('x')));
+    await tick(2500);
+    expect(mounted()).toHaveLength(3);
+    const box = boxOf(editor, 'fig_a') as HTMLElement;
+    const app = mounted().find((a) => a.element.closest('[data-id="fig_a"]') !== null) as MountedApp;
+    expect(app).toBeDefined();
+    // the picture of fig_a takes a while, and the app refuses a mode change in place, so the figure starts again
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const exportNow = app.export.bind(app);
+    app.export = (async (...args: Parameters<typeof app.export>) => {
+      await gate;
+      return exportNow(...args);
+    }) as typeof app.export;
+    app.setMode = (() => ({ ok: false, message: 'no' })) as unknown as typeof app.setMode;
+    Viewport.set(box, false);
+    await tick(10_000);
+    expect(box.dataset['state']).not.toBe('saved');
+    setAttrs(editor, 'fig_a', { mode: 'geometry' });
+    let most = mounted().length;
+    release();
+    for (let i = 0; i < 20; i++) {
+      await tick(100);
+      most = Math.max(most, mounted().length);
+    }
+    expect(most).toBeLessThanOrEqual(3);
+    expect(box.dataset['state']).toBe('saved');
+    expect(app.destroyed).toBe(true);
+    expect(mounted().filter((a) => a.element.closest('[data-id="fig_a"]') !== null)).toHaveLength(0);
+    expect(mounted()).toHaveLength(2);
   });
 });
