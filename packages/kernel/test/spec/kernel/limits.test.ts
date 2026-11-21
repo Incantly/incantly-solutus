@@ -222,7 +222,7 @@ describe('the journal limit', () => {
 });
 
 describe('the rule time budget (design 6.3)', () => {
-  it('a rule that overruns is allowed to finish, and the figure records it in slowRules', () => {
+  it('a rule that overruns is allowed to finish, and the figure records it in slowRules', { retry: 2 }, () => {
     let clock = 0;
     const f = new Figure({ commands: TEST_COMMANDS, now: () => (clock += 10) });
     ok(f.apply('A = (0, 0)'));

@@ -636,6 +636,16 @@ its commands, and a hook that throws is skipped.
 - `registerFieldReader(type, reader)` and `registerFieldTyper(type, typer)`: evaluate and type the fields an area adds to
   `FIELDS`. A typer types a field from the object itself (`d.value` has the type of the dropdown's options). A field that
   holds a function can be called: `g.value(x)`.
+- `registerSchemaType(name)`: a type name that carries a schema like `Record`, written `Name<Schema>` (statistics adds
+  `Chart` and `Table`). Its fields come from the record schemas through the area's field typer and reader.
+- `registerTypeAlias(name, members)`: a parameter type that accepts several types (probability adds `Distribution` for
+  `ContinuousDistribution` and `DiscreteDistribution`). Values always have one of the member types.
+- `ParamSpec.named`: a parameter given only by name (`seed = 3`), never by position, so `RandomInt(1, 6, 10)` and
+  `RandomInt(1, 6, seed = 3)` cannot tie. Named-only parameters come last.
+- `RuleCall.random`: the figure seed (`@seed N`), the name of the object being computed, the column of the call in its
+  line, how many times that call has run while the line is computed, and the object's re-roll count (`with reroll = k`).
+  A random command makes its numbers from these alone, so a reload gives the same numbers. A new `@seed` re-runs every
+  rule; a new re-roll count re-runs that object.
 - `registerFieldNames(type, names)`: the full list of a type's fields (a record's schema). A missing field is then
   `unknown_field` listing the real ones.
 - `registerBinaryOp(row)`, `registerUnaryOp(row)` and `registerIndexOp(row)`: an area's rows of the operator table and

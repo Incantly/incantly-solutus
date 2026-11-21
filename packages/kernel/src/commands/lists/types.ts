@@ -93,6 +93,14 @@ export function registerRecordSchema(name: string, fields: readonly { readonly n
   if (!Object.hasOwn(schemas, name)) schemas[name] = fields;
 }
 
+/** Summary text of a record, per schema; other areas add their own (a fit prints its equation). */
+export const RECORD_TEXT = new Map<string, (r: RecordValue) => string>();
+
+/** Adds the summary text of a schema. The first definition wins. */
+export function registerRecordText(schema: string, text: (r: RecordValue) => string): void {
+  if (!RECORD_TEXT.has(schema)) RECORD_TEXT.set(schema, text);
+}
+
 export function record(schema: string, fields: Readonly<Record<string, unknown>>, reasons?: Readonly<Record<string, string>>): RecordValue {
   return reasons && Object.keys(reasons).length > 0 ? { kind: 'record', schema, fields, reasons } : { kind: 'record', schema, fields };
 }

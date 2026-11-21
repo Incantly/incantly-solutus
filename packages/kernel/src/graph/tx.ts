@@ -25,13 +25,21 @@ import type { TArg, TNode } from '../language/tnode';
 import type { Ty } from '../language/types';
 import { children } from '../language/relation';
 import { FigureBase } from './base';
-import { ObjRec } from './core';
-import { coerceProp, defaultsFor, isValidKey, validKeysFor } from './props';
+import { FigureCore, ObjRec } from './core';
+import { coerceProp, defaultsFor, isValidKey, styleTypeOf, validKeysFor } from './props';
 import type { ActionRule } from './registry';
-import { runLineChecks, runLineHandlers, runLineRewriters } from './registry';
-import type { ApplyOptions, Cell, ChangeReport, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
+import { isCellName } from '../language/cells';
+import { hasAfterLine, runAfterLine, runLineChecks, runLineHandlers, runLineRewriters } from './registry';
+import type { ApplyOptions, Cell, ChangeReport, LineGate, Persist, RateRule, StyleEntry, TxOk, TxOp, TxResult } from './types';
+import { lineUses } from '../language/uses';
+
+/** Directives only the host page may write (app-modes design 3.6). */
+const HOST_DIRECTIVES = new Set(['mode', 'restrict', 'exam']);
+/** The directives a model or a learner may write, for the error's `expected`. */
+const LINE_DIRECTIVES = ['@view', '@grid', '@axes', '@clock', '@angleunit', '@rounding', '@coords', '@title'];
 import { sameValue, valueSource } from './values';
 
+const FRESH_NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const REPEATABLE: ReadonlySet<string> = new Set(['step', 'beat', 'cell', 'colwidth', 'limit']);
 export const SCRIPT_VERSION = 1;
 
@@ -77,6 +85,13 @@ export class FigureTx extends FigureBase {
   protected log: LogItem[] = [];
   /** How many `apply` calls are running; the log is kept only inside one. */
   protected applyDepth = 0;
+  /** The host's line gate (a mode policy), asked after the areas' own checks. */
+  protected gate: LineGate | undefined;
+
+  /** Installs (or, with `undefined`, removes) the host's line gate. Lines already in the figure are not checked again. */
+  setGate(gate: LineGate | undefined): void {
+    this.gate = gate;
+  }
 
   /* ------------------------------ errors ------------------------------ */
 
@@ -166,6 +181,7 @@ export class FigureTx extends FigureBase {
           this.rollbackTx();
           return internalError(bad, { line: lineNo, col: 1, endCol: 1 }, '', bad);
         }
+        if (!dry && hasAfterLine()) runAfterLine(this, r, { together: (fn) => this.together(typeof input === 'string' ? input : input.source, fn) });
         return r;
       });
     } catch {
@@ -194,6 +210,26 @@ export class FigureTx extends FigureBase {
     return result;
   }
 
+  /**
+   * Runs `fn` so that what it applies joins the current line's undo step: the entries the line recorded so far move into
+   * one group with what `fn` records. Inside a group already open (a batch, a load) `fn` simply runs.
+   */
+  protected together(label: string, fn: () => void): void {
+    if (this.journal.isOpen) {
+      fn();
+      return;
+    }
+    const mine = this.log.filter((x): x is Extract<LogItem, { k: 'rec' }> => x.k === 'rec').map((x) => x.e);
+    for (let i = mine.length - 1; i >= 0; i--) this.journal.discard(mine[i] as JournalEntry);
+    this.journal.begin(label);
+    for (const e of mine) this.journal.record(e);
+    try {
+      fn();
+    } finally {
+      this.journal.end();
+    }
+  }
+
   /** True while suggested lines are being tried, so a failed try is not repaired in turn. */
   protected vetting = false;
 
@@ -220,7 +256,9 @@ export class FigureTx extends FigureBase {
         for (const s of define !== undefined ? [...suggest, define] : suggest) {
           if (kept.includes(s)) continue;
           const r = this.apply(s, { dryRun: true });
-          if (r.ok) kept.push(s);
+          // `Fire(b.pos)` for a thing outside every fire (errors B021) is the line the docs name, and the one a figure with
+          // a fire grid already in space refuses with `limit` (one grid there): it stays, and the hint says so (PH-32)
+          if (r.ok || (e.kind === 'no_fire_grid' && r.kind === 'limit')) kept.push(s);
         }
       } finally {
         this.vetting = false;
@@ -230,7 +268,10 @@ export class FigureTx extends FigureBase {
       if (e.kind === 'unknown_name' && define !== undefined) {
         const near = suggest.some((s) => s !== define);
         // a hint that names the variable of the command's own expression is more exact than a list of names
-        if (!near && !/^The variable here is /.test(hint ?? '')) hint = `Define it first, or use a name that exists: ${this.names().slice(0, 8).join(', ')}.`;
+        if (!near && !/^(The variable here is |In algebra, )/.test(hint ?? '')) {
+          const names = this.names().slice(0, 8);
+          hint = names.length > 0 ? `Define it first, or use a name that exists: ${names.join(', ')}.` : 'Define it first.';
+        }
         else recovery = 'use_suggestion';
       }
       const { fix, ...rest } = e as ErrorObject & { fix?: string };
@@ -248,8 +289,10 @@ export class FigureTx extends FigureBase {
     const notices: Notice[] = [];
     let parsed: ParsedLine;
     if (typeof input === 'string') {
+      // a line an area generated that defines a new name: no handler or rewrite would change it
+      const fresh = opts.generated === true && this.freshDefine(input);
       // a line kind an area owns outright (an `on` line) is carried out by the area, as one undo entry
-      const handled = runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
+      const handled = fresh ? undefined : runLineHandlers(this, input, { dryRun: opts.dryRun === true, line: lineNo });
       if (handled) {
         if ('ok' in handled) return { ...handled, line: lineNo, source: input } as TxResult;
         if (!opts.dryRun) this.record({ k: 'ext', label: input, undo: handled.undo, redo: handled.redo });
@@ -258,7 +301,7 @@ export class FigureTx extends FigureBase {
         return this.okResult(undefined, 'action', handled.summary, rep, { line: lineNo, ...(opts.dryRun ? { dryRun: true as const } : {}) });
       }
       // an area's own reading of the line comes first: it may stand for another line, or be refused
-      const rw = runLineRewriters(this, input);
+      const rw = fresh ? undefined : runLineRewriters(this, input);
       if (rw?.error) return { ...rw.error, line: lineNo, source: input } as TxResult;
       if (rw?.notices) notices.push(...rw.notices);
       if (rw?.text !== undefined) input = rw.text;
@@ -289,11 +332,34 @@ export class FigureTx extends FigureBase {
     notices.push(...cr.notices);
     const checked = cr.value;
     // an area's own refusal of the line, before anything changes
-    const refused = runLineChecks(this, checked, parsed);
+    const refused = runLineChecks(this, checked, parsed, { origin: opts.origin ?? 'host' });
     if (refused) {
       const at = this.at(parsed);
       const placed = refused.line > 0 && refused.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
       return { ...refused, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+    }
+    const origin = opts.origin ?? 'host';
+    if (checked.kind === 'directive' && origin !== 'host' && HOST_DIRECTIVES.has(checked.directive?.name ?? '')) {
+      const name = `@${checked.directive?.name ?? ''}`;
+      return this.fail(parsed, 'bad_directive', { directive: name, need: 'the host page to set it' }, {
+        expected: LINE_DIRECTIVES,
+        hint: 'Remove this line. The host page chooses the mode, restrictions and exams.',
+        messageKey: 'lang.host_directive',
+        fingerprintKey: name,
+      });
+    }
+    if (this.gate) {
+      let gated: ErrorObject | undefined;
+      try {
+        gated = this.gate({ uses: lineUses(checked), line: checked, parsed, origin });
+      } catch {
+        gated = undefined;
+      }
+      if (gated) {
+        const at = this.at(parsed);
+        const placed = gated.line > 0 && gated.col > 1 ? {} : { line: at.line, col: at.col, endCol: at.endCol };
+        return { ...gated, ...placed, source: parsed.sm.raw ?? parsed.sm.text } as TxResult;
+      }
     }
     switch (checked.kind) {
       case 'noop':
@@ -313,6 +379,14 @@ export class FigureTx extends FigureBase {
       case 'action':
         return this.applyAction(parsed, checked, notices, opts, pass);
     }
+  }
+
+  /** `name = …` with no `with` or `in` list, for a name no object has yet. */
+  protected freshDefine(text: string): boolean {
+    const eq = text.indexOf(' = ');
+    if (eq <= 0 || text.includes(' with ') || text.includes(' in ')) return false;
+    const name = text.slice(0, eq);
+    return FRESH_NAME.test(name) && !this.byNameMap.has(name);
   }
 
   /** `Rename(M, N)` with a bare new name is read as `Rename(M, "N")` when no object is called N. */
@@ -402,10 +476,21 @@ export class FigureTx extends FigureBase {
   }
 
   /** `@tol N` (or `@tolerance N`) when the figure has one, else the option or `1e-9`. */
+  protected override isSheetCell(name: string): boolean {
+    return this.directiveAt.has('sheet') && isCellName(name);
+  }
+
   protected override tolerance(): number {
     const w = (this.directiveItem('tol') ?? this.directiveItem('tolerance'))?.words[0];
     const n = w === undefined ? NaN : Number(w);
     return Number.isFinite(n) && n > 0 ? n : this.tolOption;
+  }
+
+  /** `@seed N` (an optional version word after it is allowed), else 1. */
+  protected override figureSeed(): number {
+    const w = this.directiveItem('seed')?.words[0];
+    const n = w === undefined ? NaN : Number(w);
+    return Number.isInteger(n) && n >= 0 && n <= 0xffffffff ? n : 1;
   }
 
   /** The first item of a non-repeatable directive, by name (a map lookup, not a scan). */
@@ -475,7 +560,7 @@ export class FigureTx extends FigureBase {
 
   /** The rules read the tolerance when they run, so a new `@tol` runs them all again (also on undo and redo). */
   protected tolDirectiveChanged(name: string): void {
-    if (name !== 'tol' && name !== 'tolerance') return;
+    if (name !== 'tol' && name !== 'tolerance' && name !== 'seed') return;
     this.settle(this.list.filter((r) => r.p.kind === 'rule'));
   }
 
@@ -535,8 +620,8 @@ export class FigureTx extends FigureBase {
     owner: string,
   ): ErrorObject | Map<string, StyleEntry> {
     const out = new Map(base);
-    const items: readonly StyleItem[] = (parsed.node as { style?: readonly StyleItem[] }).style ?? [];
-    const defaults = defaultsFor(ty.k, free);
+    const items: readonly StyleItem[] = checked.styleItems ?? (parsed.node as { style?: readonly StyleItem[] }).style ?? [];
+    const defaults = defaultsFor(styleTypeOf(ty), free);
     const cs = checked.style ?? [];
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i] as (typeof cs)[number];
@@ -599,9 +684,9 @@ export class FigureTx extends FigureBase {
 
   /* ------------------------------ define ------------------------------ */
 
-  protected cellsFor(comp: CompiledLine, checked: CheckedLine, count: number): Cell[] {
+  protected cellsFor(comp: CompiledLine, checked: CheckedLine, count: number, reroll = 0): Cell[] {
     this.ensureSlots(checked.slots);
-    const res = evaluate(comp, this.env);
+    const res = this.withRandom(checked.names[0] ?? '', reroll, () => evaluate(comp, this.env));
     const out: Cell[] = [];
     for (let i = 0; i < count; i++) out.push(this.cellFromResult(res, checked.kind === 'defmany' ? i : undefined));
     return out;
@@ -676,7 +761,8 @@ export class FigureTx extends FigureBase {
       this.env.reason = undefined;
       const v = init ? init(this.env) : undefined;
       cells = [v === undefined || (typeof v === 'number' && v !== v) ? { defined: false, reason: this.env.reason ?? 'not_set' } : { defined: true, value: v }];
-    } else cells = this.cellsFor(comp, checked, names.length);
+    } else cells = this.cellsFor(comp, checked, names.length, redefine && existing[0] ? FigureCore.rerollOf((existing[0] as ObjRec).p.style) : 0);
+    const usedReroll = redefine && existing[0] ? FigureCore.rerollOf((existing[0] as ObjRec).p.style) : 0;
     if (this.faults.length > 0) return internalError(this.faults[0] as string, this.at(parsed), '', this.faults[0] as string);
 
     // an assignment (`a = a + 1`) stores the computed value as the object's new free value
@@ -712,6 +798,9 @@ export class FigureTx extends FigureBase {
       styleSources.push(this.buildStyle(parsed, checked, comp, tys[i] as Ty, ids[i] as ObjId, kind === 'free', base, notices, names[i] as string));
     }
     for (const s of styleSources) if (s instanceof Map === false) return s as ErrorObject;
+    // a defining line that sets its own re-roll count (`xs = Sample(d, 5) with reroll = 2`) is computed with it
+    const lineReroll = FigureCore.rerollOf(styleSources[0] as Map<string, StyleEntry>);
+    if (!checked.isState && lineReroll !== usedReroll) cells = this.cellsFor(comp, checked, names.length, lineReroll);
 
     const persists: Persist[] = names.map((name, i) => {
       const cell = cells[i] as Cell;
@@ -733,7 +822,7 @@ export class FigureTx extends FigureBase {
     // a redefinition to the same text refreshes the value and nothing else
     if (redefine && !assign && existing.length === 1 && persists.length === 1) {
       const o = existing[0] as ObjRec;
-      if (printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && !opts.dropRange && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
+      if (!opts.rebind && printLineNode(o.p.node) === printLineNode(persists[0]?.node as LineNode) && !opts.dropRange && kind === o.p.kind && styleSources[0] instanceof Map && o.p.style.size === (styleSources[0] as Map<string, StyleEntry>).size && !((node as { style?: readonly unknown[] }).style?.length)) {
         notices.push(makeNotice('redefined_to_same', { name: o.p.name }));
         if (!opts.dryRun) {
           this.markDirty(o);
@@ -781,7 +870,7 @@ export class FigureTx extends FigureBase {
       const pre = new Map<ObjRec, Cell>();
       recs.forEach((r, i) => pre.set(r, cells[i] as Cell));
       this.record({ k: 'add', items: recs.map((rec) => ({ rec, pos: rec.order })), label, ...(reanchored.length > 0 ? { reanchored } : {}) });
-      this.settle(recs, pre);
+      this.settleNew(recs, pre);
     } else {
       recs = existing;
       const changes = recs.map((rec, i) => ({ rec, before: rec.p, after: persists[i] as Persist }));
@@ -807,7 +896,9 @@ export class FigureTx extends FigureBase {
     }
     this.diffReport(pass, rep);
     const first = recs[0] as ObjRec;
-    return this.okResult(parsed, redefine ? 'redefine' : 'add', this.summaryOf(first), rep, {
+    // a generated line (a fill) is reported by its area, not line by line: its summary is the line itself
+    const summary = opts.generated ? parsed.source : this.summaryOf(first);
+    return this.okResult(parsed, redefine ? 'redefine' : 'add', summary, rep, {
       name: first.p.name,
       ...(names.length > 1 ? { names } : {}),
       id: first.id,
@@ -831,6 +922,11 @@ export class FigureTx extends FigureBase {
     this.applyPersist(rec, after);
     this.record({ k: 'sets', changes: [{ rec, before, after }], label: checked.text });
     this.pendingStyles.add(rec.id);
+    // a new re-roll count gives a random object new numbers (probability design 6.3)
+    if (rec.p.kind === 'rule' && before.style.get('reroll')?.value !== after.style.get('reroll')?.value) {
+      this.markDirty(rec);
+      this.settle([rec]);
+    }
     this.diffReport(pass, rep);
     return this.okResult(parsed, 'restyle', printLineNode(parsed.node), rep, { name: rec.p.name, id: rec.id, type: rec.p.type.k as never, ...(opts.dryRun ? { dryRun: true as const } : {}) });
   }
@@ -920,7 +1016,7 @@ export class FigureTx extends FigureBase {
           return undefined;
         }
       });
-      const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values });
+      const out = rule.run({ figure: this as never, spec: call.spec, objects: objects.filter((o): o is ObjRec => o !== undefined).map((o) => o.id), values, refs: objects.map((o) => o?.id) });
       if (out && out.error) {
         // the action's own refusal, placed on the line that called it
         const at = this.at(parsed);

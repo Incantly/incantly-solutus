@@ -21,7 +21,7 @@ import type { ActionContext, ActionResult } from './tx';
 import { ObjRec } from './core';
 import { lineRefStarts, refStarts, renameNode, renameStyleItem } from './rename';
 import type { ApplyOptions, BatchOptions, BatchResult, ChangeReport, Description, Persist, RateRule, StyleEntry, TxOk, TxResult } from './types';
-import { fitsType, sameValue, valueSource } from './values';
+import { fitsType, isFreeType, ownAreaValue, sameValue, valueSource } from './values';
 import type { InvertCall } from './registry';
 import { deleteNotes, runDragListeners } from './registry';
 import { toEffective, validKeysFor } from './props';
@@ -500,7 +500,7 @@ export class FigureHist extends FigureTx {
     this.inPass((pass) => {
       for (let i = 0; i < lines.length; i++) {
         const input = lines[i] as string | ParsedLine;
-        const r = this.apply(input, { line: opts.lines?.[i] ?? i + 1, failed, ...(opts.force ? { force: true } : {}) });
+        const r = this.apply(input, { line: opts.lines?.[i] ?? i + 1, failed, ...(opts.force ? { force: true } : {}), ...(opts.origin ? { origin: opts.origin } : {}), ...(opts.rebind ? { rebind: true } : {}), ...(opts.generated ? { generated: true } : {}) });
         results.push(r);
         if (r.ok) {
           applied++;
@@ -550,6 +550,12 @@ export class FigureHist extends FigureTx {
   /** Gives up the group and takes back every entry it holds, newest first; both stacks and the pending events are as `beginUnit` saw them. */
   protected rollbackUnit(u: Unit, pass?: import('./core').Pass): void {
     const entries = this.journal.abandon(u.mark);
+    // a batch inside a line (an action that applies lines): what it took back leaves that line's log too, or a failure of
+    // the line would take it back a second time
+    if (this.log.length > 0 && entries.length > 0) {
+      const gone = new Set(entries);
+      this.log = this.log.filter((x) => x.k !== 'rec' || !gone.has(x.e));
+    }
     this.replaying = true;
     try {
       for (let k = entries.length - 1; k >= 0; k--) this.revertEntry(entries[k] as JournalEntry);
@@ -737,7 +743,7 @@ export class FigureHist extends FigureTx {
     if (rec.p.kind === 'state') return { writes: [], reason: 'owned_by_solver' };
     if (rec.p.kind === 'free') {
       const k = rec.p.type.k;
-      if (k !== 'Point' && k !== 'Number' && k !== 'Bool') return { writes: [], reason: 'not_draggable' };
+      if (k !== 'Point' && k !== 'Number' && k !== 'Bool' && !isFreeType(k)) return { writes: [], reason: 'not_draggable' };
       if (!fitsType(rec.p.type, target)) return { writes: [], reason: 'bad_target' };
       return { writes: [{ id: rec.id, name: rec.p.name, value: target }], kind: 'free' };
     }
@@ -938,7 +944,7 @@ function ownValue(type: string, v: unknown): unknown {
     const y = o.y;
     return typeof x === 'number' && typeof y === 'number' ? { x, y } : v;
   }
-  return v;
+  return ownAreaValue(type, v);
 }
 
 function decimals(x: number): number {

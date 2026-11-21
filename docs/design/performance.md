@@ -83,6 +83,10 @@ Rules:
 | Curve samples | 4,000 per curve on screen | Adaptive sampler stops refining |
 | Labels shown | 300 | Lowest-priority labels hidden, with a notice |
 | Sounds at once | 8 | See `docs/features/sound/` |
+| Physics bodies and joints | 1,000 each | Line refused with `limit`; see `docs/features/physics/` |
+| Liquid particles | 2,000 | Line refused with `limit` |
+| Cloth points | 4,096 (64 × 32 per cloth) | Line refused with `limit` |
+| Physics time per frame | 6 ms on the page, or 8 ms in the physics worker for a world with cloth or liquid, on a CPU 4 times slower than the build machine | The film plays slower, never differently |
 
 ### Techniques
 
@@ -97,6 +101,7 @@ Rules:
 ## 6. Measuring
 
 - Every package has a benchmark suite, run in CI, with the targets in section 1 as limits. A regression past 10% fails the build.
+- The physics benches (`packages/kernel/bench/physics.bench.ts`, `physics-checks.bench.ts`, `exact-math.bench.ts`, `chrome-physics.mjs`, `cross-browser.mjs`) have one row for each line of `docs/features/physics/design.md` 11.2 and 11.4; the rows that fail say so there, with the numbers.
 - The studio has a performance panel: frame time, kernel time, draw calls, triangles, live figures and memory.
 - The scheduler keeps stats as the legacy one did: registered, near, live, peak live, mounts, saves, and time from mount to first drawing.
 

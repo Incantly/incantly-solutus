@@ -11,11 +11,12 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint .",
+    "lint": "eslint . && node tools/check-repo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run",
     "check": "npm run lint && npm run typecheck && npm test",
+    "build:wasm": "node packages/kernel/wasm/build.mjs",
     "studio": "npm run dev --workspace @incantly/studio"
   },
   "devDependencies": {

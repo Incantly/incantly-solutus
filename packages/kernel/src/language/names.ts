@@ -8,7 +8,9 @@ import type { Ty } from './types';
 export const MAX_NAME_LENGTH = 32;
 
 export const KEYWORD_NAMES: readonly string[] = ['true', 'false', 'and', 'or', 'not', 'xor', 'if', 'in', 'step', 'with', 'on'];
-export const CONSTANT_NAMES: readonly string[] = ['pi', 'tau', 'e', 'deg', 'inf', 'undefined'];
+export const CONSTANT_NAMES: readonly string[] = ['pi', 'tau', 'e', 'deg', 'turn', 'grad', 'inf', 'undefined'];
+/** A free word offered first when a reserved name is refused, where the usual meaning of the word is clear. */
+export const RESERVED_ALTERNATIVES: Readonly<Record<string, string>> = { turn: 'steering', grad: 'gradient' };
 export const VARIABLE_NAMES: readonly string[] = ['t', 'bt', 'beat', 'x', 'y', 'z'];
 export const AXIS_NAMES: readonly string[] = ['xaxis', 'yaxis', 'zaxis'];
 /** Names held back for functions v1 does not have, so users cannot take them. */

@@ -6,6 +6,8 @@ Four groups, loaded on demand: `stats` (describe, correlate, tables, classes), `
 
 Notation in catalogue lines: `; opt` means an optional named argument at the end of the call (`Q1(xs, method = "linear")`). The printer writes it as `[, opt = ...]`; the shorter `;` form is used here to save space.
 
+**Types of results.** A chart is a `Chart<Kind>` value (`Chart<Histogram>`, `Chart<BoxPlot>`, `Chart<PieChart>` …) and a table a `Table`. Fit, describe and test results are `Record<Schema>` values (`Record<Fit>`, `Record<Describe>`, `Record<Test>`). Read any of them by field name (`h.counts`, `b.q1`, `fit.r2`, `T.rows`); an unknown field is `unknown_field` and lists the real ones. A parameter that wants one kind refuses another: `FrequencyPolygon(b)` with a bar chart is `no_matching_form`. A table's column by its title: `Column(T, "count")`.
+
 ### Group `stats` (about 330 tokens)
 
 ```text
@@ -43,6 +45,8 @@ PieChart(values[, labels[, centre, radius]]) -> Chart
 LineGraph/StepGraph/StickGraph(points) -> Chart
 NormalQuantilePlot(list) -> Chart                           ResidualPlot(points, f) -> Chart
 Squares(points, f) -> List<Polygon>                          # area of all = sum of squared errors
+BarChart(dist[, from, to]) -> Chart<BarChart>              # probability of each whole number of a discrete distribution
+charts are Chart<Kind>: Chart<Histogram>, Chart<BoxPlot>, Chart<PieChart>, Chart<PointsChart>, …
 chart fields: h.counts, h.edges, h.total; b.q1, b.median, ...; pie.fractions; nq.r
 ```
 
@@ -54,9 +58,11 @@ FitPoly(points, degree) / FitPow / FitExp / FitGrowth / FitLog / FitSin / FitLog
 FitImplicit(points, degree) -> Curve
 Fit(points, [f1, f2, ...]) -> Record Fit                   # y = c1 f1 + c2 f2 + ...
 FitModel(points, f, start) -> Record Fit                   # f(x, p1..pk), start = [p1..pk]
-all fits take (xs, ys) instead of points; options: weights, space ("data"|"log"), from, to
-Fit fields: f, equation, params, stderr, r2, adjR2, sse, rmse, n, dof, residuals
-FitBand(fit, level, "mean"|"prediction") -> Region        CorrTest(points[, tail]) -> Record
+all fits take (xs, ys) instead of points; options: weights, space ("data"|"log"), from, to (the drawn range)
+Fit fields: f, equation, params, names, stderr, r2, adjR2, sse, rmse, n, dof, residuals, model, space, from, to
+FitBand(fit[; level, kind]) -> Region   # kind "mean"(default)|"prediction"; line, poly, log and basis fits only
+FitImplicit(points, degree) -> Curve    # degree 1..6
+CorrTest(points[, tail]) -> Record
 ```
 
 ### Group `tests` (about 330 tokens)
@@ -71,7 +77,8 @@ ChiSquaredTest(matrix) / ChiSquaredTest(observed, expected[, ddof]) -> Record{st
 ANOVA(groups) -> Record{F,p,dfBetween,dfWithin,ssBetween,ssWithin,table}
 ZInterval/TInterval(sample[, level]) / (mean, sd, n[, level]) -> Record{lo,hi,level,margin,estimate}
 ZInterval2/TInterval2/TIntervalPaired(...) ; ZPropInterval(x, n[, level]; method) ; ZPropInterval2(...)
-r.dist is the Distribution of the statistic: Shade(r.dist, r.statistic, 1e9) draws the right tail
+r.dist is the Distribution of the statistic (Normal(0, 1), StudentT(df), ChiSquared(df), FDist(d1, d2)):
+Shade(r.dist, r.statistic, inf) draws the right tail; Sf(r.dist, r.statistic) is its probability
 ```
 
 Together about 1,280 tokens if all four are loaded; typical lessons load two (about 600 to 700).
@@ -129,7 +136,7 @@ Habits (about 70 tokens in the prompt):
 |---|---|
 | `bad_option` | Use a value from `allowed` |
 | `no_matching_form` | Pick the form with the same parameter count; `Mean(P)` needs `Mean(Xs(P))` |
-| `unknown_option` | Use a name from `expected` |
+| `bad_argument` "no form has a parameter called …" | A misspelt option name; use the name in `hint` |
 | `undefined (too_few_values)` | Add points, or lower the degree |
 | `undefined (zero_variance)` | Say the numbers do not vary; show a different relationship |
 | `undefined (no_convergence)` | Retry once with `FitModel(P, f, start)` and a guess based on what the plot shows; then move on |
@@ -227,7 +234,7 @@ r = TTest(scores, 100, "right")
 
 ```text
 curve = Pdf(r.dist)
-tail = Shade(r.dist, r.statistic, 1e9)
+tail = Shade(r.dist, r.statistic, inf)
 ```
 
 ## 6. Token budget

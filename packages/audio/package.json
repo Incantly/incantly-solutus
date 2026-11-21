@@ -6,5 +6,8 @@
   "description": "Sound playback with Tone.js, loaded on demand.",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "tone": "^15.1.22"
   }
 }

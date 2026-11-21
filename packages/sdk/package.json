@@ -5,6 +5,8 @@
   "type": "module",
   "description": "createApp, the embed API, iframe protocol, file format and export.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./screen": "./src/screen/index.ts",
+    "./worker": "./src/worker/index.ts"
   }
 }

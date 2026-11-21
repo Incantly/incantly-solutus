@@ -1,0 +1,17 @@
+# Probability: tasks
+
+- [x] 1. First round, built with statistics: the Distribution type, ten distributions, evaluation, Shade (R1, R2)
+- [x] 2. Spec tests (in `packages/kernel/test/spec/statistics/round2.test.ts`)
+- [x] 3. Two distribution types and the type alias hook (R3)
+- [x] 4. The remaining distributions, moments, samplers (R4)
+- [x] 5. Describe and show commands (R5)
+- [x] 6. Seeded randomness: RuleCall.random, `@seed`, `reroll`, the random commands (R6)
+- [x] 7. Spec tests and benchmarks (R7)
+- [x] 8. The probability calculator panel in the studio (R8)
+- [x] 9. Accurate large parameters: quadrature for the incomplete gamma and beta, `lbeta`, `gammaLogDensity` (PR #50)
+- [x] 10. `not_accurate` above 1e15 for shape and count parameters (PR #50)
+- [x] 11. Renamed-command hints through `registerCommandRename` (PR #50)
+- [x] 12. HyperGeometric mode walk and Zipf table search for quantiles (PR #50)
+- [x] 13. Kolmogorov–Smirnov test of every sampler (PR #50)
+- [x] 14. The simulation strip in the studio (ui.md 6) (PR #50)
+- [x] 15. Reroll only the selected random object

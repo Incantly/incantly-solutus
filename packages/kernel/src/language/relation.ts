@@ -29,9 +29,12 @@ export function children(n: TNode): TNode[] {
       return [n.target, ...(n.args ?? [])];
     case 'point':
       return [n.x, n.y];
+    case 'tuple':
+      return [...n.items];
     case 'polar':
       return [n.r, n.a];
     case 'list':
+    case 'cells':
       return [...n.items];
     case 'range':
       return n.step ? [n.from, n.to, n.step] : [n.from, n.to];

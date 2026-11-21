@@ -21,6 +21,10 @@ import { T, accepts, areaIndexOp, areaUnaryOp, binaryOp, isCallableTy, legalOpsF
 import type { AreaOpImpl, TypeSet } from './types';
 import type { Ty } from './types';
 import type { LangLimits } from './source';
+import { EXCLUDED_CELLS, WHOLE_SHEET, cellsIn, isCellName, parseCellName, rectCols, rectOf, rectRows } from './cells';
+import type { CellAddress, CellRect, CellRef } from './cells';
+import type { CellItem } from './tnode';
+import { makeNotice } from '../errors/notices';
 
 /* ------------------------------ public shapes ------------------------------ */
 
@@ -77,6 +81,8 @@ export interface CheckedLine {
   readonly domain?: readonly { readonly from: TNode; readonly to: TNode }[];
   readonly range?: CheckedRange;
   readonly style?: readonly CheckedStyle[];
+  /** The `with` items `style` was checked from, when they differ from the written ones (a style lift, `RotateText`). */
+  readonly styleItems?: readonly import('./ast').StyleItem[];
   /** Initial value and optional velocity of a state. */
   readonly state?: { readonly initial: TNode; readonly velocity?: TNode };
   /** For a rate line: the state and the derivative order. */
@@ -136,6 +142,36 @@ export function registerFieldNames(type: string, names: (ty: Ty) => readonly str
   FIELD_NAMES.set(type, names);
 }
 
+/**
+ * An area's tuple: the type and builder of a parenthesised list that is not the core `(x, y)` (`(x, y, z)` is a
+ * `Point3`). Asked with the item types; `undefined` passes.
+ */
+export type TupleRow = (items: readonly Ty[]) => { readonly result: Ty; readonly impl: (values: readonly unknown[]) => unknown } | undefined;
+const TUPLE_ROWS: TupleRow[] = [];
+
+export function registerTupleType(row: TupleRow): void {
+  if (!TUPLE_ROWS.includes(row)) TUPLE_ROWS.push(row);
+}
+
+/** What an `unknown_command` error says for a command that other apps have and we name differently. */
+export interface CommandRename {
+  /** The replacement, written as a sentence: "Use Sample(Normal(mu, sigma), n)." */
+  readonly hint: string;
+  /** Signatures of the replacement, shown as `forms`. */
+  readonly forms?: readonly string[];
+  /** Lines the editor may offer in place of the call. */
+  readonly suggest?: readonly string[];
+}
+const RENAMES = new Map<string, CommandRename>();
+
+/**
+ * An area registers a renamed or removed command (probability errors.md 2: `RandomNormal`, `InverseNormal`). A real
+ * command of the same name always wins; the rename only shapes the `unknown_command` error.
+ */
+export function registerCommandRename(name: string, rename: CommandRename): void {
+  RENAMES.set(name, rename);
+}
+
 /** Fields by type, appended to by other areas (docs/features/language/design.md 3.10 rule 9). */
 export const FIELDS: Record<string, Record<string, Ty>> = {
   Point: { x: T.Number, y: T.Number },
@@ -176,6 +212,9 @@ export class OverlayFigure implements FigureView {
   }
   get size() {
     return this.base.size;
+  }
+  isSheetCell(name: string): boolean {
+    return this.base.isSheetCell?.(name) ?? false;
   }
   lookup(name: string): ObjectInfo | undefined {
     if (this.over.has(name)) return this.over.get(name) ?? undefined;
@@ -497,7 +536,97 @@ class Checker {
         return this.inferRange(e);
       case 'cond':
         return this.inferCond(e, expected);
+      case 'cells':
+        return this.misplacedCells(e);
     }
+  }
+
+  /* ------------------------------ ranges of cells ------------------------------ */
+
+  /** A range where a value is wanted: `r = A1:C5` is not an object, `A1:B3 + 1` is not a number (spreadsheet errors 1). */
+  misplacedCells(e: Expr & { k: 'cells' }): null {
+    const token = this.textOf(e);
+    const node = this.parsed.node;
+    if (node.k === 'define' && node.expr === e) {
+      const name = node.target.name;
+      return this.err('range_not_object', e.s, e.e, 'lang.range_not_object', { token }, {
+        hint: `Make a list or a matrix from it: ${name} = ListFrom(${token}) or ${name} = MatrixFrom(${token}).`,
+        suggest: [`${name} = ListFrom(${token})`, `${name} = MatrixFrom(${token})`],
+        fingerprintKey: 'range_not_object',
+      });
+    }
+    return this.err('range_misplaced', e.s, e.e, 'lang.range_misplaced', { token }, {
+      hint: `Give it to a command that takes a range or a list, such as Sum(${token}), ListFrom(${token}) or PointsFrom(${token}).`,
+      fingerprintKey: 'range_misplaced',
+    });
+  }
+
+  /**
+   * A range as a command argument: the filled cells it covers become inputs of the line, row by row. Its type is `Range`
+   * with the element type of the cells, until a parameter decides what it becomes (`fitCells`).
+   */
+  inferCells(e: Expr & { k: 'cells' }, rect: CellRect = rectOf(parseCellName(e.from.name) as CellAddress, parseCellName(e.to.name) as CellAddress)): TNode {
+    // the whole sheet (`Cell(i, 1)`) leaves out the cell the line defines, which cannot read itself
+    const self = rect === WHOLE_SHEET ? this.ctx.name : undefined;
+    const found = cellsIn(rect, (n) => n !== self && !EXCLUDED_CELLS.has(n) && this.fig.lookup(n) !== undefined, () => this.fig.names());
+    const items: CellItem[] = [];
+    for (const c of found) {
+      const obj = this.fig.lookup(c.name) as ObjectInfo;
+      this.reads.add(obj.id);
+      // a cell cleared to `undefined` while something reads it directly is a hole, not an undefined value
+      const blank = obj.free === true && obj.source !== undefined && / = undefined$/.test(obj.source);
+      items.push({ n: 'ref', id: obj.id, name: c.name, ty: obj.type, col: c.col, row: c.row, s: e.s, e: e.e, ...(blank ? { blank: true } : {}) });
+    }
+    const of = items.length > 0 ? (items[0] as CellItem).ty : T.Number;
+    return { n: 'cells', rect, items, as: 'range', ty: { k: 'Range', of }, s: e.s, e: e.e };
+  }
+
+  /**
+   * What a range becomes for a parameter: a `Range` stays one; for a list parameter one row or column is a list and a
+   * larger range a list of rows, holding the cells of one type (the numbers when the cells are mixed, with a notice).
+   */
+  fitCells(node: TNode & { n: 'cells' }, set: TypeSet): TNode {
+    if (set.members.some((m) => m.k === 'Range')) return node;
+    const counts = new Map<string, { ty: Ty; n: number }>();
+    for (const it of node.items) {
+      const k = tyStr(it.ty);
+      const c = counts.get(k);
+      if (c) c.n++;
+      else counts.set(k, { ty: it.ty, n: 1 });
+    }
+    const pick = counts.get('Number')?.ty ?? (node.items[0] as CellItem | undefined)?.ty ?? T.Number;
+    const items = node.items.filter((it) => tyEq(it.ty, pick));
+    const skipped = node.items.length - items.length;
+    if (skipped > 0) {
+      const range = this.textOf(node);
+      this.warn(makeNotice('skipped_non_numeric', { range, count: skipped }));
+    }
+    const line = rectCols(node.rect) === 1 || rectRows(node.rect) === 1;
+    return { ...node, items, as: line ? 'list' : 'rows', ty: line ? listOf(pick) : listOf(listOf(pick)) };
+  }
+
+  /**
+   * The cells a command with a left-out `sheet` parameter reads: the rectangle between its `from` and `to` addresses, the
+   * one cell of literal `col` and `row` numbers, or else the whole sheet (`Cell(i, 1)` with a slider `i`).
+   */
+  sheetRectOf(params: readonly ParamSpec[], bound: readonly (TArg | undefined)[]): CellRect {
+    const arg = (name: string): TNode | undefined => bound[params.findIndex((q) => q.name === name)]?.expr;
+    const from = arg('from');
+    const to = arg('to');
+    if (from?.n === 'const' && to?.n === 'const' && from.ty.k === 'CellAddr' && to.ty.k === 'CellAddr') return rectOf(from.value as CellAddress, to.value as CellAddress);
+    const col = arg('col');
+    const row = arg('row');
+    if (col?.n === 'num' && row?.n === 'num' && Number.isInteger(col.v) && Number.isInteger(row.v) && col.v >= 1 && row.v >= 1 && col.v <= WHOLE_SHEET.c1 && row.v <= WHOLE_SHEET.r1) {
+      return { c0: col.v, r0: row.v, c1: col.v, r1: row.v };
+    }
+    return WHOLE_SHEET;
+  }
+
+  /** A cell name given to a `CellAddr` parameter: its address, whether the cell is filled or not (`FillCells(A2, …)`). */
+  cellAddrNode(e: Expr & { k: 'name' }): TNode {
+    const a = parseCellName(e.name) as CellAddress;
+    const value: CellRef = { col: a.col, row: a.row, colAbs: e.cabs === true, rowAbs: e.rabs === true };
+    return { n: 'const', name: e.name, value, ty: { k: 'CellAddr' }, s: e.s, e: e.e };
   }
 
   inferText(e: Expr & { k: 'str' }): TNode | null {
@@ -550,7 +679,11 @@ class Checker {
     const obj = this.fig.lookup(name);
     if (obj) {
       this.reads.add(obj.id);
-      return { n: 'ref', id: obj.id, name, ty: obj.type, s: e.s, e: e.e, ...(obj.unit ? { unit: obj.unit } : {}) };
+      // in a symbolic argument an Expr or a Symbol is read as a number formula and a Cond as a condition: the engine
+      // reads the tree, so `sqrt(a^2)` and `q and x > 0` check like any formula (cas/design.md 5.3)
+      const k = obj.type.k as string;
+      const ty = this.casBody && (k === 'Expr' || k === 'Symbol') ? T.Number : this.casBody && k === 'Cond' ? T.Bool : obj.type;
+      return { n: 'ref', id: obj.id, name, ty, s: e.s, e: e.e, ...(obj.unit ? { unit: obj.unit } : {}) };
     }
     return this.unknownName(e);
   }
@@ -641,6 +774,9 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
+    } else if (this.casBody) {
+      // cas/design.md 5.3 rule 5: in algebra an unknown other than x, y and z is made first, so a typo is never a new unknown
+      extra.hint = `In algebra, x, y and z are unknowns; make ${name} one first with ${name} = Symbol(), or make it a number.`;
     } else if (this.scopeNames().length > 0) {
       // inside a command's own expression the variable is the one the command names (`θ` in Polar, `s` in Curve)
       const vars = this.scopeNames();
@@ -654,6 +790,10 @@ class Checker {
     if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
       const original = this.parsed.sm.text;
       // the line that makes the name what the argument needs: a slider for a number, a point for a point, nothing for a type with no plain literal
+      if (this.casBody) {
+        extra.quickFixes = [{ label: `Make ${name} an unknown`, lines: [`${name} = Symbol()`, original] }];
+        return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name, type: 'Symbol' }, extra);
+      }
       if (want === undefined || want === 'Number') {
         const slider = `${name} = 1 in -5..5 step 0.1`;
         const qf: QuickFix[] = [{ label: `Create slider ${name} from -5 to 5`, lines: [slider, original] }];
@@ -675,6 +815,8 @@ class Checker {
     }
   }
   simpleUnknown = false;
+  /** True while a symbolic argument of a CAS command is checked (cas/design.md 5.3). */
+  casBody = false;
   /** The type a bare name needs in its argument position, when the forms that fit agree; `Any` when it has no plain literal. */
   readonly wants = new Map<Expr, string>();
 
@@ -788,11 +930,28 @@ class Checker {
   }
 
   inferTuple(e: Expr & { k: 'tuple' }): TNode | null {
+    if (e.items.length !== 2 && TUPLE_ROWS.length > 0) {
+      const xs = e.items.map((i) => this.infer(i));
+      if (xs.some((x) => x === null)) return null;
+      const items = xs as TNode[];
+      for (const row of TUPLE_ROWS) {
+        const r = row(items.map((i) => i.ty));
+        if (r) return { n: 'tuple', items, impl: r.impl, ty: r.result, s: e.s, e: e.e };
+      }
+      const bad = items.find((i) => i.ty.k !== 'Number');
+      if (bad && items.length === 3) {
+        return this.err('type_mismatch', bad.s, bad.e, 'lang.type_mismatch_where', { why: `A point in space takes three Numbers, but this is a ${tyStr(bad.ty)}` }, {
+          hint: 'Write (x, y, z) with three numbers.',
+          left: tyStr(bad.ty),
+          fingerprintKey: 'point3',
+        });
+      }
+    }
     if (e.items.length !== 2) {
       const third = e.items[2] as Expr;
       return this.err('syntax', third.s, third.e, 'lang.syntax', { token: this.textOf(third), expected: ')' }, {
         expected: [')'],
-        hint: 'A point has two coordinates: (x, y).',
+        hint: TUPLE_ROWS.length > 0 ? 'A point has two coordinates (x, y), or three in space (x, y, z).' : 'A point has two coordinates: (x, y).',
         fingerprintKey: 'tuple',
       });
     }
@@ -1019,10 +1178,12 @@ class Checker {
     for (const a of e.args) {
       const x = this.infer(a);
       if (!x) return null;
-      if (x.ty.k !== 'Number') return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes numbers, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
+      // an area's field may take a word instead (`b.force("normal")`, physics design 2.4)
+      const textOk = (f as Ty & { readonly textArgs?: boolean }).textArgs === true && x.ty.k === 'Text';
+      if (x.ty.k !== 'Number' && !textOk) return this.err('type_mismatch', x.s, x.e, 'lang.type_mismatch_where', { why: `${name} takes ${(f as Ty & { readonly textArgs?: boolean }).textArgs === true ? 'a word in quotes' : 'numbers'}, not a ${tyStr(x.ty)}` }, { left: tyStr(x.ty), fingerprintKey: `${name}.arg` });
       args.push(x);
     }
-    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : T.Number;
+    const ret = f.ret === 'Point' ? T.Point : f.ret === 'Bool' ? T.Bool : f.ret === 'Vector' ? T.Vector : f.ret === 'Vector3' || f.ret === 'Point3' ? ({ k: f.ret } as Ty) : T.Number;
     return { n: 'field', target: t, field: e.field, args, ty: ret, s: e.s, e: e.e };
   }
 
@@ -1116,8 +1277,13 @@ class Checker {
     const obj = this.fig.lookup(e.callee);
     // a function object may have a capital name (`W = Taylor(f, 0, 5)`): with no command of that name, the call is to it
     if (obj && isCallableTy(obj.type)) return this.inferCallObj(e, obj);
+    const rename = RENAMES.get(e.callee);
     if (obj) {
       extra.hint = `${e.callee} is a ${tyStr(obj.type)} object, not a command. Names followed by ( are looked up as commands when they start with a capital letter.`;
+    } else if (rename) {
+      extra.hint = rename.hint;
+      if (rename.forms) extra.forms = rename.forms;
+      if (rename.suggest) extra.suggest = rename.suggest;
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       extra.suggest = close.map((c) => this.replaceRange(e.cs, e.ce, c));
@@ -1299,7 +1465,9 @@ class Checker {
     return this.err(r.kind, s, e, `lang.${r.kind}`, r.params ?? { command, why: r.message }, {
       message: r.message,
       ...(r.hint !== undefined ? { hint: r.hint } : {}),
-      ...(r.suggest !== undefined ? { suggest: r.suggest.slice(0, 3) } : {}),
+      ...(r.suggest !== undefined || (r.replaceArg !== undefined && a)
+        ? { suggest: [...(r.replaceArg !== undefined && a ? [this.replaceRange(a.value.s, a.value.e, r.replaceArg)] : []), ...(r.suggest ?? [])].slice(0, 3) }
+        : {}),
       ...(r.limit !== undefined ? { limit: { ...r.limit } } : {}),
       ...(forms.length > 0 ? { forms: forms.map((f) => formText(command, f)) } : {}),
       phase: 'typecheck',
@@ -1357,10 +1525,13 @@ class Checker {
       const extra: number[] = [];
       let pos = 0;
       let dupNamed: number | undefined;
+      // a named-only parameter (`seed =`) and the ones after it take no positional argument
+      const firstNamed = form.params.findIndex((p) => p.named === true);
+      const positional = firstNamed < 0 ? form.params.length : firstNamed;
       for (let i = 0; i < args.length; i++) {
         const a = args[i] as Arg;
         if (a.name !== undefined) continue;
-        if (pos < form.params.length) bind[pos++] = i;
+        if (pos < positional) bind[pos++] = i;
         else if (form.rest) restArgs.push(i);
         else extra.push(i);
       }
@@ -1511,14 +1682,30 @@ class Checker {
         const ai = b.bind[k] as number;
         const kind = p.kind ?? 'value';
         if (ai === -1) {
+          // `Cell(col, row)` reads the whole sheet: a left-out parameter `sheet` of type Range is every filled cell
+          if (p.name === 'sheet' && p.type === 'Range') {
+            const whole = this.inferCells({ k: 'cells', from: { k: 'name', name: 'A1', s: call.cs, e: call.ce }, to: { k: 'name', name: 'A1', s: call.cs, e: call.ce }, s: call.cs, e: call.ce }, this.sheetRectOf(b.form.params, bound));
+            bound[k] = { param: p, expr: whole, omitted: false, ty: whole.ty };
+            tys[k] = whole.ty;
+            return;
+          }
           bound[k] = { param: p, omitted: true, ...(p.default !== undefined ? { value: p.default } : {}) };
           return;
         }
         const a = args[ai] as Arg;
         const set = setFor(p.type);
         score += set.size;
+        // a cell name where an address or a range is wanted (`FillCells(A2, …)`, `ClearCells(B2)`)
+        const av = a.value;
+        if (kind === 'value' && av.k === 'name' && isCellName(av.name) && set.members.some((m) => m.k === 'CellAddr' || m.k === 'Range')) {
+          const node = set.members.some((m) => m.k === 'CellAddr') ? this.cellAddrNode(av) : this.inferCells({ k: 'cells', from: av, to: av, s: av.s, e: av.e });
+          tys[k] = node.ty;
+          bound[k] = { param: p, expr: node, omitted: false, ty: node.ty };
+          return;
+        }
         if (kind === 'value') {
-          const node = valueArg(ai, elementHint(b, k));
+          let node = valueArg(ai, elementHint(b, k));
+          if (node && node.n === 'cells') node = this.fitCells(node, set);
           if (!node) {
             invalid = true;
             bound[k] = { param: p, omitted: false };
@@ -1588,9 +1775,12 @@ class Checker {
         this.errors = [];
         this.notices = [];
         let node: TNode | null;
+        const outerCas = this.casBody;
+        this.casBody = p.type.startsWith('Cas');
         try {
           node = this.inferArg(a.value, set.members.length === 1 ? set.members[0] : undefined);
         } finally {
+          this.casBody = outerCas;
           const errs = this.errors;
           this.errors = saved;
           this.notices = savedN.concat(this.notices);
@@ -1684,6 +1874,13 @@ class Checker {
 
     // real errors inside arguments take priority over a form diagnosis
     const failedValueArgs = tests.filter((t) => t.invalid);
+    // an argument written as algebra (an unknown x, y or z, or a comparison) fits a CAS form: its errors say how to fix it
+    const algebra = args.some((a) => /(^|[^\w.])[xyz]([^\w(]|$)|==|<|>/.test(this.textOf(a.value)));
+    const casFail = algebra ? failedValueArgs.find((t) => t.bodyErrors.length > 0 && t.b.form.params.some((p) => p.kind === 'body' && p.type.startsWith('Cas'))) : undefined;
+    if (casFail) {
+      for (const er of casFail.bodyErrors) if (this.errors.length < MAX_ERRORS_PER_LINE) this.errors.push(er);
+      return null;
+    }
     if (failedValueArgs.length > 0) {
       const first = failedValueArgs[0] as Test;
       first.b.form.params.forEach((p, k) => {
@@ -1747,6 +1944,15 @@ class Checker {
   }
 
   inferArg(e: Expr, expected?: Ty): TNode | null {
+    if (e.k === 'cells') {
+      this.node();
+      return this.inferCells(e);
+    }
+    // `CellRange(A1, B3)` given to a command is the range A1:B3 itself (spreadsheet design 3.8)
+    if (e.k === 'call' && e.callee === 'CellRange' && e.args.length === 2 && e.args.every((a) => a.name === undefined && a.value.k === 'name' && isCellName(a.value.name))) {
+      this.node();
+      return this.inferCells({ k: 'cells', from: (e.args[0] as Arg).value as Expr & { k: 'name' }, to: (e.args[1] as Arg).value as Expr & { k: 'name' }, s: e.s, e: e.e });
+    }
     if (this.relationCapable(e) && this.freeVars(e).size > 0) return this.buildRelation(e);
     return this.infer(e, expected);
   }
@@ -2000,6 +2206,10 @@ export function literalOf(node: TNode): unknown {
       const x = literalOf(node.x);
       const y = literalOf(node.y);
       return typeof x === 'number' && typeof y === 'number' ? { x, y } : undefined;
+    }
+    case 'tuple': {
+      const items = node.items.map(literalOf);
+      return items.every((v) => typeof v === 'number') ? node.impl(items) : undefined;
     }
     case 'list': {
       const items = node.items.map(literalOf);

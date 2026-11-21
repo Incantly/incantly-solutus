@@ -12,6 +12,7 @@ import { assumptions as makeAssumptions } from './assume';
 import type { Cell, OpName, RunContext, Step, SymArg, SymbolicLimits } from './contracts';
 import { DEFAULT_LIMITS, HEAVY_OPS, SYMBOLIC_COMMANDS, SYMBOLIC_ERROR_CODES, undefinedCell } from './contracts';
 import type { SymCond, SymNode } from './node';
+import { freeSymbols, freeSymbolsCond } from './node';
 import {
   ARENA_REBUILD_AT, arena, condKey, floatN, internCondTree, internTree, LimitExceeded, mapNodes, mapCondNodes,
   ratN, withDigitLimit,
@@ -169,6 +170,19 @@ function ownValue<T>(table: Readonly<Record<string, T>>, key: string): T | undef
  */
 export function seedCache(key: string, result: Result<RunSuccess>): void {
   if (result.ok) cachePut(key, result.value.cell, result.notices);
+}
+
+/**
+ * A worker's answer, cloned across `postMessage`, put in this realm's cache (SYM-SM-26): its trees are interned here
+ * first, so the next fast-lane run of the same call finds it.
+ */
+export function acceptWorkerResult(key: string, result: Result<RunSuccess>): void {
+  if (!result.ok) return;
+  const memo = new Map<SymNode, SymNode>();
+  const cell = result.value.cell;
+  const own: Cell<SymArg> = cell.defined ? { defined: true, value: internArg(cell.value, memo) } : cell;
+  if (!own.defined && own.reason === 'pending') return;
+  cachePut(key, own, result.notices);
 }
 
 /* ---------------------------------- errors ----------------------------------- */
@@ -355,7 +369,7 @@ function readsClockArg(a: SymArg): boolean {
 let runDepth = 0;
 
 /** Rebuild every argument tree as this arena's nodes (a no-op for nodes it already owns). */
-function internArg(a: SymArg, memo: Map<SymNode, SymNode>): SymArg {
+export function internArg(a: SymArg, memo: Map<SymNode, SymNode>): SymArg {
   switch (a.k) {
     case 'expr': {
       const out: { -readonly [K in keyof typeof a]: (typeof a)[K] } = { ...a, e: internTree(a.e, memo) };
@@ -390,7 +404,7 @@ export function run(op: OpName, args: readonly SymArg[], opts: RunOptions = {}, 
       if (arena.size() > ARENA_REBUILD_AT) arena.rebuild();
       // Family parameters are numbered from k1 in every call, so a result
       // does not depend on the calls made before it (SYM-SM-21).
-      resetTrigParams();
+      resetTrigParams(argSymbols(args));
     }
     return runMapped(op, args, opts, ctx);
   } finally {
@@ -691,3 +705,18 @@ export function runCacheKey(op: OpName, args: readonly SymArg[], opts: RunOption
 
 // Every node made while the modules loaded (their constants) survives an arena rebuild.
 arena.markBase();
+
+/** Every symbol name free in the arguments of a call. */
+function argSymbols(args: readonly SymArg[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (a: SymArg): void => {
+    if (a.k === 'expr') for (const s of freeSymbols(a.e)) out.add(s);
+    else if (a.k === 'cond') for (const s of freeSymbolsCond(a.c)) out.add(s);
+    else if (a.k === 'sym') out.add(a.name);
+    else if (a.k === 'list') a.items.forEach(walk);
+    else if (a.k === 'named') walk(a.v);
+    else if (a.k === 'function') for (const s of freeSymbols(a.body)) out.add(s);
+  };
+  args.forEach(walk);
+  return out;
+}

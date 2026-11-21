@@ -79,7 +79,7 @@ checked is listed under "Probe coverage" so the tester can mine it for cases.
 - 5 (Notices): done. Kinds `clamped` (core), `snapped`, `range_kept` (kept for
   hosts; the kernel owns redefinition reports), `unit_inferred`,
   `step_fallback`, `step_below_precision`, `precision_loss` (core) registered.
-- 6 (Better than GeoGebra): the nine items are the properties of the above.
+- 6 (Better than the reference app): the nine items are the properties of the above.
 - 7 (Performance): done, see "Speed".
 - 8 (Test plan): builders write no tests; the probes covered commit tables,
   idempotency/clamp spot checks, format goldens, animation determinism and the

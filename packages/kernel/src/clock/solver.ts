@@ -212,7 +212,18 @@ export class StateSolver {
 
   /** Reads the figure's states and rates when the structure changed. */
   private rebuild(): void {
+    // (nothing changed: the check is all this does at most frames. The work is in `rebuildNow`: a function that holds a
+    // closure makes its context on the heap at every call, even one that returns at once, which is garbage in each frame)
     if (this.version === this.fig.version() && !this.dirtyInputs) return;
+    this.rebuildNow();
+  }
+
+  private rebuildNow(): void {
+    // no states before and none now: nothing to build (most lines of most figures)
+    if (!this.dirtyInputs && this.layout.length === 0 && this.missing.length === 0 && this.fig.states().size === 0) {
+      this.version = this.fig.version();
+      return;
+    }
     const rebuilt = this.version !== this.fig.version();
     const restart = this.dirtyInputs;
     this.version = this.fig.version();

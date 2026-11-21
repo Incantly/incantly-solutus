@@ -17,11 +17,40 @@ import { ObjRec } from './core';
 import type { FigureOptions } from './core';
 import { FigureHist, merge } from './hist';
 import { SCRIPT_VERSION, emptyReport } from './tx';
-import { defaultsFor } from './props';
+import { defaultsFor, styleTypeOf } from './props';
 import { scriptTails } from './registry';
+import type { WorldDriver } from './drivers';
+import { worldDriverFactories } from './drivers';
+
+/** What the state driver gives when no state is on (read, never changed: a pass makes no list for it). */
+const NO_RECS: ObjRec[] = [];
+/** The options of a `setClock` that gives none. */
+const NO_CLOCK_OPTS: { bt?: number; beat?: number; flush?: boolean } = {};
 import type { Cell, ChangeReport, EffectiveStyle, FrameDelta, Slice, StyleEntry, TxResult } from './types';
 
 export type { FigureOptions, Slice };
+
+/** What a world driver inside the kernel may use of its figure (`Figure.driverAccess`). */
+export interface DriverAccess {
+  readonly list: readonly ObjRec[];
+  readonly env: import('../language/runtime').Env;
+  readonly byId: (id: ObjId) => ObjRec | undefined;
+  readonly byName: (name: Name) => ObjRec | undefined;
+  readonly version: () => number;
+  readonly clockT: () => number;
+  readonly t0: () => number;
+  readonly solverStepsPerSecond: () => number;
+  readonly ancestorRecs: (seeds: readonly ObjRec[]) => ObjRec[];
+  readonly downOf: (r: ObjRec) => Int32Array;
+  readonly compute: (r: ObjRec) => Cell;
+  readonly ensureSlots: (n: number) => void;
+  readonly write: (r: ObjRec, c: Cell) => boolean;
+  /** Writes a cell known to differ from the held one, without comparing (a driver whose time moved). */
+  readonly writeNew: (r: ObjRec, c: Cell) => boolean;
+  readonly styleOf: (id: ObjId) => EffectiveStyle | undefined;
+  readonly rerunOf: (r: ObjRec) => 'continue' | 'restart';
+  readonly sliceClock: (target: ObjRec) => Slice | ErrorObject;
+}
 export { SCRIPT_VERSION };
 
 /** One row of the build list (kernel design 12.1). */
@@ -78,6 +107,7 @@ export class Figure extends FigureHist {
 
   constructor(opts: FigureOptions = {}) {
     super(opts);
+    if (opts.gate) this.setGate(opts.gate);
     this.solver = new StateSolver({
       list: this.list,
       states: () => this.stateRecs,
@@ -85,7 +115,7 @@ export class Figure extends FigureHist {
       byId: (id) => this.byIdMap.get(id),
       version: () => this.structureVersion,
       clockT: () => this.clockState.t,
-      t0: () => this.clockRange().from,
+      t0: () => this.clockFromOf(),
       stepsPerSecond: () => this.directiveStepRate(),
       ancestorRecs: (seeds) => this.ancestorRecs(seeds),
       downOf: (r) => this.downOf(r),
@@ -98,15 +128,85 @@ export class Figure extends FigureHist {
         return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
       },
     });
-    this.stateDriver = () => (this.solver.active ? this.solver.sync() : []);
+    this.stateDriver = () => (this.solver.active ? this.solver.sync() : NO_RECS);
     this.stateSampler = {
-      recs: () => (this.solver.active ? this.solver.stateObjects() : []),
-      at: (t) => this.solver.statesAt(t),
+      recs: () => {
+        const own = this.solver.active ? this.solver.stateObjects() : [];
+        const drv = this.worldDrivers();
+        if (drv.length === 0) return own;
+        const extra: ObjRec[] = [];
+        for (const d of drv) extra.push(...(d.sampleRecs?.() ?? []));
+        return [...own, ...extra];
+      },
+      at: (t) => {
+        const own = this.solver.active ? this.solver.statesAt(t) : undefined;
+        const drv = this.worldDrivers();
+        if (drv.length === 0) return own;
+        const out: (readonly [ObjRec, Cell])[] = [...(own ?? [])];
+        for (const d of drv) out.push(...(d.sample?.(t) ?? []));
+        return out;
+      },
+    };
+  }
+
+  /* ------------------------------ world drivers ------------------------------ */
+
+  private drivers: WorldDriver[] = [];
+  private driverFactoryCount = 0;
+
+  /** The figure's world drivers (core hook 1), made on first use from the registered factories. */
+  worldDrivers(): readonly WorldDriver[] {
+    const fs = worldDriverFactories();
+    while (this.driverFactoryCount < fs.length) {
+      const d = (fs[this.driverFactoryCount++] as (f: unknown) => WorldDriver | undefined)(this);
+      if (d) this.drivers.push(d);
+    }
+    return this.drivers;
+  }
+
+  protected override drivenCell(r: ObjRec, c: Cell): Cell {
+    for (const d of this.drivers) {
+      const k = d.onCompute?.(r, c);
+      if (k) return k;
+    }
+    return c;
+  }
+
+  /**
+   * What a world driver may use of the figure: its records and the evaluation services the state solver uses. Only for
+   * drivers inside the kernel.
+   */
+  driverAccess(): DriverAccess {
+    return {
+      list: this.list,
+      env: this.env,
+      byId: (id) => this.byIdMap.get(id),
+      byName: (name) => this.byNameMap.get(name),
+      version: () => this.structureVersion,
+      clockT: () => this.clockState.t,
+      t0: () => this.clockFromOf(),
+      solverStepsPerSecond: () => this.directiveStepRate(),
+      ancestorRecs: (seeds) => this.ancestorRecs(seeds),
+      downOf: (r) => this.downOf(r),
+      compute: (r) => this.compute(r),
+      ensureSlots: (n) => this.ensureSlots(n),
+      write: (r, c) => this.writeCell(r, c),
+      writeNew: (r, c) => this.writeNewCell(r, c),
+      styleOf: (id) => this.styleOf(id),
+      rerunOf: (r) => {
+        const e = r.p.style.get('rerun');
+        return e?.word === 'continue' || e?.text === 'continue' ? 'continue' : 'restart';
+      },
+      sliceClock: (target) => this.sliceRecs(undefined, target),
     };
   }
 
   protected writeCell(r: ObjRec, c: Cell): boolean {
     return this.setCell(r, c);
+  }
+
+  protected writeNewCell(r: ObjRec, c: Cell): boolean {
+    return this.setCellNew(r, c);
   }
 
   /* ------------------------------ update ------------------------------ */
@@ -116,7 +216,7 @@ export class Figure extends FigureHist {
     if (this.busy) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     // a frame outside any operation starts with no faults, so a rule that throws every frame cannot grow the list
     if (this.opDepth > 0) return this.flushNow(force);
-    this.faults = [];
+    if (this.faults.length > 0) this.faults = [];
     this.listenerFailures = 0;
     let d: FrameDelta;
     try {
@@ -128,18 +228,51 @@ export class Figure extends FigureHist {
     }
     this.deliver();
     const failed = this.takeListenerFailures();
+    if (this.drivers.length > 0 && !this.inAfterFlush) {
+      this.inAfterFlush = true;
+      try {
+        for (let k = 0; k < this.drivers.length; k++) (this.drivers[k] as WorldDriver).afterFlush?.();
+      } catch {
+        // a driver's follow-up must not take the frame down
+      } finally {
+        this.inAfterFlush = false;
+      }
+    }
     return failed > 0 ? { ...d, listenerFailures: failed } : d;
   }
 
+  private inAfterFlush = false;
+
   private flushNow(force: boolean): FrameDelta {
-    return super.flush(force);
+    const d = super.flushPass(force, undefined);
+    const drv = this.worldDrivers();
+    if (drv.length === 0) return d;
+    // core hook 1: the drivers write what they own, then one more pass runs over what reads it. Each driver's changed
+    // objects are marked at once (the same order as listing them all first: a driver writes only what it owns)
+    let any = false;
+    for (let k = 0; k < drv.length; k++) {
+      const got = (drv[k] as WorldDriver).afterPass();
+      for (let q = 0; q < got.length; q++) {
+        this.markDirty(got[q] as ObjRec);
+        any = true;
+      }
+    }
+    if (!any) return d;
+    // the second pass adds its changes to the first one's delta
+    return super.flushPass(false, d);
   }
 
   protected override onFreeWritten(rec: ObjRec, was?: unknown): void {
     this.solver.noteFree(rec, was);
+    for (const w of this.drivers) w.noteFree?.(rec, was);
   }
 
   protected override onInputLine(words: readonly string[]): string | undefined {
+    for (const w of this.worldDrivers()) {
+      const r = w.inputLine?.(words);
+      if (r !== false && r !== undefined) return r;
+      if (r === undefined && w.inputLine) return undefined;
+    }
     if (words[0] === 'reset') {
       this.solver.restoreEntry({ kind: 'reset', t: Number(words[2]) });
       return undefined;
@@ -164,17 +297,65 @@ export class Figure extends FigureHist {
 
   /* ------------------------------ the clock ------------------------------ */
 
+  /** The words of a directive the figure has (`@sheet 26 100` gives `['26', '100']`), or `undefined`. */
+  directive(name: string): readonly string[] | undefined {
+    return this.directiveItem(name)?.words;
+  }
+
+  /** The words of every line of a directive that may be written many times (`@cell`), in order. */
+  directiveLines(name: string): readonly (readonly string[])[] {
+    return this.items.filter((it) => it.name === name).map((it) => it.words);
+  }
+
   /** The film range from `@clock a..b`: `0..Infinity` without the directive. */
   clockRange(): { from: number; to: number } {
-    const d = this.directiveItem('clock');
-    const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
-    return m ? { from: Number(m[1]), to: Number(m[2]) } : { from: 0, to: Infinity };
+    this.readClock();
+    return { from: this.clockFromNow, to: this.clockToNow };
   }
+
+  /*
+   * The film range and the solver rate, read from their directives only when the directive changed (a frame asks for them
+   * at every step, and a regular expression makes its match array each time, which is garbage, design 11.4).
+   */
+  private clockItem: unknown;
+  private clockWord: string | undefined;
+  private clockRead = false;
+  private clockFromNow = 0;
+  private clockToNow = Infinity;
+
+  /** The film's first moment, `@clock a..b`'s a (0 without it). */
+  private clockFromOf(): number {
+    this.readClock();
+    return this.clockFromNow;
+  }
+
+  private readClock(): void {
+    const d = this.directiveItem('clock');
+    const word = d?.words[0];
+    if (this.clockRead && d === this.clockItem && word === this.clockWord) return;
+    this.clockRead = true;
+    this.clockItem = d;
+    this.clockWord = word;
+    const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
+    this.clockFromNow = m ? Number(m[1]) : 0;
+    this.clockToNow = m ? Number(m[2]) : Infinity;
+  }
+
+  private rateItem: unknown;
+  private rateWord: string | undefined;
+  private rateRead = false;
+  private rateNow = 240;
 
   protected directiveStepRate(): number {
     const d = this.directiveItem('solver');
+    const word = d?.words[1];
+    if (this.rateRead && d === this.rateItem && word === this.rateWord) return this.rateNow;
+    this.rateRead = true;
+    this.rateItem = d;
+    this.rateWord = word;
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
-    return m ? Number(m[1]) : 240;
+    this.rateNow = m ? Number(m[1]) : 240;
+    return this.rateNow;
   }
 
   /** The beat start times the figure was given, in seconds (ascending). */
@@ -193,14 +374,14 @@ export class Figure extends FigureHist {
    * Moves the clock and runs one pass (a seek is one update pass). `t` is clamped to the film range. `bt` and `beat` follow
    * from the beat starts unless given. Only `t`, `bt` and `beat` change; the view, the selection and history are untouched.
    */
-  setClock(t: number, opts: { bt?: number; beat?: number; flush?: boolean } = {}): FrameDelta | ErrorObject {
+  setClock(t: number, opts: { bt?: number; beat?: number; flush?: boolean } = NO_CLOCK_OPTS): FrameDelta | ErrorObject {
     if (this.busy) return this.busyError('setClock');
     if (typeof t !== 'number' || !Number.isFinite(t)) {
       return err('bad_argument', { line: 0, col: 1, endCol: 1 }, { command: 'setClock', why: 'the time must be a finite number' }, { recovery: 'fix_line', fingerprintKey: 'setClock' });
     }
     if (typeof opts !== 'object' || opts === null) opts = {};
-    const { from, to } = this.clockRange();
-    const tt = Math.min(to, Math.max(from, t));
+    this.readClock();
+    const tt = Math.min(this.clockToNow, Math.max(this.clockFromNow, t));
     let beat = 0;
     for (let i = 0; i < this.beatStarts.length; i++) if ((this.beatStarts[i] as number) <= tt) beat = i;
     const start = this.beatStarts.length > 0 ? (this.beatStarts[beat] as number) : 0;
@@ -215,7 +396,8 @@ export class Figure extends FigureHist {
     this.env.bt = nbt;
     this.env.beat = nb;
     this.markClockDirty();
-    this.queue({ ev: 'clock', t: tt });
+    // (the event is for the listeners: with none, and the flush below delivering at once, it would be made and dropped)
+    if (this.listeners.size > 0 || this.opDepth > 0 || opts.flush === false) this.queue({ ev: 'clock', t: tt });
     if (opts.flush === false) return { valueIds: [], styleIds: [], undefinedChanges: [], ran: 0 };
     return this.flush();
   }
@@ -232,7 +414,19 @@ export class Figure extends FigureHist {
 
   /** Warnings the solver raised (an unstable state) since the last call. */
   takeWarnings(): Notice[] {
-    return this.solver.warnings.splice(0, this.solver.warnings.length);
+    const out = this.solver.warnings.splice(0, this.solver.warnings.length);
+    for (const w of this.drivers) out.push(...(w.takeWarnings?.() ?? []));
+    return out;
+  }
+
+  /** `Restart()` for the world drivers (the physics world goes back to its start at the current time). */
+  restartDrivers(): void {
+    for (const w of this.worldDrivers()) w.onRestart?.();
+  }
+
+  /** True while a world driver is behind the clock and wants frames even when paused. */
+  driversNeedFrames(): boolean {
+    return this.drivers.some((w) => w.needsFrame?.() === true);
   }
 
   /* ------------------------------ read-only views ------------------------------ */
@@ -248,10 +442,15 @@ export class Figure extends FigureHist {
       free: r.p.kind === 'free',
       state: r.p.kind === 'state',
       ...(r.range ? { range: r.range } : {}),
-      definition: printLineNode(r.p.node),
+      definition: printedLine(r.p.node),
       inputs: r.inputs.map((i) => i.id),
       style: this.styleOf(r.id) as EffectiveStyle,
     };
+  }
+
+  /** True when an object has this name (cheaper than `get`, which builds the whole view). */
+  has(name: Name): boolean {
+    return this.byNameMap.has(name);
   }
 
   /** One object by name or id. */
@@ -327,7 +526,7 @@ export class Figure extends FigureHist {
         id: r.id,
         name: r.p.name,
         type: r.p.type.k as TypeName,
-        definition: printLineNode(r.p.node),
+        definition: printedLine(r.p.node),
         valueText: c.defined ? valueText(c.value) : `undefined (${c.reason})`,
         sentence: this.sentence(r),
         ...(title !== undefined ? { group: { title, breakpoint: true as const } } : {}),
@@ -389,7 +588,7 @@ export class Figure extends FigureHist {
   /** The text of one object: its line, with its `with` list. Free values print as their current value. */
   protected objectLine(r: ObjRec): string {
     const p = r.p;
-    let base = printLineNode(p.node);
+    let base = printedLine(p.node);
     if (p.kind === 'free') {
       const lit = valueSource(p.type, p.value);
       if (lit !== undefined && p.node.k === 'define') {
@@ -398,7 +597,7 @@ export class Figure extends FigureHist {
       }
     }
     const withs: string[] = [];
-    const defaults = defaultsFor(p.type.k, p.kind === 'free');
+    const defaults = defaultsFor(styleTypeOf(p.type), p.kind === 'free');
     for (const e of p.style.values()) {
       if (e.eval === undefined && e.value !== undefined && e.word === undefined) {
         const dv = (defaults as unknown as Record<string, unknown>)[e.key];
@@ -517,6 +716,20 @@ export class Figure extends FigureHist {
     }
     return { ok: e0 === 0, applied, skipped: total - applied, errors: out, warnings };
   }
+}
+
+/**
+ * The printed text of a parsed line, kept per node. Nodes are never edited in place (a redefine, rename or range
+ * change makes a new one), so the text of a node never changes; `objects()` on 5,000 objects stops printing them all.
+ */
+const PRINTED = new WeakMap<object, string>();
+function printedLine(node: Parameters<typeof printLineNode>[0]): string {
+  let s = PRINTED.get(node);
+  if (s === undefined) {
+    s = printLineNode(node);
+    PRINTED.set(node, s);
+  }
+  return s;
 }
 
 function tyText(r: ObjRec): string {

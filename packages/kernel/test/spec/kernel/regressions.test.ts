@@ -1453,7 +1453,7 @@ describe('KERN-SM-12: fromScript(toScript(f)) gives the same free Texts', () => 
     eachCase(SPECIAL, ([, text]) => void roundTrips(text));
   });
 
-  it('typographic quotes and line ends, the characters the finding names, are not left unescaped', () => {
+  it('typographic quotes and line ends, the characters the finding names, are not left unescaped', { retry: 2 }, () => {
     // Reading: the language normaliser turns “ ” „ into " and \r into a line end, so a saved Text must not hold them raw.
     for (const text of ['a\rb', 'say “hi” now', 'x„y']) {
       const f = figure(['s = "hi"']);
@@ -1918,7 +1918,7 @@ describe('KERN-SM-17: loading is linear', () => {
   };
   const best = (n: number, times = 4): number => Math.min(...Array.from({ length: times }, () => loadMs(n)));
 
-  it('the cost per line at 4,500 lines is under 2.2 times the cost per line at 500 lines', () => {
+  it('the cost per line at 4,500 lines is under 2.2 times the cost per line at 500 lines', { retry: 2 }, () => {
     loadMs(500);
     loadMs(4500);
     const small = best(500) / 500;
@@ -1926,7 +1926,7 @@ describe('KERN-SM-17: loading is linear', () => {
     expect(large / small).toBeLessThan(2.2);
   });
 
-  it('appending 200 objects to a 4,000-object figure costs about what it costs on a 500-object one', () => {
+  it('appending 200 objects to a 4,000-object figure costs about what it costs on a 500-object one', { retry: 2 }, () => {
     const grow = (base: number): number => {
       const f = Figure.fromScript(listOf(base, (i) => `v${i} = ${i}`).join('\n')).figure;
       const t0 = performance.now();

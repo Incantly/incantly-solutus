@@ -32,7 +32,7 @@ Format: section 9 of the core design. Static errors stop the line; runtime probl
 | `bad_parameter` | any constructor whose parameters come from objects | "sigma is -0.3; Normal needs sigma > 0" | undefined, silent | Change the slider range so it cannot cross 0; the detail names the offending input |
 | `out_of_range` | `Quantile` with `q` outside [0, 1]; `CentralInterval` with mass outside (0, 1); `MinTrials` | "q = 1.2 must be between 0 and 1" | undefined | |
 | `undefined_moment` | `Mean`, `Variance`, `Skewness`, `Kurtosis` | "Cauchy has no mean"; "StudentT with df 1.5 has infinite variance" | undefined | Use `Median`, or a different distribution |
-| `not_accurate` | extreme parameters where our algorithms cannot reach 1e-6 relative | "Gamma shape 3e9 is outside the accurate range" | wrong digits | Reduce the parameter; use `NormalApprox` |
+| `not_accurate` | extreme parameters where our algorithms cannot reach 1e-6 relative | "Gamma shape 3e15 is outside the accurate range (up to 1e15)" | wrong digits | Reduce the parameter; use `NormalApprox` |
 | `no_convergence` | `Quantile` (bracket failure) | "no bracket for q = 1e-320" | undefined | Use `tail = "right"` for tiny tail probabilities |
 | `sample_too_large` | `Sample(list, n, false)` with `n > length` | "asked 12, list has 10" | undefined | Use `replace = true` or smaller `n` |
 | `empty_list` | `RandomElement([])`, `Sample([], n)` | | undefined | |

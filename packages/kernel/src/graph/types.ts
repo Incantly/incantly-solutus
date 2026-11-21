@@ -104,6 +104,8 @@ export interface EffectiveStyle {
   readonly selectable: boolean;
   readonly layer: number;
   readonly color: ColorSpec;
+  /** Present when the object's own line sets `color` (a value or a rule), so a view draws that colour, not its palette. */
+  readonly ownColor?: true;
   readonly opacity: number;
   readonly width: number;
   readonly lineStyle: Props['lineStyle'];
@@ -246,11 +248,39 @@ export interface ApplyOptions {
   force?: boolean;
   /** A plain redefinition of a slider drops its range instead of keeping it (set by a line rewrite such as `a with min = none`). */
   dropRange?: boolean;
+  /** Who wrote the line (app-modes design 3.6): the host page (default), a learner typing, or the model. */
+  origin?: LineOrigin;
+  /**
+   * A redefinition to the same text checks the line again and rebuilds its inputs, instead of only refreshing the value
+   * (a range that now covers a new cell, spreadsheet design 3.5).
+   */
+  rebind?: boolean;
+  /**
+   * The line was written by an area from lines it already checked (a fill, a paste): when it defines a new name, no area
+   * handler or rewrite is asked for it, which they would not change. Only for lines an area made, never for typed text.
+   */
+  generated?: boolean;
 }
+
+/** Who wrote a line. Only the host may write `@mode`, `@restrict` and `@exam`. */
+export type LineOrigin = 'host' | 'learner' | 'model';
+
+/** What a host's line gate sees (app-modes design 3.1): what the line uses, the checked line and who wrote it. */
+export interface GateCall {
+  readonly uses: import('../language/uses').LineUses;
+  readonly line: import('../language/check').CheckedLine;
+  readonly parsed: import('../language/ast').ParsedLine;
+  readonly origin: LineOrigin;
+}
+
+/** A host's refusal of a line (a mode policy): an error fails the line and nothing changes. Must be pure. */
+export type LineGate = (call: GateCall) => import('../contracts/errors').ErrorObject | undefined;
 
 export interface BatchOptions {
   /** The label of the undo group. */
   group: string;
+  /** Who wrote the lines (see `ApplyOptions.origin`). */
+  origin?: LineOrigin;
   /** `atomic` (default): all lines or none. `independent`: every line applies or fails on its own. */
   mode?: 'atomic' | 'independent';
   force?: boolean;
@@ -261,6 +291,10 @@ export interface BatchOptions {
    * the undo history are as they were. The result has the shape of a real batch, with `dryRun: true` on it and on each success.
    */
   dryRun?: boolean;
+  /** As `ApplyOptions.rebind`, for every line of the batch. */
+  rebind?: boolean;
+  /** As `ApplyOptions.generated`, for every line of the batch. */
+  generated?: boolean;
 }
 
 export interface BatchResult {

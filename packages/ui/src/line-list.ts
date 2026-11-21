@@ -23,7 +23,21 @@ export type RowState =
 export type RowControl =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'bool'; readonly checked: boolean }
-  | { readonly kind: 'slider'; readonly min: number; readonly max: number; readonly step?: number; readonly value: number; readonly text: string };
+  | { readonly kind: 'slider'; readonly min: number; readonly max: number; readonly step?: number; readonly value: number; readonly text: string }
+  // controls (controls-scripting ui.md 1 to 3); a host draws them, this list shows their value text only
+  | { readonly kind: 'button'; readonly label: string }
+  | { readonly kind: 'choice'; readonly options: readonly string[]; readonly index: number }
+  | { readonly kind: 'input'; readonly caption: string; readonly text: string; readonly error?: InputProblem; readonly notice?: string };
+
+/** An input box's error: the message and, when known, the columns of the text it is about (1-based, end exclusive). */
+export interface InputProblem {
+  readonly message: string;
+  readonly col?: number;
+  readonly endCol?: number;
+}
+
+type FieldControl = Extract<RowControl, { kind: 'text' | 'bool' | 'slider' }>;
+const isField = (c: RowControl | undefined): c is FieldControl => c !== undefined && (c.kind === 'text' || c.kind === 'bool' || c.kind === 'slider');
 
 export interface LineRow {
   readonly id: number;
@@ -252,7 +266,7 @@ export class LineListElement extends HTMLElement {
 
   /** Updates the row's field, checkbox or slider in place; a control that has focus keeps what the person is typing. */
   private fillControl(entry: Entry, row: LineRow): void {
-    const c = row.control;
+    const c = isField(row.control) ? row.control : undefined;
     if (c === undefined) {
       entry.control = undefined;
       entry.ctl.replaceChildren();

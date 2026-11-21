@@ -86,6 +86,8 @@ export interface TypeStyle {
   readonly keys?: readonly string[];
   /** False for a type that is not drawn (a matrix, a distribution): it then takes only the keys every object takes. Default true. */
   readonly drawable?: boolean;
+  /** A list of this type looks like one of them (a list of bodies is drawn in the bodies' colour). Default false. */
+  readonly lists?: boolean;
 }
 
 interface TypeStyleRec {
@@ -93,6 +95,7 @@ interface TypeStyleRec {
   freeDefaults: Partial<NonNullable<TypeStyle['defaults']>>;
   keys: Set<string>;
   drawable: boolean | undefined;
+  lists: boolean;
 }
 const typeStyles = new Map<string, TypeStyleRec>();
 
@@ -104,13 +107,20 @@ export function registerTypeStyle(type: string, style: TypeStyle): void {
   if (typeof type !== 'string' || type === '' || type === '__proto__' || typeof style !== 'object' || style === null) return;
   let r = typeStyles.get(type);
   if (!r) {
-    r = { defaults: {}, freeDefaults: {}, keys: new Set(), drawable: undefined };
+    r = { defaults: {}, freeDefaults: {}, keys: new Set(), drawable: undefined, lists: false };
     typeStyles.set(type, r);
   }
   if (style.defaults) Object.assign(r.defaults, style.defaults);
   if (style.freeDefaults) Object.assign(r.freeDefaults, style.freeDefaults);
   for (const k of style.keys ?? []) r.keys.add(k);
   if (style.drawable !== undefined) r.drawable = style.drawable;
+  if (style.lists !== undefined) r.lists = style.lists;
+}
+
+/** The type whose default look an object of type `ty` takes: a list's item type when that type asks for it. */
+export function styleTypeOf(ty: { readonly k: string; readonly of?: { readonly k: string } }): string {
+  if (ty.k === 'List' && ty.of && typeStyles.get(ty.of.k)?.lists === true) return ty.of.k;
+  return ty.k;
 }
 
 /** The default properties of an object of this type. `dependent` and `onPath` only matter for a Point. */
@@ -216,6 +226,12 @@ export function coerceProp(key: string, v: unknown): Coerced {
       const b = typeof v === 'string' ? (v === 'true' ? true : v === 'false' ? false : undefined) : v;
       return typeof b === 'boolean' ? { ok: true, value: b } : bad();
     }
+    case 'boolnum': {
+      // true, false, or a number above `min` (physics `burns`: true, or the seconds of burning)
+      const b = typeof v === 'string' ? (v === 'true' ? true : v === 'false' ? false : undefined) : v;
+      if (typeof b === 'boolean') return { ok: true, value: b };
+      return typeof b === 'number' && b === b && b > (spec.min ?? -Infinity) && b <= (spec.max ?? Infinity) ? { ok: true, value: b } : bad();
+    }
     case 'enum':
       return typeof v === 'string' && (spec.values ?? []).includes(v) ? { ok: true, value: v } : bad();
     case 'int':
@@ -233,6 +249,11 @@ export function coerceProp(key: string, v: unknown): Coerced {
     case 'color': {
       const c = toColor(v);
       return c ? { ok: true, value: c } : bad();
+    }
+    case 'point': {
+      const o = v as { x?: unknown; y?: unknown } | null;
+      return typeof o === 'object' && o !== null && typeof o.x === 'number' && typeof o.y === 'number' && Number.isFinite(o.x) && Number.isFinite(o.y)
+        ? { ok: true, value: { x: o.x, y: o.y } } : bad();
     }
   }
 }
@@ -284,7 +305,7 @@ export function setProp(p: Props, key: string, value: unknown): void {
 export const NO_TAGS: readonly string[] = Object.freeze([]);
 
 /** Shapes a `Props` and the evaluated `showIf` into an `EffectiveStyle`. */
-export function toEffective(p: Props, showIf: boolean | undefined | 'none', showIfText?: string): EffectiveStyle {
+export function toEffective(p: Props, showIf: boolean | undefined | 'none', showIfText?: string, ownColor = false): EffectiveStyle {
   let shown = p.visible;
   let why: string | undefined;
   if (!p.visible) why = 'visible is false';
@@ -303,6 +324,7 @@ export function toEffective(p: Props, showIf: boolean | undefined | 'none', show
     selectable: p.selectable,
     layer: p.layer,
     color: p.color,
+    ...(ownColor ? { ownColor: true as const } : {}),
     opacity: p.opacity,
     width: p.width,
     lineStyle: p.lineStyle,

@@ -554,8 +554,8 @@ describe('language/design.md 3.3 tokens and comments', () => {
   it('3.3 # starts a comment outside strings and may follow a line', () => {
     expect(num('1 + 2 # three')).toBe(3);
     const fig = newFig();
-    fig.apply('note = "a#b"');
-    expect(fig.valueOf('note')).toBe('a#b');
+    fig.apply('memo = "a#b"');
+    expect(fig.valueOf('memo')).toBe('a#b');
   });
 
   it('3.3 a number: digits [. digits] [e [+-] digits], or . digits, with _ between digits', () => {

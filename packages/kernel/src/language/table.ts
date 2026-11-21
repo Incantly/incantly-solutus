@@ -20,6 +20,8 @@ export interface ParamSpec {
    */
   readonly type: string;
   readonly optional?: boolean;
+  /** Only given by name (`seed = 3`), never by position. Such parameters come last and are optional. */
+  readonly named?: boolean;
   /**
    * Default `value`. A `binder` is a bare name that becomes a local; with a list type (`List<Number>`) it is a list of
    * bare names, each a local. A `body` is checked in the binders' scope.
@@ -104,6 +106,8 @@ export interface Refusal {
   readonly inRest?: boolean;
   /** Up to 3 complete replacement lines. */
   readonly suggest?: readonly string[];
+  /** A replacement for the argument at `param`: the checker suggests the whole line with that argument rewritten. */
+  readonly replaceArg?: string;
   /** Params for the kind's message template, when it has one. */
   readonly params?: Readonly<Record<string, string | number | boolean | readonly string[]>>;
   /** For a `limit` refusal: the limit's name, its size and what the line asked for. */
@@ -276,6 +280,8 @@ export const SELF_ID = -1 as ObjId;
 /** Read-only facts the language needs from the kernel. The kernel implements it. */
 export interface FigureView {
   lookup(name: string): ObjectInfo | undefined;
+  /** True when the name is a cell of the figure's sheet (`@sheet`): it may then be defined even where a command has that name (`Q1`). */
+  isSheetCell?(name: string): boolean;
   byId(id: ObjId): ObjectInfo | undefined;
   /** All object names in creation order (the most recent last). */
   names(): readonly string[];

@@ -3,7 +3,8 @@
  * multivariate sparse polynomials, division, gcd, square-free split, factoring over the
  * rationals, resultants, Sturm sequences and real root isolation. All BigInt; pure.
  */
-import { bigGcd, LimitExceeded } from './node';
+import { bigGcd, guardPowDigits, LimitExceeded } from './node';
+import { zassenhaus } from './zassenhaus';
 import { divisorsFromFactors, factorMultiplicity, floatToRatPreferShort, primeFactorsBig } from './num';
 import type { SymNode } from './node';
 import { add, asInteger, intN, isZeroNode, mul, pow, ratN } from './node';
@@ -254,9 +255,9 @@ function intDivisors(n: bigint, tick: Ticker): bigint[] {
     }
     return small.concat(large.reverse());
   }
-  const f = primeFactorsBig(a);
+  const f = primeFactorsBig(a, 2000000, tick);
   if (f === null) return [1n, a];
-  return divisorsFromFactors(factorMultiplicity(f));
+  return divisorsFromFactors(factorMultiplicity(f), tick);
 }
 
 /** Rational roots by the rational-root theorem: p|a0, q|an. Each root once. */
@@ -479,7 +480,14 @@ export function upolyFactor(p: UPoly, tick: Ticker = NO_TICK, maxDegree = 200): 
       if (upolyDegree(rest) === 1) factors.push({ f: rest, m });
       continue;
     }
-    const pieces = kroneckerFactor(rest, tick);
+    // the modular method first (SYM-SM-17, SYM-SM-25); the bounded Kronecker search when it gives up
+    // the factors of rest are those of its integer numerator (the denominator is only a constant)
+    let g = 0n;
+    for (const c of rest.c) g = bigGcd(g, c < 0n ? -c : c);
+    const ints = g > 1n ? rest.c.map((c) => c / g) : rest.c;
+    const lead = ints[ints.length - 1] as bigint;
+    const modular = zassenhaus(lead < 0n ? ints.map((c) => -c) : ints, tick);
+    const pieces = modular !== null ? [modular.map((c) => upolyNormalize(c, 1n))] : kroneckerFactor(rest, tick);
     for (const group of pieces) {
       for (const piece of group) {
         if (upolyDegree(piece) >= upolyDegree(rest)) irreducible.push({ f: piece, m });
@@ -779,12 +787,19 @@ export function treeToUPoly(t: SymNode, gen: SymNode, tick: Ticker = NO_TICK): U
 }
 
 function ratPow(num: bigint, den: bigint, e: bigint): UPoly {
+  // SYM-SM-3: the size is predicted before either power is built
+  guardPowDigits(num, e < 0n ? -e : e);
+  guardPowDigits(den, e < 0n ? -e : e);
   if (e >= 0n) return upolyNormalize([num ** e], den ** e);
   const ae = -e;
   return upolyNormalize([den ** ae], num ** ae);
 }
 
 function upolyPow(p: UPoly, e: bigint, tick: Ticker): UPoly {
+  // SYM-SM-3: a coefficient of p^e is at most (sum of |c|)^e, so that bound is checked before multiplying
+  let sum = p.den < 0n ? -p.den : p.den;
+  for (const c of p.c) sum += c < 0n ? -c : c;
+  guardPowDigits(sum, e);
   let r: UPoly = { c: [1n], den: 1n };
   let b = p;
   let k = e;
@@ -1216,6 +1231,62 @@ export interface MFactor {
  * Factor a multivariate polynomial: content, then Kronecker substitution to one variable,
  * factor there, recover candidates and trial-divide. At most 4 variables, total degree 12.
  */
+/** The leading term key: the highest total degree, then the highest exponents in generator order. */
+function mLeadKey(p: MPoly): string | undefined {
+  let best: string | undefined;
+  let bestExps: number[] = [];
+  for (const k of p.terms.keys()) {
+    const e = mExps(k, p.gens.length);
+    const tot = e.reduce((a, b) => a + b, 0);
+    const btot = bestExps.reduce((a, b) => a + b, 0);
+    if (best === undefined || tot > btot || (tot === btot && e.join(',') > bestExps.join(','))) {
+      best = k;
+      bestExps = e;
+    }
+  }
+  return best;
+}
+
+/** An integer polynomial with coprime coefficients and a positive leading term, and the number it was divided by. */
+export function mpolyPrimitiveInt(p: MPoly): { poly: MPoly; scale: { n: bigint; d: bigint } } {
+  let g = 0n;
+  for (const v of p.terms.values()) g = bigGcd(g, v < 0n ? -v : v);
+  if (g === 0n) return { poly: p, scale: { n: 0n, d: 1n } };
+  const lead = mLeadKey(p);
+  const neg = lead !== undefined && (p.terms.get(lead) as bigint) < 0n;
+  const terms = new Map([...p.terms].map(([k, v]) => [k, (neg ? -v : v) / g] as [string, bigint]));
+  return { poly: { gens: p.gens, terms, den: 1n }, scale: { n: neg ? -g : g, d: p.den } };
+}
+
+/**
+ * Factor a multivariate polynomial (design 5.8): p = unit * prod(f^m) * rest, every factor an integer polynomial with
+ * coprime coefficients and a positive leading term, and the unit an exact rational (SYM-SM-17: no junk content).
+ */
+export function mpolyFactorExact(p: MPoly, tick: Ticker = NO_TICK): { unit: { n: bigint; d: bigint }; factors: MFactor[]; rest: MPoly } {
+  const { factors, rest } = mpolyFactor(p, tick);
+  const fs = factors.map(({ f, m }) => ({ f: mpolyPrimitiveInt(f).poly, m }));
+  const restP = mpolyPrimitiveInt(rest).poly;
+  let prod: MPoly = restP;
+  for (const { f, m } of fs) for (let i = 0; i < m; i++) prod = mpolyMul(prod, f, tick);
+  // the unit from one term, checked on every term
+  const key = mLeadKey(prod);
+  if (key === undefined) return { unit: { n: 1n, d: 1n }, factors: fs, rest: restP };
+  const pc = p.terms.get(key) ?? 0n;
+  const qc = (prod.terms.get(key) as bigint) * p.den;
+  const g0 = bigGcd(pc < 0n ? -pc : pc, qc < 0n ? -qc : qc) || 1n;
+  let un = pc / g0;
+  let ud = qc / g0;
+  if (ud < 0n) {
+    un = -un;
+    ud = -ud;
+  }
+  for (const [k, v] of prod.terms) {
+    if ((p.terms.get(k) ?? 0n) * ud * prod.den !== un * v * p.den) return { unit: { n: 1n, d: 1n }, factors: [], rest: p };
+  }
+  if (p.terms.size !== prod.terms.size) return { unit: { n: 1n, d: 1n }, factors: [], rest: p };
+  return { unit: { n: un, d: ud }, factors: fs, rest: restP };
+}
+
 export function mpolyFactor(p: MPoly, tick: Ticker = NO_TICK): { content: bigint; factors: MFactor[]; rest: MPoly } {
   const content = mpolyContent(p);
   const prim = mpolyNormalize(p.gens, new Map([...p.terms].map(([k, v]) => [k, v / content] as [string, bigint])), p.den);

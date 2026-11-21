@@ -10,6 +10,7 @@ import type { CheckedLine } from './check';
 import { buildError } from './errors';
 import type { LanguageError } from './errors';
 import { children, usesSlot } from './relation';
+import type { RangeValue } from './cells';
 import { fail, formatNumber } from './runtime';
 import type { Env, FunctionValue, RelationValue } from './runtime';
 import type { Pt } from '../contracts/values';
@@ -48,7 +49,7 @@ export interface CompiledArg {
 
 export interface CompileOptions {
   /** Runs a command form inside an expression. Provided by the kernel. */
-  runCommand?: (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env) => unknown;
+  runCommand?: (spec: CommandSpec, form: CommandForm, args: readonly CompiledArg[], env: Env, site?: number) => unknown;
   /** The id the kernel gave the object this line defines: a style value that names that object (`SELF_ID`) reads it (Q-R4-1). */
   selfId?: ObjId;
 }
@@ -355,6 +356,7 @@ class Compiler {
       case 'command':
       case 'relation':
       case 'range':
+      case 'cells':
         return false;
       case 'undef':
         return false;
@@ -367,6 +369,52 @@ class Compiler {
       default:
         return children(n).every((c) => this.isConstant(c));
     }
+  }
+
+  /**
+   * A range of cells (spreadsheet design 3.3). As a `Range` it is the rectangle and every filled cell, undefined ones
+   * included, for the command to judge. As a list (one row or column) or a list of rows, an undefined cell makes the whole
+   * value undefined, like any list.
+   */
+  compileCells(n: Extract<TNode, { n: 'cells' }>): Fn {
+    const items = n.items.map((it) => ({ id: this.objId(it.id), name: it.name, col: it.col, row: it.row, blank: it.blank === true }));
+    const rect = n.rect;
+    if (n.as === 'range') {
+      return (env) => {
+        const cells: { col: number; row: number; name: string; value: unknown }[] = [];
+        for (const it of items) {
+          const value = env.read(it.id);
+          if (value === undefined && it.blank) continue;
+          cells.push({ col: it.col, row: it.row, name: it.name, value });
+        }
+        const v: RangeValue = { schema: 'Range', rect, cells };
+        return v;
+      };
+    }
+    const numeric = (n.as === 'list' ? n.ty.of : n.ty.of?.of)?.k === 'Number';
+    const pack = (vals: unknown[]): unknown => (numeric ? Float64Array.from(vals as number[]) : vals);
+    return (env) => {
+      const vals: unknown[] = [];
+      const kept: typeof items = [];
+      for (const it of items) {
+        const v = env.read(it.id);
+        if (v === undefined && it.blank) continue;
+        if (v === undefined || (typeof v === 'number' && v !== v)) {
+          failInput(env, it.id);
+          return undefined;
+        }
+        vals.push(v);
+        kept.push(it);
+      }
+      if (n.as === 'list') return pack(vals);
+      const rows: unknown[] = [];
+      for (let r = rect.r0, k = 0; r <= rect.r1; r++) {
+        const row: unknown[] = [];
+        while (k < kept.length && (kept[k] as { row: number }).row === r) row.push(vals[k++]);
+        if (row.length > 0) rows.push(pack(row));
+      }
+      return rows;
+    };
   }
 
   compile(n: TNode): Fn {
@@ -532,6 +580,22 @@ class Compiler {
           return r;
         };
       }
+      case 'tuple': {
+        const parts = n.items.map((i) => this.compile(i));
+        const impl = n.impl;
+        return (env) => {
+          const vals: unknown[] = [];
+          for (const p of parts) {
+            const v = p(env);
+            if (v === undefined || v !== v) {
+              undefIn(env);
+              return undefined;
+            }
+            vals.push(v);
+          }
+          return impl(vals);
+        };
+      }
       case 'point': {
         const x = this.compile(n.x);
         const y = this.compile(n.y);
@@ -594,6 +658,8 @@ class Compiler {
       }
       case 'range':
         return this.compileRange(n);
+      case 'cells':
+        return this.compileCells(n);
       case 'cond':
         return this.compileCond(n);
       case 'relation':
@@ -922,7 +988,7 @@ class Compiler {
       const xs: number[] = [];
       for (const a of args) {
         const x = a(env);
-        if (x !== x) return isN ? NAN : undefined;
+        if (x !== x || x === undefined) return isN ? NAN : undefined;
         xs.push(x);
       }
       const v = xs.length === 1 && fv.call1 && isN ? fv.call1(xs[0] as number) : fv.call(...xs);
@@ -1037,7 +1103,7 @@ class Compiler {
         fail(env, 'not_set', `${n.spec.name} is evaluated by the kernel`);
         return undef;
       }
-      return run(n.spec, n.form, args, env);
+      return run(n.spec, n.form, args, env, n.s);
     };
   }
 

@@ -40,6 +40,8 @@ export interface RuleCall {
   readonly values: readonly unknown[];
   /** Film time. */
   readonly t: number;
+  /** What a random command needs to make its numbers a pure function of the figure (probability design 6.2). */
+  readonly random: RandomContext;
   /** Records why the result is undefined and returns `undefined`: `return call.fail('parallel')`. */
   fail(reason: UndefReason, detail?: string): undefined;
   /** Evaluates argument `i` now (for a body argument, in the scope of its binders). */
@@ -75,6 +77,25 @@ export interface RuleCall {
    * segment and 0.3). Empty when the object is not defined by a command. Binders and bodies are `undefined`.
    */
   argsOf(id: ObjId): readonly unknown[];
+  /**
+   * How an object was made: its printed line and the parsed line node, for rules that show a definition
+   * (`Text(M, show = "definition")`, `FormulaText(f)`, text-logic design 4.1), and its undefined reason now
+   * (`UndefinedReason`, design 5.3). Undefined for an unknown id.
+   */
+  definitionOf?(id: ObjId): { readonly text: string; readonly node: unknown; readonly reason?: string; readonly detail?: string } | undefined;
+}
+
+/**
+ * The inputs of a random command's key (probability design 6.2): the figure seed (`@seed N`, default 1), the name of the
+ * object being computed, the column of the call in its line, how many times that call has already run while the line is
+ * computed, and the object's re-roll count (`with reroll = k`, default 0).
+ */
+export interface RandomContext {
+  readonly seed: number;
+  readonly owner: string;
+  readonly site: number;
+  readonly count: number;
+  readonly reroll: number;
 }
 
 export interface SliceOptions {
@@ -136,6 +157,8 @@ export interface ActionCall {
   readonly objects: readonly ObjId[];
   /** Evaluated values of the other arguments, in parameter order (`undefined` for objects). */
   readonly values: readonly unknown[];
+  /** For each argument in parameter order, the object it names when it is a plain object name, else `undefined`. */
+  readonly refs?: readonly (ObjId | undefined)[];
 }
 
 export interface ActionOutcome {
@@ -149,6 +172,16 @@ export interface ActionOutcome {
 
 export interface ActionRule {
   run(call: ActionCall): ActionOutcome | void;
+}
+
+const FORM_GROUP = new WeakMap<object, string>();
+
+/**
+ * The group of the area that gave this form, when it differs from its command's (two areas give `Normal`: a line in
+ * geometry, a distribution in probability). Mode policies read it; `undefined` means the command's own group.
+ */
+export function formGroup(form: object): string | undefined {
+  return FORM_GROUP.get(form);
 }
 
 /** A growing set of command specs. Areas call `register`; the figure builds one table from it. */
@@ -175,7 +208,11 @@ export class CommandRegistry {
     const old = this.specs[i] as CommandSpec;
     const sig = (f: CommandSpec['forms'][number]): string => f.params.map((p) => `${p.type}${p.optional ? '?' : ''}${p.kind ? `:${p.kind}` : ''}`).join(',');
     const have = new Set(old.forms.map(sig));
-    const forms = [...old.forms, ...spec.forms.filter((f) => !have.has(sig(f)))];
+    // a form from another area keeps that area's group, so a mode that allows one area's form allows only that one
+    // (forms keep their identity: other areas know their own forms by object)
+    const added = spec.forms.filter((f) => !have.has(sig(f)));
+    if (spec.group !== old.group) for (const f of added) if (!FORM_GROUP.has(f)) FORM_GROUP.set(f, spec.group);
+    const forms = [...old.forms, ...added];
     const a = old.refuse;
     const b = spec.refuse;
     const refuse = a && b ? (c: Parameters<typeof a>[0]) => a(c) ?? b(c) : (a ?? b);
@@ -208,7 +245,12 @@ export class CommandRegistry {
  * An area's own refusal of a line that the language accepted, asked before anything is committed (errors design 5.0).
  * `figure` is the figure the line is applied to. A returned error fails the line and nothing changes. Must be pure.
  */
-export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine) => ErrorObject | undefined;
+export type LineCheck = (figure: unknown, line: CheckedLine, parsed: ParsedLine, ctx: LineCheckContext) => ErrorObject | undefined;
+
+/** What else a line check may know: who wrote the line (app-modes design 3.6). */
+export interface LineCheckContext {
+  readonly origin: import('./types').LineOrigin;
+}
 
 const LINE_CHECKS: LineCheck[] = [];
 
@@ -218,10 +260,10 @@ export function registerLineCheck(check: LineCheck): void {
 }
 
 /** The first refusal of the registered checks, or `undefined`. A check that throws is skipped. */
-export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine): ErrorObject | undefined {
+export function runLineChecks(figure: unknown, line: CheckedLine, parsed: ParsedLine, ctx: LineCheckContext = { origin: 'host' }): ErrorObject | undefined {
   for (const check of LINE_CHECKS) {
     try {
-      const e = check(figure, line, parsed);
+      const e = check(figure, line, parsed, ctx);
       if (e) return e;
     } catch {
       // a broken check must not block the line
@@ -380,4 +422,31 @@ export function runLineRewriters(figure: unknown, text: string): LineRewrite | u
     }
   }
   return undefined;
+}
+
+/* ------------------------------ after a line ------------------------------ */
+
+/**
+ * Work an area does after a committed line, inside its transaction (the sheet checks again the ranges that cover a new
+ * cell). `together` runs lines so that they join the line's own undo step. Not called for dry runs.
+ */
+export type AfterLine = (figure: unknown, result: import('./types').TxOk, ctx: { readonly together: (fn: () => void) => void }) => void;
+
+const AFTER_LINE: AfterLine[] = [];
+
+export function registerAfterLine(hook: AfterLine): void {
+  if (!AFTER_LINE.includes(hook)) AFTER_LINE.push(hook);
+}
+
+export const hasAfterLine = (): boolean => AFTER_LINE.length > 0;
+
+/** Runs the after-line hooks; one that throws is skipped. */
+export function runAfterLine(figure: unknown, result: import('./types').TxOk, ctx: { readonly together: (fn: () => void) => void }): void {
+  for (const h of AFTER_LINE) {
+    try {
+      h(figure, result, ctx);
+    } catch {
+      // an area's hook must not break the line
+    }
+  }
 }

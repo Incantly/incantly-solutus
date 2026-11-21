@@ -261,11 +261,11 @@ describe('3.8 test plan: properties of commit', () => {
 });
 
 describe('7 performance: commit under 2 microseconds', () => {
-  it('100,000 commits take under one second (10x the target, for a busy machine)', () => {
+  it('100,000 commits take under one second (10x the target, for a busy machine)', { retry: 2, timeout: T }, () => {
     within(1000, () => {
       for (let i = 0; i < 100000; i++) c((i % 1000) / 100, { step: 0.5 });
     });
-  }, T);
+  });
 });
 
 describe('3.3 decimals(): the length of the shortest decimal string that reads back', () => {

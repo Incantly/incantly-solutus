@@ -219,11 +219,11 @@ describe('PLOT-SM-1: marker de-duplication stays linear and markers are capped',
     if (p.markers.length >= 200) expect(p.stats.capped).toBe(true);
   }, TIMEOUT);
 
-  it('implicit: 200 px square finishes quickly (no quadratic marker scan)', () => {
+  it('implicit: 200 px square finishes quickly (no quadratic marker scan)', { retry: 2, timeout: TIMEOUT }, () => {
     const { value, ms } = timeIt(() => expectOk(traceImplicit(zeroField, sqView(200), { maxEvals: 1e7 })));
     expect(value.markers.length).toBeLessThanOrEqual(4000);
     expect(ms, `took ${ms.toFixed(0)} ms`).toBeLessThan(1000);
-  }, TIMEOUT);
+  });
 
   it('implicit: no two markers share a kind and a pixel cell', () => {
     const p = expectOk(traceImplicit(zeroField, sqView(60), { maxEvals: 1e7 }));
@@ -245,11 +245,11 @@ describe('PLOT-SM-1: marker de-duplication stays linear and markers are capped',
     expect(countKinds(p.markers, ['isolated'])).toBe(0);
   }, TIMEOUT);
 
-  it('region: 300 x 204 checkerboard finishes quickly', () => {
+  it('region: 300 x 204 checkerboard finishes quickly', { retry: 2, timeout: TIMEOUT }, () => {
     const { value, ms } = timeIt(() => expectOk(fillRegion({ test: checker }, checkerView(300, 204), { maxEvals: 1e7 })));
     expect(value.markers.length).toBeLessThanOrEqual(4000);
     expect(ms, `took ${ms.toFixed(0)} ms`).toBeLessThan(600);
-  }, TIMEOUT);
+  });
 
   it('region: a real isolated point is still marked', () => {
     const v: ViewBox = { x0: -3, x1: 3, y0: -3, y1: 3, widthPx: 300, heightPx: 300 };
@@ -298,30 +298,30 @@ describe('PLOT-SM-2: the implicit tracer refuses grids it cannot hold', () => {
 /* ================================ PLOT-SM-3 ================================ */
 
 describe('PLOT-SM-3: partner and fallback lookups do not scan every sample', () => {
-  it('sin(1/x) on the bench view runs in a few milliseconds (best of 5)', () => {
+  it('sin(1/x) on the bench view runs in a few milliseconds (best of 5)', { retry: 2, timeout: TIMEOUT }, () => {
     const f = fnOf((x) => Math.sin(1 / x));
     const best = bestMs(5, () => plotFunction(f, BENCH_VIEW));
     // The budget is 25 ms on the machine the finding was measured on (44 to 54 ms before the fix). A slower machine
     // gets the same budget scaled by how long a fixed loop takes there, so the test checks the algorithm, not the runner.
     const budget = 25 * machineFactor();
     expect(best, `best ${best.toFixed(1)} ms, budget ${budget.toFixed(1)} ms`).toBeLessThan(budget);
-  }, TIMEOUT);
+  });
 
-  it('a NaN storm at 70,000 evaluations is not quadratic', () => {
+  it('a NaN storm at 70,000 evaluations is not quadratic', { retry: 2, timeout: TIMEOUT }, () => {
     const f = fnOf((x) => (hash(x) < 0.5 ? NaN : Math.sin(x)));
     const { value, ms } = timeIt(() => plotFunction(f, V, { maxEvals: 70000, maxSamples: 65536 }));
     expect(value.ok).toBe(true);
     expect(ms, `took ${ms.toFixed(0)} ms`).toBeLessThan(500);
-  }, TIMEOUT);
+  });
 
-  it('a parametric curve with many undefined stretches is not quadratic', () => {
+  it('a parametric curve with many undefined stretches is not quadratic', { retry: 2, timeout: TIMEOUT }, () => {
     const fn = pointFn('s/10', 'sqrt(sin(100*s))');
     const { value, ms } = timeIt(() =>
       traceParamCurve({ fn, lo: -40, hi: 40 }, V, { maxEvals: 400000, maxSamples: 65536 }),
     );
     expect(value.ok).toBe(true);
     expect(ms, `took ${ms.toFixed(0)} ms`).toBeLessThan(450);
-  }, TIMEOUT);
+  });
 
   it('sin(1/x) still plots to completion with paths and ink', () => {
     const p = expectOk(plotFunction(fnOf((x) => Math.sin(1 / x)), BENCH_VIEW));

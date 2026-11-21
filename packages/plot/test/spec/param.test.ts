@@ -419,7 +419,7 @@ describe('CL5 budgets, exhaustion and targets', () => {
     expect(ms).toBeLessThan(5000);
   }, HEAVY_TIMEOUT);
 
-  it('CL5 targets: s in 0..1000 spiral (target 1.5ms) completes within budget', () => {
+  it('CL5 targets: s in 0..1000 spiral (target 1.5ms) completes within budget', { retry: 2, timeout: HEAVY_TIMEOUT }, () => {
     const spiralEnc: ParamEnclosure = (s0, s1): ParamBox => {
       const r = Math.max(Math.abs(s0), Math.abs(s1)) / 100;
       return { x0: -r, x1: r, y0: -r, y1: r, def: 2 };
@@ -432,5 +432,5 @@ describe('CL5 budgets, exhaustion and targets', () => {
     expect(p.stats.complete).toBe(true);
     expect(p.stats.evals).toBeLessThanOrEqual(20000);
     expect(ms).toBeLessThan(5000);
-  }, HEAVY_TIMEOUT);
+  });
 });

@@ -1,0 +1,112 @@
+# Physics: tasks
+
+Each round is one branch `feat/physics-<n>` and one PR into `integration`, merged after CI passes, with tests, studio examples and screenshots.
+
+- [x] 1. Round 1: 2D bodies (R1, R2, R8)
+  - [x] 1.1 Exact maths module and its tests
+  - [x] 1.2 Core hooks: post-pass drivers, driven rule objects, input lines, free writes
+  - [x] 1.3 2D world: shapes, convex split, broad phase, narrow phase, solver, friction, bounce, speculative contacts, bullets, sleep
+  - [x] 1.4 `Body`, `Bodies`, `Box`, `Ground`, `with solid = true`, movers, curves as ground
+  - [x] 1.5 The `world` object and its properties and readouts
+  - [x] 1.6 The driver: steps, checkpoints with cap, seek, catch-up, `rerun`, falling behind
+  - [x] 1.7 Errors, reasons, notices, the `physics` group in modes
+  - [x] 1.8 Spec tests
+- [x] 2. Round 2: joints, forces, events (R3)
+  - [x] 2.1 `Hinge`, `Spring`, `Rope`, `Rod`, `Weld`, `Slider`, `Pulley`, `Grab`
+  - [x] 2.2 Force accounting by kind, `force(kind)`, `Forces`, energy and momentum measures
+  - [x] 2.3 `Push`, `Wake`, `Sleep`, `Restart`; logged and saved as `@input`
+  - [x] 2.4 `on b hit` handlers
+  - [x] 2.5 Spec tests, including accuracy checks of design 11.5
+- [x] 3. Round 3: studio and embed in 2D (R4)
+  - [x] 3.1 Drawing bodies, solids, joints, arrows, contacts
+  - [x] 3.2 Player bar, catching up and slow marks; the host measures physics time per frame and slows the film when it goes over 6 ms (the kernel holds the clock while the world catches up)
+  - [x] 3.3 Drag: start move at t = 0, grab while playing; arrow-key pushes
+  - [x] 3.4 Algebra rows, Physics tools, performance row
+  - [x] 3.5 2D car (`Wheel`, `Vehicle` in the plane)
+  - [x] 3.6 Examples and screenshots
+- [x] 4. Round 4: 3D bodies (R5)
+  - [x] 4.1 3D world: spheres, convex hulls (cylinders and cones as 24 sides), quaternions, inertia tensors, sweep and prune with fixed shapes searched, SAT with face clipping (at most 4 points), planes, sleep, checkpoints
+  - [x] 4.2 `Body` and `Bodies` on solids give `Body3`; dents refused (B003); readouts and `force(kind)` in three numbers
+  - [x] 4.3 The space driver: `Ground()` as the floor, solid planes and solids, terrain from `z = f(x, y)`, gravity in three numbers, push, grab and release logged, hits, left world
+  - [x] 4.4 Drawn in the Space view with drag (start move at t = 0, grab while playing)
+  - [x] 4.5 Examples (dice, dominoes, a bowl), screenshots, spec tests
+- [x] 5. Round 5: 3D vehicles and crashes (R6)
+  - [x] 5.1 Joints in space: `Hinge` about an axis (motor, limits), `Spring`, `Rope`, `Rod`, `Weld` (breaks), `Slider` (limits, motor), with `j.force`, `j.length`, `j.angle`, `j.broken`; B010 for a flat body joined to one in space
+  - [x] 5.2 Ray wheels: `Wheel` and `Vehicle` on a `Body3` (spring, damping, travel, grip, drive, steers, power, brake, `speedometer`), `Box` in space
+  - [x] 5.3 Crashes: wheels with `breaks` come off as free bodies (reason `broken`, notice B111), welds break in a hard hit
+  - [x] 5.4 Terrain as a heightfield of 128 × 128 cells, only the cells under a shape tested
+  - [x] 5.5 Driving in the Space view: arrow keys and Space write the pedals (logged while playing), Follow camera; wheels, loose wheels and joints drawn
+  - [x] 5.6 Examples (a car on hills, a car hits a wall), screenshots, spec tests, the car accuracy check of design 11.5 and the bench row of 11.2
+- [x] 6. Round 6: water and 2D liquid, worker (R7)
+  - [x] 6.1 `Water(level)`, `Water(region, level)`: clipped buoyancy and water drag, counted as `buoyancy` and `drag`; a level may read `t`
+  - [x] 6.2 `Liquid`, `Pour` in the plane: position-based fluids, the shared particle store and neighbour grid (counting sort, no garbage), two density passes, drops against solids and bodies with the equal and opposite impulse a step later, viscosity, seeded taps, `left_world`, the 2,000-drop limit (B013), `l.count`, `l.level`
+  - [x] 6.3 Checkpoints and seek with drops; seek equals play
+  - [x] 6.4 The physics worker in `packages/sdk/src/worker/`: the page sends the script, free values and `@input` lines, gets back the owned cells with their arrays moved; `worker_unavailable`, `worker_crashed`; the same film with and without it
+  - [x] 6.5 Drawing (one batch of discs, water as a fill under its line), the Water and Liquid tools, algebra rows, drops in the time-bar readout
+  - [x] 6.6 Examples (a floating boat, density of ice, a dam breaking, filling a glass), screenshots, spec tests, benches
+- [x] 7. Round 7: 3D liquid and waves (R7)
+  - [x] 7.1 `Liquid` (box or ball) and `Pour` in space: position-based fluids on the shared particle store, a 3D neighbour grid (counting sort, no garbage), drops against bodies, solids, the floor and terrain with the equal and opposite impulse a step later, the 2,000-drop limit shared with the plane (B013)
+  - [x] 7.2 `Water(level)` in space: buoyancy and drag for `Body3`, exact for balls (a cap) and convex hulls (clipped)
+  - [x] 7.3 `Waves(box, n)` in space and `Waves(segment, n)` in the plane: the wave equation on a height grid, bodies press it and ride it, `w.level`, `w.speed`, `w.height(x, y)`; B013, B017, B004
+  - [x] 7.4 The space driver in the worker, the same film without it; the worker's log comes back to the page (round 6 carry-over)
+  - [x] 7.5 Checkpoints with drops and waves (a sleeping body's forces too), seek equals play, reload plays the same
+  - [x] 7.6 Drawing in the Space view: drops as dots among the faces by depth, waves as a lit mesh, still water as a patch; waves in the plane as a line; the painter's cost measured
+  - [x] 7.7 Examples (a splash, a boat on waves), screenshots, spec tests, the round 7 checks of design 11.5 and the bench rows of 11.2
+- [x] 8. Round 8: smoke (R7)
+  - [x] 8.1 `Smoke(region, n)` with `source`, `heat`, `wind`, `until`: stable fluids on a staggered grid (semi-Lagrangian flow and smoke, heat as lift, 20 red-black over-relaxed pressure passes started from the last step's pressure), typed arrays made once, no garbage in a step
+  - [x] 8.2 `world with wind` (a vector, a formula of `t` allowed), felt at the grid's edges; B004 on bad literals
+  - [x] 8.3 Two-way: solids and bodies block the flow with their own speed on their faces, movers and moving bodies stir it, the air's drag pushes bodies (kind `drag`, one step late)
+  - [x] 8.4 Limits and errors: at most 64 × 64 cells per figure (B013), grids under 4 or not whole (B017), `heat`, `wind`, `until` out of range (B004), `input_undefined`, `degenerate`, `unstable_world`
+  - [x] 8.5 Checkpoints (131 KB for 64 × 64), seek equals play, reload plays the same; the start read at the first step, a mover at rest at the first step
+  - [x] 8.6 Drawing (one grey image a frame under the shapes), the Smoke tool, algebra rows, readouts `sm.mass`, `sm.speed`, `sm.n`, `sm.at(x, y)`; smoke stays on the page, and goes with liquid to the worker
+  - [x] 8.7 Examples (smoke past a ball, a candle), screenshots, spec tests, the smoke checks of design 11.5 and the bench rows of 11.2
+- [ ] 9. Round 9: cloth (R10)
+  - [x] 9.1 `Cloth` (sheet, rope, net), `Pin`, `world with wind`; errors B018, B019, the `torn` notice
+    - [x] 9.1.1 Forms, named arguments, pin words, readouts `c.count`, `c.torn`, `c.stretchMax`, `c.energy`, `c.at(i, j)`, `c.asleep`, `c.touching`
+    - [x] 9.1.2 B004, B010, B013 (64 × 32, 400, 4,096, one `self`, 64 pins), B017, B018 `not_a_cloth`, B019 `pin_off_cloth`; notices `torn`, `cloth_drawn_coarse`
+  - [x] 9.2 XPBD small steps: stretch, shear and bend links, damping, tearing, sleep, checkpoints every 0.25 s
+    - [x] 9.2.1 A rope's stretch links as one chain (exact three-band solve); tethers; air once a step on whole cells
+    - [x] 9.2.2 Checkpoints with torn links as bits and the pushes owed to bodies; seek equals play, reload plays the same
+  - [x] 9.3 Two-way hits: solids, bodies, drops (shared grid), self
+    - [x] 9.3.1 Space: spheres (points and faces), hulls, the floor, terrain; the plane: circles (points and threads), polygons, thin walls
+    - [x] 9.3.2 Pins to bodies; bodies held by pins take the cloth's small steps
+    - [x] 9.3.3 Wet cloth (1 kg of water held, design 11.5): the pins carry the sheet and the water within 2%
+  - [x] 9.4 The driver in the physics worker, with the same film without it
+  - [x] 9.5 The WebGL 2 painter for cloth and drops; the coarse fallback
+    - [x] 9.5.1 `sheet` and `drops` items in the Space view's scene; liquids in space as one batch, waves as a sheet through their corners
+    - [x] 9.5.2 `GlBackend3` and `MeshPainter3` in `packages/view/src/gl/`: points as a float texture each frame, triangles once per topology, normals in the vertex shader, the software painter's light, threads every k points, instanced lit discs, a depth pass for the solids, resize, context loss
+    - [x] 9.5.3 Compositing: one shared context, its picture copied between the faces and the lines; lines behind a cloth dashed; the order and its limits in design 12.1
+    - [x] 9.5.4 Without WebGL 2: every second point and drop on the screen, `cloth_drawn_coarse` (B114) once; SVG at full detail, PNG from the GPU
+    - [x] 9.5.5 Spec tests (fallback, split, the painter against a recording context), the Chrome bench with the CPU slowed 4× (`packages/sdk/bench/chrome-gl.mjs`), screenshots
+  - [x] 9.6 Drag and grab, algebra rows, the Cloth and Pin tools, the readout
+  - [ ] 9.7 Examples, screenshots, spec tests and the cloth checks of design 11.4 and 11.5
+    - [x] 9.7.1 Six examples (a flag, a sheet on a ball, cloth that catches water, a rope, a hammock, a net that tears), screenshots
+    - [x] 9.7.2 Spec tests: kernel (22), worker and painter (5); checks stretch, still flag, energy, tearing, no pass-through, two-way, hanging rope, rope pendulum, no worker, no garbage
+    - [ ] 9.7.3 Node benches of the cloth rows of 11.2: run and reported; the rows over budget are left for round 10
+  - [ ] 9.8 Finish cloth (docs/research/physics-papers.md 8)
+    - [x] 9.8.1 Merge integration (the soft step) into the cloth branch; physics tests pass, pinned balls still carried within 1%
+    - [x] 9.8.2 A body held by pins takes the cloth's small steps, and the counts agree with the soft step's (the body takes the world's own move in each small step; a ball pinned under a sheet sinks under 1 mm, was 3 to 5 cm)
+    - [x] 9.8.3 A heavy ball on a light rope: the body's tether (design 9.5); rope within 0.2% of its length, ball within 0.1% of its reach
+    - [ ] 9.8.4 Hits listed once a step, shapes moved through the small steps; one pass a small step; cloth against cloth once a step; drops by grid cells. Done: three small steps (four with `self`). Already so: hits and cloth pairs listed once a step, drops found on the grid. Tried and left: tethers every second small step (breaks the pinned-ball weight check). Node rows still over: 32 × 32 (0.78 of 0.75 ms), two cloths (2.29 of 2), cloth in water (2.30 of 2)
+    - [x] 9.8.5 Chrome bench with the CPU 4× slower for every cloth row of 11.2 (`packages/kernel/bench/chrome-physics.mjs`); the Rust rule list: cloth in water (28% over its goal)
+- [ ] 10. Round 10: speed (R9)
+  - [x] 10.1 Node benches for every budget of design 11.2 (round 10: `physics.bench.ts` "bodies (design 11.2)"; rows over budget are findings in `handoff/physics/builder-notes.md` "Round 10")
+  - [x] 10.2 Throttled Chrome bench script (round 10: `chrome-physics.mjs` has every row of 11.2; two runs in design 11.2 "Measured (round 10)")
+  - [x] 10.3 Checks of design 11.4 (round 10: `physics-checks.bench.ts`; 6 of the rows failed with their numbers in builder notes; the two "no garbage" rows pass since the fix round (PH-53), the other 4 are findings PH-54 to PH-61)
+  - [x] 10.4 Cross-browser hash test (round 10: `cross-browser.mjs`; equal in Chromium, Firefox and WebKit with the Rust loops on and off once 10.5 was in; different before, from `sin` in a formula)
+  - [x] 10.5 Exact maths in compiled user formulas (round 10: `language/exact-math.ts`, installed by default, `setExactMath(false)` brings back the platform's; one test moved, LANG-SM-13; fix round: `exp` at the edges of its domain and `pow(2, k)` into the subnormals, PH-50 and PH-51; the engine's own `sin` and `cos` within 1 ulp of `Math`, PH-52, which changed the bits of the films with a turning body in the plane)
+  - [x] 10.6 Stacks that land stand still and sleep (2D): a face's two points bounce in one block solve, not one after the other (that spun each landing box, so dropped towers tilted, walked over and never slept); spec tests for a dropped tower of 20 and a pile of 100
+  - [x] 10.7 Soft step for bodies in the plane and in space (design 6.2, 6.5): small steps of half the passes, soft contacts (30 Hz, damping 10, push-out at most 3 m/s), a relax pass, gaps from the anchors' moves (narrow phase once a step), pushes spread over the small steps; a face's two points pushed in one soft 2 × 2 solve in the plane; bounces off walls turn back before the move (a perfect bounce keeps its height exactly), between bodies after the relax pass. Columns of 50 balls sleep by 4 s (were 12 s), 3D towers by 3 s (were awake after 10 s). Found and fixed: a grab's anchor was logged with fewer digits than it was used with, so a reload played a hair differently
+  - [ ] 10.8 The Rust rule of design 11.6: after the TypeScript fixes, measure each solver in Chrome with the CPU 4× slower and report which (if any) are more than 25% over goal; ask the product owner before any Rust tool or crate (round 10, left open: with the whole table of 11.2 measured, three rows of bodies on the page are more than 25% over their Chrome goal: 2D most asleep 234 to 251%, 2D car on hills 187 to 202%, 3D boxes all awake 124 to 129%; every cloth, liquid, fire, smoke and wave row is within 102%; bodies stay TypeScript by 11.6, so the three go to the product owner)
+  - [x] 10.9 Rust kernels, round 1 (design 11.6 "As built"): the hot loops of the cloth and the neighbour grid in Rust compiled to WebAssembly, called from the TypeScript step; the TypeScript loops stay as the fallback and the reference, the film is the same bits with or without them (hash check of 15 scenes, 10 s each, equal every second). Round 2 (`prepareSelf`, `prepareDrops` and `faceTable`, `hitSphere`) is open if a Chrome row still misses its goal
+  - [x] 10.10 The grid in space in Rust (design 11.6 "As built, round 2", finding PH-35): the flow's carrying, the lifts, the swirl, the fire's cells, the solid faces, the 20 pressure passes with their gradient, the carrying of `T`, `F` and smoke, the health check and the readouts in Rust (scalar module, and a build with SIMD for the carrying loops), called from `smoke3.ts` and `fire3.ts`; the TypeScript loops stay as the fallback and the reference; the film is the same bits with the kernels off, on, and on with SIMD (17 scenes, 10 s each, equal every second). The fire in space 24³ and 32³ rows meet their Node goals; the flag over a fire and the Chrome rows of 32³ and the flag do not (design 11.6 lists the next steps). Review fixes: the worker sends copies of its arrays (PH-47), `physicsGridSimd` and `setPhysicsGridSimd` are public (PH-49); PH-48 stays to be implemented
+  - [x] 10.11 Fire in space within its Chrome goals (finding PH-48): the grid in space steps 30 times a second in two halves a frame apart, the cloth's air from the grid in Rust, the fire's readouts in one sweep; fire 32³ 7.3 ms and the flag over a fire 7.1 ms in Chrome with the CPU 4× slower (goal 8)
+- [ ] 11. Round 11: fire, and smoke in space (R11)
+  - [x] 11.1 `swirl` on `Smoke` (vorticity confinement), with a check that a plume past a ball sheds curls and the mass check of 9.4 still holds
+  - [x] 11.2 `Fire` in the plane: temperature and fuel per cell, lift, burning, cooling, the source, named arguments and readouts, B017 and limits, `fire_out`
+  - [x] 11.3 `burns` and `Ignite`: heat swap, burning bodies (mass, char, `burnt`, joints break), cloth cells that burn and tear, solid shapes that stop being solid, B020, B021; water that puts fire out
+  - [x] 11.4 Drawing in the plane: black-body colour added under the smoke, char on burnt bodies; the crackle with `sound = true`
+  - [x] 11.5 The grid in space: `Smoke(box, n)`, `Fire(box, n)`, `Fire(at: Point3)`, Float32 cells, in the worker, cloth in its wind, checkpoints every 1 s
+  - [x] 11.6 Drawing in space: ray marching a 3D texture in the WebGL 2 painter with the solids' depth; 12 slices without WebGL 2; PNG and SVG
+  - [ ] 11.7 (2D and space examples and `agent.md` rows done in 11A and 11B; screenshots and spec tests open) Examples, screenshots, spec tests (seek equals play with fire, a log burns away the same on replay, water puts it out, a flag over a fire ripples), the agent's rows in `agent.md`
+  - [x] 11.8 (rows for the plane: 0.84 ms; for space and the Chrome page in `physics.bench.ts` and `chrome-physics.mjs` in 11B, all four space rows about twice their goals: the Rust-rule candidates are written in 11.6, none ported) Benches for the fire rows of design 11.2 in Node and in Chrome with the CPU 4× slower; the Rust rule of 11.6

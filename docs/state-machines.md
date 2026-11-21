@@ -1408,3 +1408,93 @@ Checked at commit `3266a74` on `feat/symbolic` (pass 1, pipeline step 4). Paths 
 | isolation | Cauchy bound | a coefficient above 1.8e308 | `BigInt(±Infinity)` | `RangeError` |
 
 - **Reachable invalid states or transitions:** `Solve(x^2 == 4 and x < 2, x)` and `Solve(x^2 == 4 and x != 2, x)` keep `x == 2`. SYM-SM-13. `Solve(exp(-30) == 0, x)` is "all". SYM-SM-12. `Solve(x^2 == a, x)` has no `a >= 0` condition and lists the impossible cases `1 == 0 and …`. SYM-SM-16. `Solve(x^3 - x - 10^400 == 0, x)` is `[]` after 992 ms and `NSolve` of it is `internal`. SYM-SM-6. `Solve(ln(x) == 0, x)` is `unsupported` while `ln(x) == 1` solves. SYM-SM-24. All open.
+
+## tiptap
+
+Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). Paths are under `packages/tiptap/src/`; line numbers refer to `20d5770`. Findings are in `handoff/tiptap/findings.md` (TT-R1 to TT-R10; TT-R1 to TT-R5 and TT-R10 are fixed). JavaScript is single-threaded, so "concurrency" below means work interleaved across `await`s: a mount, a picture export or an AI stream, with scheduler orders, editor updates and other requests in between.
+
+### T1. Figure node view lifecycle
+
+- **Where:** `node-view.ts` `FigureNodeView`: `render` (197), `build` (338), `goLive` (346), `save` (370), `doMount` (378), `mountFailed` (493), `giveUp` (508), `doSave` (516), `unmountNow` (539), `modeChanged` (803), `revive` (834), `onContextLost` (885), `onContextRestored` (899), `destroy` (1004). Every mount, save and unmount runs on one promise chain (`queue`).
+- **States:**
+
+| State | Holds |
+|---|---|
+| `placeholder` | no app; the picture or the caption; `wantsMount` false |
+| `bad` | attributes fail `checkAttrs`; no app; message and Edit lines; never mounts |
+| `mounting` | `wantsMount` true, `app` undefined, `createApp` in flight |
+| `live` | `app` and `liveHost` set; counted against `liveLimit` |
+| `saving` | `wantsMount` false, `app` set, `pictureOf` in flight; `saved` holds the reader's script |
+| `saved` | no app; `saved` holds `{script, readerScript}`; the picture shows |
+| `failed` | `failures` 1; retried only by a live order after `lastFailSeq` |
+| `dead` | `failures` 2; left the scheduler; revived by a script or mode change |
+| `context-lost` | `live` with `contextLost`; the picture shows until the context comes back |
+| `destroyed` | terminal; app freed, scheduler key and store entry dropped |
+
+- **Invariants:** at most `liveLimit` views hold `wantsMount` (R2.2); a view holds at most one app; a `bad` view holds no app; the reader's state comes back only when the script is unchanged, otherwise `restore_failed`; a view that is `destroyed` takes no order and keeps no app.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `placeholder` | `build` | good attrs, `hasRoom` | `mounting` | |
+| `placeholder`, `saved` | `goLive`, `restore` | good attrs | `mounting` | `makeRoom` saves the least recently used non-live view |
+| `mounting` | `createApp` resolves | still wanted, same mode | `live` | `loadInto` (saved reader script or the script), store `setLive` |
+| `mounting` | `createApp` resolves | mode changed | `mounting` | app freed, mount again |
+| `mounting` | `createApp` throws | | `failed` or `dead` | `mount_failed` |
+| `live` | `save` | | `saving` | `saved` taken |
+| `saving` | picture made | not wanted again | `saved` | unmount; picture written without an undo step |
+| `saving` | `goLive` during the export | | `live` | `saved` dropped |
+| `live` | attrs turn bad | | `bad` | unmount queued |
+| `bad` | attrs good again | | `placeholder` | asks again for the mount the scheduler holds as `live` or `ready` (TT-R4, fixed) |
+| `live` | mode change | not to or from 3D, `setMode` ok | `live` | |
+| `live` | mode change | otherwise | `mounting` | unmount, mount again; keeps its place under the cap, and a `save` order that arrives first wins (TT-R5, fixed) |
+| `live` | `webglcontextlost` | | `context-lost` | `context_lost` |
+| `context-lost` | `webglcontextrestored` | | `mounting` | reader's state kept, mount again; same rule as a mode change (TT-R5, fixed) |
+| `dead` | script or mode change | | `placeholder` | registered again |
+| any | `destroy` | | `destroyed` | |
+
+- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight mounts again in the new mode (TT-R9 was not a bug; a test now holds it). A remount that yields to a save, or a save during a mode change, made the old mode's picture (TT-R10, fixed: the picture is made from the script in the new mode).
+- **Explicit since `feat/lint-rules`:** the lifecycle is one `StateMachine` over `FIGURE_MACHINE` in `node-view.ts` (states `idle`, `mounting`, `live`, `saving`, `lost`, `dead`, `destroyed`; events `claim`, `release`, `mounted`, `unmounted`, `lose`, `regain`, `giveUp`, `revive`, `destroy`). `wantsMount` is `mounting`, `live` or `lost`; the former flags `wantsMount`, `dead`, `destroyed` and `contextLost` are gone. `bad` stays a display state derived from the attributes. `test/spec/life.test.ts` walks every row of the table.
+
+### T2. Script sync between the node, the live figure and the code panel
+
+- **Where:** `node-view.ts` `commitScript`, `commitAttrs`, `update`, `scriptChanged` (791), `applyScript` (696); `code-panel.ts` `onInput` (217), `apply` (229), `outsideScript` (167).
+- **States:** the node's `script`; `applied` (what the live figure shows); `ownCommit` (a script this view wrote and expects back); the panel's `pending` (typed, not committed), its 300 ms `timer`, and `kept` (the writer's lines after a clash).
+- **Invariants:** the live figure shows the node's script once no commit is in flight; one commit is one transaction; an outside change never loses typed lines silently (they go to `kept` with `collab_conflict`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| idle | typing | | `pending` | timer restarts at 300 ms |
+| `pending` | timer or close | fits 64 KB | idle | lines checked, applied, `commitScript` in a microtask |
+| idle | node update | equals `ownCommit` | idle | not applied again |
+| idle | node update from outside | adds lines at the end | idle | only the new lines run |
+| idle | node update from outside | other change | idle | `loadScript` of the whole script |
+| `pending` | node update from outside | differs from `pending` | `kept` | `collab_conflict`, Re-apply or Discard |
+
+- **Reachable invalid states or transitions:** the AI's commit is an `ownCommit`, so it never reaches `outsideScript`; lines typed during an AI stream are committed over the AI's lines with no clash (TT-R6, later).
+
+### T3. AI request per figure
+
+- **Where:** `ai.ts` `askIncantly`: the job map (178), `applyTo` (194), the superseded branch (243).
+- **States:** none, `streaming` (controller in the map), `superseded` (aborted by a newer request), `done`, `stopped` (`ai_unavailable` or `ai_partial`).
+- **Invariants:** at most one running request per figure; a request commits only its accepted lines, once; a replaced request leaves the figure and panel to the newer one; every streamed line runs on a figure holding all earlier accepted lines.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| none | `askIncantly` | good attrs | `streaming` | older request aborted, `beginAi`, panel opens |
+| `streaming` | lines | fits 64 KB | `streaming` | lines run in the live figure, or a headless app of base plus accepted lines when not live |
+| `streaming` | `done` | | `done` | one commit of `base` plus accepted lines |
+| `streaming` | error, or end without `done` | | `stopped` | accepted lines committed, `ai_partial` or `ai_unavailable` |
+| `streaming` | newer request | | `superseded` | `resetToNode` only when no newer request runs on the figure (TT-R2, fixed) |
+
+- **Reachable invalid states or transitions:** none known for TT-R2 and TT-R3 after the fixes (commit `733cda0`): a superseded request leaves the figure and panel to the newer request, and the headless fallback starts from the base script plus the accepted lines.
+
+### T4. Editor scheduler
+
+- **Where:** `scheduler.ts` `EditorScheduler`: `register`, `unregister`, `hasRoom` (67), `makeRoom` (75), `route`, `measure`.
+- **States:** a view is unregistered or registered; the host's record is `idle`, `ready`, `live`, `paused` or `saved` (view section V1); the cap counts views with `wantsMount`.
+- **Invariants:** an order goes only to a registered view; one view's failed order never stops the others; `mountedCount() <= liveLimit`.
+- **Transitions:** as in V1, routed one to one (`build`, `goLive`, `pause`, `save`, `restore`). Without `IntersectionObserver`, `measure` sets visible and near from the boxes on scroll (50 ms later) and resize.
+- **Reachable invalid states or transitions:** the cap is only kept by the views themselves; T1's remount paths pass it (TT-R5).

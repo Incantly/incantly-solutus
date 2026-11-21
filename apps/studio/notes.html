@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Incantly in notes</title>
+    <style>
+      body { margin: 0; padding: 24px 24px 320px; font: 16px/1.6 Inter, "Segoe UI", system-ui, sans-serif; color: #1f2430; background: #f4f5f7; }
+      main { max-width: 780px; margin: 0 auto; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+      label { font-size: 14px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+      #editor { background: #fff; border: 1px solid #d5d7dd; border-radius: 8px; padding: 8px 28px 28px; }
+      #editor .ProseMirror { outline: none; min-height: 200px; }
+      #editor h1 { font-size: 28px; margin: 20px 0 8px; }
+      #editor h2 { font-size: 21px; margin: 18px 0 6px; }
+      #editor p { margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <strong>Notes with live figures</strong>
+        <label><input id="readonly" type="checkbox" /> Read-only</label>
+      </header>
+      <div id="editor"></div>
+    </main>
+    <script type="module" src="/src/notes.ts"></script>
+  </body>
+</html>

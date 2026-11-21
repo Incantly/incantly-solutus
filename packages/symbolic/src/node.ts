@@ -754,8 +754,60 @@ export function pow(base: SymNode, exp: SymNode): SymNode {
   if (base.k === 'pow' && exp.k === 'int') {
     return pow(base.base, mul(base.exp, exp));
   }
+  // design 5.5: a square root keeps no square factor of its whole-number part: sqrt(4) = 2, sqrt(12) = 2 sqrt(3),
+  // sqrt(4 a) = 2 sqrt(a) (SYM-SM-27). Only small primes are tried, so the constructor stays cheap.
+  if (exp.k === 'rat' && exp.n === 1n && exp.d === 2n) {
+    const pulled = pullSquare(base);
+    if (pulled !== null) return pulled;
+  }
+  // no root in a denominator: 2^(-1/2) is sqrt(2)/2 and 3^(-3/2) is sqrt(3)/9 (design 5.5, SYM-SM-27)
+  if (base.k === 'int' && base.v > 1n && exp.k === 'rat' && exp.d === 2n && exp.n < 0n && bitLength(base.v) <= 128) {
+    const k = (-exp.n + 1n) / 2n;
+    guardPowDigits(base.v, k);
+    return mul(ratN(1n, base.v ** k), pow(base, HALF_EXP()));
+  }
   return intern({ k: 'pow', base, exp });
 }
+
+const HALF_EXP = (): SymNode => ratN(1n, 2n);
+
+/** `sqrt(c * rest)` with a square factor s^2 of the positive whole number c, as `s * sqrt(c / s^2 * rest)`; else null. */
+function pullSquare(base: SymNode): SymNode | null {
+  let c: bigint;
+  let rest: readonly SymNode[];
+  if (base.k === 'int') {
+    c = base.v;
+    rest = [];
+  } else if (base.k === 'mul' && base.factors[0]?.k === 'int') {
+    c = (base.factors[0] as SymNode & { k: 'int' }).v;
+    rest = base.factors.slice(1);
+  } else return null;
+  if (c <= 3n || bitLength(c) > 128) return null;
+  let s = 1n;
+  let f = c;
+  for (const p of SQUARE_TRIAL_PRIMES) {
+    const pp = p * p;
+    if (pp > f) break;
+    while (f % pp === 0n) {
+      f /= pp;
+      s *= p;
+    }
+  }
+  if (s === 1n) return null;
+  const inside = rest.length === 0 ? intN(f) : f === 1n ? (rest.length === 1 ? (rest[0] as SymNode) : mul(...rest)) : mul(intN(f), ...rest);
+  if (isOneNode(inside)) return intN(s);
+  return mul(intN(s), pow(inside, HALF_EXP()));
+}
+
+const SQUARE_TRIAL_PRIMES: readonly bigint[] = (() => {
+  const out: bigint[] = [];
+  for (let n = 2; n < 1000; n++) {
+    let prime = true;
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) { prime = false; break; }
+    if (prime) out.push(BigInt(n));
+  }
+  return out;
+})();
 
 function isNegativeNumber(n: SymNode): boolean {
   if (n.k === 'int') return n.v < 0n;
@@ -1140,6 +1192,17 @@ export function divideNodes(a: SymNode, b: SymNode): SymNode {
  * product: the canonical constructors would fold it straight back into `n`, so the node
  * is built directly (`2^2 * 3`). Parsing its text gives the number again.
  */
+/** A fraction in its prime factors, kept unfolded: `2 * 3 / (5 * 7)` (SYM-SM-27). */
+export function factoredRationalNode(num: readonly bigint[], den: readonly bigint[], negative: boolean): SymNode {
+  const top = factoredIntegerNode(num, negative);
+  const parts: SymNode[] = top.k === 'mul' ? [...top.factors] : num.length === 0 && !negative ? [] : [top];
+  const groups = new Map<bigint, number>();
+  for (const p of den) groups.set(p, (groups.get(p) ?? 0) + 1);
+  for (const [p, k] of [...groups].sort((a, b) => (a[0] < b[0] ? -1 : 1))) parts.push(intern({ k: 'pow', base: intN(p), exp: intN(-k) }));
+  if (parts.length === 1) return parts[0] as SymNode;
+  return intern({ k: 'mul', factors: parts });
+}
+
 export function factoredIntegerNode(primes: readonly bigint[], negative: boolean): SymNode {
   const parts: SymNode[] = negative ? [MINUS_ONE] : [];
   let i = 0;

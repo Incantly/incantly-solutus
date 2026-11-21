@@ -9,7 +9,7 @@ import { Bail, Checker, FIELDS, MAX_FUNCTION_PARAMS, MAX_OBJECTS, OverlayFigure,
 import type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
 import { buildError, closestNames, notice, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
-import { nameProblem, reservedGroup, reservedGroupText } from './names';
+import { RESERVED_ALTERNATIVES, nameProblem, reservedGroup, reservedGroupText } from './names';
 import { printLineNode } from './printer';
 import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import { SELF_ID } from './table';
@@ -92,10 +92,12 @@ function validateTarget(c: Checker, t: NameRef, rhsFieldHint?: string): boolean 
     });
     return false;
   }
-  const group = reservedGroup(t.name, c.fig.commands, c.functions);
+  const group = c.fig.isSheetCell?.(t.name) ? undefined : reservedGroup(t.name, c.fig.commands, c.functions);
   if (group) {
     const alts: string[] = [];
     if (rhsFieldHint && !reservedGroup(rhsFieldHint, c.fig.commands, c.functions) && !c.fig.lookup(rhsFieldHint)) alts.push(rhsFieldHint);
+    const word = RESERVED_ALTERNATIVES[t.name];
+    if (word && !alts.includes(word) && !reservedGroup(word, c.fig.commands, c.functions) && !c.fig.lookup(word)) alts.push(word);
     let k = 1;
     while (alts.length < 2) {
       const cand = `${t.name}_${k++}`;
@@ -443,6 +445,19 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
       else out.push({ key: it.key, value: n });
       break;
     }
+    case 'boolnum': {
+      // true or false, or a number (physics `burns`: true, or the seconds of burning)
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k === 'Bool') out.push({ key: it.key, value: n });
+      else if (n.ty.k !== 'Number') bad();
+      else {
+        const lit = foldNumber(n);
+        if (lit !== undefined && !(lit > (spec.min ?? -Infinity))) bad();
+        else out.push({ key: it.key, value: n });
+      }
+      break;
+    }
     case 'color': {
       if (v.k === 'name' && (COLOR_WORDS.includes(v.name) || hexWord(v.name) || unboundWord)) {
         if (COLOR_WORDS.includes(v.name) || hexWord(v.name)) out.push({ key: it.key, value: { word: v.name } });
@@ -465,6 +480,13 @@ function checkStyleItem(c: Checker, it: StyleItem, keys: readonly string[], out:
       else out.push({ key: it.key, value: n });
       break;
     }
+    case 'point': {
+      const n = c.infer(v);
+      if (!n) break;
+      if (n.ty.k !== 'Point') bad();
+      else out.push({ key: it.key, value: n });
+      break;
+    }
   }
 }
 
@@ -476,7 +498,44 @@ function lineSpan(c: Checker, node: { target: NameRef }, end: number): SpanLike 
   return { s: node.target.s, e: Math.max(end, node.target.e) + 0 * c.text.length };
 }
 
-function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Partial0 | undefined {
+/**
+ * A command that only sets properties of its first argument (text-logic design 4.7: `RotateText(T, 30deg)` is `T` with
+ * `rotate = 30deg`). Each prop takes the argument at `arg`, or `true` when `arg` is left out.
+ */
+export interface StyleLift {
+  readonly args: number;
+  readonly type: string;
+  readonly props: readonly { readonly key: string; readonly arg?: number }[];
+}
+
+const STYLE_LIFTS = new Map<string, StyleLift>();
+
+/** An area registers a command whose definition is its first argument with properties set (text-logic design 2.1). */
+export function registerStyleLift(name: string, lift: StyleLift): void {
+  STYLE_LIFTS.set(name, lift);
+}
+
+/** `X = RotateText(T, a) with …` read as `X = T with rotate = a, …`; the written properties come after, so they win. */
+function liftStyle(c: Checker, node: Extract<LineNode, { k: 'define' }>): { node: Extract<LineNode, { k: 'define' }>; lift: StyleLift; call: Expr & { k: 'call' } } | undefined {
+  const e = node.expr;
+  if (e.k !== 'call' || c.lookupLocal(e.callee)) return undefined;
+  const lift = STYLE_LIFTS.get(e.callee);
+  if (!lift || e.args.length !== lift.args || e.args.some((a) => a.name !== undefined)) return undefined;
+  const items: StyleItem[] = lift.props.map((p) => ({
+    key: p.key,
+    ks: e.cs,
+    ke: e.ce,
+    s: e.s,
+    e: e.e,
+    value: p.arg !== undefined ? (e.args[p.arg] as { value: Expr }).value : { k: 'bool', v: true, s: e.cs, e: e.ce },
+  }));
+  const style = [...items, ...(node.style ?? [])];
+  return { node: { ...node, expr: (e.args[0] as { value: Expr }).value, style }, lift, call: e };
+}
+
+function checkDefine(c: Checker, written: Extract<LineNode, { k: 'define' }>): Partial0 | undefined {
+  const lifted = liftStyle(c, written);
+  const node = lifted?.node ?? written;
   const t = node.target;
   const expr = node.expr;
   validateTarget(c, t, fieldHint(expr));
@@ -494,6 +553,17 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
     tn = c.buildRelation(expr);
   } else {
     tn = c.infer(expr);
+  }
+  if (lifted && tn && tn.ty.k !== lifted.lift.type) {
+    const call = lifted.call;
+    c.err('type_mismatch', expr.s, expr.e, 'lang.type_mismatch_where', { why: `${call.callee} takes a ${lifted.lift.type}, not a ${tyStr(tn.ty)}` }, {
+      left: lifted.lift.type,
+      right: tyStr(tn.ty),
+      hint: `Turn it into text first: ${call.callee}(Text(${c.textOf(expr)})${call.args.slice(1).map((a) => `, ${c.textOf(a.value)}`).join('')}).`,
+      suggest: [c.replaceRange(expr.s, expr.e, `Text(${c.textOf(expr)})`)],
+      fingerprintKey: `${call.callee}:type`,
+    });
+    return undefined;
   }
 
   let range: CheckedRange | undefined;
@@ -537,6 +607,7 @@ function checkDefine(c: Checker, node: Extract<LineNode, { k: 'define' }>): Part
     expr: tn,
     ...(range ? { range } : {}),
     ...(style ? { style } : {}),
+    ...(lifted && node.style ? { styleItems: node.style } : {}),
     ...(state ? { state } : {}),
     ...(tn.n === 'relation' ? { shape: tn.shape } : {}),
   };
@@ -915,6 +986,16 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     });
     return undefined;
   };
+  /** A value outside a closed set: `expected` lists the legal lines. */
+  const badValues = (need: string, expected: readonly string[]): undefined => {
+    c.err('bad_directive', node.ns - 1, words.length > 0 ? (words[words.length - 1] as { e: number }).e : node.ne, 'lang.bad_directive', { directive: '@' + node.name, need }, {
+      forms: forms ? [...forms] : [],
+      expected: [...expected],
+      hint: `Write ${expected[0]}.`,
+      fingerprintKey: node.name,
+    });
+    return undefined;
+  };
   switch (node.name) {
     case 'view': {
       if (words.length === 1 && words[0]?.text === 'home') break;
@@ -932,6 +1013,13 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
     case 'beat':
       if (words.length < 1) return bad('an id and an optional "title"');
       break;
+    case 'seed': {
+      // @seed 42, or @seed 42 v1 with the generator version (probability design 6.2)
+      const n = words[0]?.num;
+      const okVersion = words.length === 1 || (words.length === 2 && words[1]?.text === 'v1');
+      if (n === undefined || !Number.isInteger(n) || n < 0 || n > 4294967295 || !okVersion) return bad('a whole number from 0 to 4,294,967,295');
+      break;
+    }
     case 'tol':
     case 'tolerance':
       if (words.length !== 1 || words[0]?.num === undefined || !(words[0].num > 0) || !Number.isFinite(words[0].num)) return bad('a positive number like 1e-9');
@@ -943,8 +1031,11 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
       const okReset = txt.length === 3 && txt[0] === 'reset' && txt[1] === 'at' && isNum(txt[2]);
       const nums = txt.slice(1, txt.length - (txt[txt.length - 1] === 'base' ? 1 : 2));
       const tail = txt[txt.length - 1] === 'base' ? true : txt[txt.length - 2] === 'at' && isNum(txt[txt.length - 1]);
-      const okSet = txt.length >= 3 && /^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(txt[0] ?? '') && txt[0] !== 'reset' && (nums.length === 1 || nums.length === 2) && nums.every(isNum) && tail;
-      if (!okReset && !okSet) return bad('a name, a value, then at t or base; or reset at t');
+      const okSet = txt.length >= 3 && /^[A-Za-z\u0370-\u03FF_][A-Za-z0-9_\u0370-\u03FF]*$/.test(txt[0] ?? '') && txt[0] !== 'reset' && txt[0] !== 'physics' && (nums.length === 1 || nums.length === 2) && nums.every(isNum) && tail;
+      // the physics log (physics design 5.4): @input physics push b 1 0 at 2.5, grab, release, set, reset; the driver
+      // checks the rest
+      const okPhysics = txt[0] === 'physics' && txt.length >= 4 && txt[txt.length - 2] === 'at' && isNum(txt[txt.length - 1]);
+      if (!okReset && !okSet && !okPhysics) return bad('a name, a value, then at t or base; or reset at t');
       break;
     }
     case 'clock':
@@ -953,6 +1044,31 @@ function checkDirective(c: Checker, node: Extract<LineNode, { k: 'directive' }>)
         const [a, b] = (words[0] as { text: string }).text.split('..').map(Number) as [number, number];
         if (a >= b) return bad('a range with start before end');
       }
+      break;
+    // app-modes design 3.6, agent 3
+    case 'angleunit':
+      if (words.length !== 1 || !['radian', 'degree'].includes(words[0]?.text ?? '')) return badValues('radian or degree', ['@angleunit radian', '@angleunit degree']);
+      break;
+    case 'rounding': {
+      const m = words.length === 1 ? /^(\d{1,2})(s?)$/.exec(words[0]?.text ?? '') : null;
+      const d = m ? Number(m[1]) : NaN;
+      if (!m || (m[2] === 's' ? d < 1 || d > 15 : d > 15)) return badValues('0 to 15 decimal places, or 1s to 15s significant digits', ['@rounding 2', '@rounding 4s']);
+      break;
+    }
+    case 'coords':
+      if (words.length !== 1 || !['cartesian', 'polar'].includes(words[0]?.text ?? '')) return badValues('cartesian or polar', ['@coords cartesian', '@coords polar']);
+      break;
+    case 'title':
+      if (words.length !== 1 || node.words[0]?.str === undefined) return badValues('a title in quotes', ['@title "Triangle centres"']);
+      break;
+    case 'mode':
+      if (words.length !== 1 || !/^[a-z0-9]+$/.test(words[0]?.text ?? '')) return bad('one mode name, such as graphing');
+      break;
+    case 'exam':
+      if (words.length < 1 || !/^[a-z-]+$/.test(words[0]?.text ?? '')) return bad('a profile name or off');
+      break;
+    case 'restrict':
+      if (words.length < 1 || words.some((w) => !/^[a-z]+=\S+$/.test(w.text))) return bad('items like hide=algebra deny=Derivative');
       break;
     default:
       break;

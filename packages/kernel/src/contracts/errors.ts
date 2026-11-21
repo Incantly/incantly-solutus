@@ -74,6 +74,36 @@ export interface AreaErrorKinds {
   // lists-matrices (codes C070 to C089)
   unknown_field: true;
   bad_option: true;
+  // app-modes (codes C090 to C099)
+  mode_forbids: true;
+  decimal_comma: true;
+  // sound (codes C092 to C099)
+  bad_note_name: true;
+  // spreadsheet (codes C100 to C119)
+  bad_reference: true;
+  range_not_object: true;
+  range_misplaced: true;
+  cell_out_of_range: true;
+  no_sheet: true;
+  cell_locked: true;
+  bad_shape: true;
+  batch_failed: true;
+  import_format: true;
+  import_conflict: true;
+  // space-3d (codes C120 to C129)
+  mixed_dimension: true;
+  // physics (codes C130 to C149)
+  not_a_body_shape: true;
+  self_crossing: true;
+  not_convex_3d: true;
+  not_a_body: true;
+  same_body: true;
+  not_in_world: true;
+  read_only: true;
+  not_a_cloth: true;
+  pin_off_cloth: true;
+  not_burnable: true;
+  no_fire_grid: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;
@@ -143,6 +173,24 @@ export interface AreaNoticeKinds {
   catching_up: true;
   particle_shed: true;
   path_pending: true;
+  // spreadsheet
+  skipped_non_numeric: true;
+  off_sheet_cells: true;
+  cells_kept: true;
+  fill_skipped: true;
+  text_number_mix: true;
+  // physics
+  split_shape: true;
+  shape_approximated: true;
+  left_world: true;
+  contacts_dropped: true;
+  checkpoints_thinned: true;
+  ground_sampled: true;
+  input_undefined: true;
+  worker_unavailable: true;
+  unstable_world: true;
+  physics_behind: true;
+  broken: true;
 }
 
 export type NoticeKind = CoreNoticeKind | Extract<keyof AreaNoticeKinds, string>;

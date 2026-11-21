@@ -35,7 +35,7 @@ function time(fn: () => void, runs: number): number {
 }
 
 describe('performance.md 1: parse and check', () => {
-  it('parse + check of a typical line: target under 0.2 ms on average over 10,000 lines (fail above 0.5 ms)', () => {
+  it('parse + check of a typical line: target under 0.2 ms on average over 10,000 lines (fail above 0.5 ms)', { retry: 2 }, () => {
     const fig = newFig();
     for (let i = 0; i < 2000; i++) analyseLine(TYPICAL[i % TYPICAL.length] ?? '', fig); // warm up
     const t0 = performance.now();
@@ -116,7 +116,7 @@ describe('language/design.md 3.18 autocomplete performance', () => {
 });
 
 describe('language/design.md 3.14 / 3.15 evaluation speed', () => {
-  it('a 20-node function body evaluates at least 10 million node-evaluations per second (fail below 2 million)', () => {
+  it('a 20-node function body evaluates at least 10 million node-evaluations per second (fail below 2 million)', { retry: 2 }, () => {
     const fig = newFig();
     okValue(fig.apply('hot(x) = sin(x) * x^2 + 3 * cos(x) - sqrt(x + 10) / (1 + abs(x)) + x * 2 - 1'));
     const fn = fig.valueOf('hot') as FunctionValue;

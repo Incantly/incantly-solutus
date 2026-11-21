@@ -165,3 +165,12 @@ Refusals from tools do not reach the model (the learner sees them). Line errors 
 | `unnamed_object` | Add a name on the left |
 | `type_change` on redefining a point as a line | `Delete` then define again |
 | Undefined `Intersect` | Say the reason (`parallel`, `no_intersection`); do not keep re-drawing |
+
+## 7. As built
+
+- The catalogue is `TOOLS` in `packages/ui/src/tools/catalog.ts`; `catalogText()` prints one line per tool for the
+  prompt. Deferred tools and the reason are in `DEFERRED`.
+- A tool writes the same lines a model would: `G = (-3, 2)`, `d = Circle(A, G, C)`. New points come first. Names follow
+  design 5.7: `A`… for points, `l, m, n` for lines, `c, d, k` for circles, `α, β` for angles, `poly1` for polygons.
+- Tangents from a point write one `List<Line>` (`L = Tangent(A, c)`); roots and extrema one list over the view.
+- Hidden objects are `with visible = false`.

@@ -1,453 +1,823 @@
-/** The studio screen: line list, input, undo and redo, rename and delete, script files, the clock, and a placeholder for the drawing. */
-import { defineLanguageElements, errorNames } from '@incantly/ui';
-import type {
-  ErrorCardElement, FixDetail, GotoDetail, LineEditorElement, LineListElement, RowActionDetail, RowEditDetail, RowInsertDetail, RowSetDetail, RowSlideDetail,
-} from '@incantly/ui';
-import type { ErrorObject, PreviewResult } from '@incantly/kernel';
-import { tyStr } from '@incantly/kernel';
+/**
+ * The studio: a top bar, the expression list on the left, the graph on the right, and the data-analysis panel when it
+ * is open. Every area built so far is registered, so its commands can be typed and seen.
+ */
+import type { AppModeId, StorageLike } from '@incantly/modes';
+import { mountAppModes } from './modes/app';
+import { mountSoundUi } from './sound-ui';
+import type { SoundUi } from './sound-ui';
+import type { SoundEngine } from '@incantly/audio';
+import { mountScientific } from './modes/scientific';
+import { mountKeyboard } from './modes/keyboard';
+import { mountExamScreens } from './modes/exam-ui';
+import type { ScientificView } from './modes/scientific';
+import type { MathKeyboard } from './modes/keyboard';
+import type { ExamScreens } from './modes/exam-ui';
+import type { AppModes } from './modes/app';
+import { mountDataLab } from './datalab';
+import { mountCasPanel } from './caspanel';
+import { mountSheet } from './sheet/grid';
+import type { SheetPanel } from './sheet/grid';
+import { loadCasEngine } from './registry';
+import type { CasPanel } from './caspanel';
+import { mountProbCalc } from './probcalc';
+import { mountSimStrip } from './simstrip';
+import type { SimStrip } from './simstrip';
+import { mountToolStrip } from './tools-ui';
+import { contactsItem, physicsMarks, symDrawing } from '@incantly/sdk/screen';
+import type { ToolStrip } from './tools-ui';
+import type { ProbCalc } from './probcalc';
+import type { DataLab } from './datalab';
+import { EXAMPLES, examplesFor } from './examples';
+import { drawsOnGraph, mountExpressions } from './expressions';
+import type { ExpressionList } from './expressions';
+import { mountGraph, mountSpace } from '@incantly/sdk/screen';
+import type { SpacePane } from '@incantly/sdk/screen';
+import type { GraphPane } from '@incantly/sdk/screen';
+import { sceneBounds } from '@incantly/sdk/screen';
+import type { SceneItem } from '@incantly/sdk/screen';
+import { studioRegistry } from './registry';
 import { KernelSession } from './session';
-import type { Outcome } from './session';
+import { physicsKernelsActive, tracePoints, tracedIds, worldDriverOf } from '@incantly/kernel';
+import { createSelection, selectionFrom } from './selection';
+import type { Selection } from './selection';
+import { hitTest } from '@incantly/sdk/screen';
+import { mountFileMenu } from './files-ui';
+import type { FileMenu } from './files-ui';
 
-export const EXAMPLE_LINES: readonly string[] = [
-  'A = (1, 2)',
-  'B = (4, 6)',
-  'a = 3 in 0..8 step 1',
-  'M = Midpoint(A, B)',
-  'c = Circle(M, a)',
-  'f(x) = 2x^2 - 3x + 1',
-  'h = 2 + sin(t)',
-  'g = 1/0',
-  'k = g + 1',
-];
+export interface StudioOptions {
+  /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */
+  readonly raf?: (cb: (now: number) => void) => number;
+  readonly caf?: (handle: number) => void;
+  /** Repeating timer for the simulation strip's Run; a test passes its own. */
+  readonly every?: (ms: number, fn: () => void) => () => void;
+  /** The app mode to open in (app-modes design 3.2). Default `classic`: everything. */
+  readonly mode?: AppModeId;
+  /** Show the start screen with the mode tiles. */
+  readonly start?: boolean;
+  /** Storage for user settings; `localStorage` by default, `null` for none. */
+  readonly storage?: StorageLike | null;
+  /** Monotonic clock for exams; `performance.now` by default. */
+  readonly now?: () => number;
+  /** The sound engine; a test passes its own. */
+  readonly soundEngine?: () => Promise<SoundEngine>;
+  /** Asks for full screen at the exam start; a test passes its own. */
+  readonly requestFullscreen?: () => Promise<boolean>;
+}
+
+export interface Mounted {
+  readonly session: KernelSession;
+  readonly expressions: ExpressionList;
+  readonly graph: GraphPane;
+  readonly lab: DataLab;
+  readonly calc: ProbCalc;
+  readonly cas: CasPanel;
+  /** The spreadsheet view (spreadsheet ui). */
+  readonly sheet: SheetPanel;
+  readonly tools: ToolStrip;
+  readonly sim: SimStrip;
+  /** What is selected in the list and on the canvas (algebra-view design 3.9). */
+  readonly selection: Selection;
+  readonly status: HTMLElement;
+  /** The app mode, its settings and languages (app-modes). */
+  readonly modes: AppModes;
+  /** The scientific calculator's rows. */
+  readonly scientific: ScientificView;
+  /** The on-screen maths keyboard. */
+  readonly keyboard: MathKeyboard;
+  /** Exam mode screens. */
+  readonly exam: ExamScreens;
+  /** The speaker button and the sound feed. */
+  readonly sound: SoundUi;
+  /** Replaces the figure with an example's lines. */
+  /** Open, save, export and share (embed-files-export ui.md 2 to 5). */
+  readonly files: FileMenu;
+  /** The Space view of the 3D app (.kiro/specs/space-3d R4.5). */
+  readonly space: SpacePane;
+  loadExample(id: string): void;
+  undo(): void;
+  redo(): void;
+  dispose(): void;
+}
 
 const KEYS: readonly (readonly [string, string])[] = [
-  ['Enter', 'Submit the line; accept the selected completion'],
-  ['Shift+Enter', 'New line (several lines are applied in order)'],
-  ['Ctrl+Space', 'Open completion'],
-  ['Ctrl+Shift+Space', 'Show the forms of the command at the caret'],
-  ['Up / Down', 'Earlier lines when the field is empty; completion list when open'],
-  ['Tab / Shift+Tab', 'Next / previous placeholder'],
-  ['Ctrl+/', 'Comment or uncomment the line'],
-  ['Esc', 'Close completion, then the strip; then ask before clearing the line'],
-  ['/', 'Focus the input from anywhere on the page'],
-  ['Ctrl/Cmd+Z', 'Undo (in the input field, only while it is empty)'],
-  ['Shift+Ctrl/Cmd+Z', 'Redo'],
-  ['Up / Down / Home / End in the list', 'Move between lines; Enter edits one'],
-  ['F2 / Delete in the list', 'Rename / delete the line'],
-  ['Shift+arrows on a slider', 'Move ten steps'],
+  ['Enter', 'Apply the line; with the completion list open, accept the suggestion'],
+  ['Tab', 'Accept the highlighted completion'],
+  ['Up / Down', 'Move between lines'],
+  ['Alt + Up / Down', 'In a call: the other forms of the command; in the new line: earlier lines'],
+  ['F2', 'Select the name of a line, to rename it'],
+  ['Esc', 'Undo the edit in progress'],
+  ['Backspace on an empty line', 'Delete the line'],
+  ['Ctrl/Cmd + Z, Shift + Ctrl/Cmd + Z', 'Undo, redo'],
+  ['/', 'Go to the new-line box'],
+  ['Graph: drag, wheel, arrows, + − 0', 'Pan, zoom, pan, zoom, home'],
 ];
 
-function el(tag: string, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElement {
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
   node.append(...kids);
   return node;
 }
 
-export interface StudioOptions {
-  /** Frame scheduler for the clock; defaults to `requestAnimationFrame`. A test passes its own. */
-  readonly raf?: (cb: (now: number) => void) => number;
-  readonly caf?: (handle: number) => void;
+function btn(label: string, cls: string, title: string, onClick: () => void): HTMLButtonElement {
+  const b = el('button', { type: 'button', class: cls, title, 'aria-label': title }, label);
+  b.addEventListener('click', onClick);
+  return b;
 }
-
-export interface Mounted {
-  readonly session: KernelSession;
-  readonly editor: LineEditorElement;
-  readonly list: LineListElement;
-  readonly card: ErrorCardElement;
-  readonly ghostNote: HTMLElement;
-  readonly status: HTMLElement;
-  loadExample(): void;
-  undo(): void;
-  redo(): void;
-  /** Removes the page-wide key handler. */
-  dispose(): void;
-}
-
-type Pending = { readonly kind: 'rename'; readonly name: string } | { readonly kind: 'delete'; readonly name: string; readonly plan: readonly string[] };
 
 export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounted {
-  defineLanguageElements();
-  const session = new KernelSession();
+  const registry = studioRegistry();
+  const session = new KernelSession(registry);
   const raf = opts.raf ?? ((cb: (now: number) => void): number => window.requestAnimationFrame(cb));
   const caf = opts.caf ?? ((h: number): void => window.cancelAnimationFrame(h));
 
-  const list = el('incantly-line-list') as LineListElement;
-  const editor = el('incantly-line-editor', { placeholder: 'Type a line, e.g. A = (1, 2)', label: 'Input line' }) as LineEditorElement;
-  const card = el('incantly-error-card') as ErrorCardElement;
   const status = el('p', { class: 'status', role: 'status', 'aria-live': 'polite' });
-  const ghostNote = el('p', { class: 'ghost' });
-  const count = el('p', { class: 'count' });
-
-  const button = (label: string, cls = 'secondary', attrs: Record<string, string> = {}): HTMLButtonElement =>
-    el('button', { type: 'button', class: cls, ...attrs }, label) as HTMLButtonElement;
-  const undoBtn = button('Undo');
-  const redoBtn = button('Redo');
-  const example = button('Load example');
-  const toolbar = el('div', { class: 'toolbar', role: 'toolbar', 'aria-label': 'Figure actions' }, undoBtn, redoBtn, example);
-  const bar = el('div', { class: 'actionbar', role: 'group' });
-  bar.hidden = true;
-
-  // clock
-  const playBtn = button('Play');
-  const resetBtn = button('Back to start');
-  const scrub = el('input', { type: 'range', class: 'scrub', 'aria-label': 'Time', step: 'any' }) as HTMLInputElement;
-  const readout = el('output', { class: 'readout', 'aria-label': 'Time in seconds' });
-  const clock = el('div', { class: 'clock', role: 'group', 'aria-label': 'Clock' }, playBtn, resetBtn, scrub, readout);
-  clock.hidden = true;
-
-  // script
-  const script = el('textarea', { class: 'script-text', rows: '6', spellcheck: 'false', 'aria-label': 'Figure script' }) as HTMLTextAreaElement;
-  const saveBtn = button('Save script');
-  const loadBtn = button('Load script');
-  const file = el('input', { type: 'file', accept: '.inc,.txt,text/plain', 'aria-label': 'Choose a script file to load' }) as HTMLInputElement;
-  const report = el('div', { class: 'report', role: 'status', 'aria-live': 'polite' });
-  const scriptPanel = el(
-    'details',
-    { class: 'script' },
-    el('summary', {}, 'Script (save and load)'),
-    el('p', { class: 'note' }, 'The figure as lines of text. Loading replaces the current figure and clears the undo history.'),
-    script,
-    el('div', { class: 'toolbar' }, saveBtn, loadBtn, file),
-    report,
-  );
-
-  const keys = el('table', { class: 'keys' }, el('caption', {}, 'Keyboard'));
-  for (const [key, what] of KEYS) keys.append(el('tr', {}, el('th', { scope: 'row' }, key), el('td', {}, what)));
-
-  root.replaceChildren(
-    el('header', { class: 'top' }, el('h1', {}, 'Incantly Studio'), el('p', {}, 'Kernel preview. The figure is live; there is no drawing yet.')),
-    el(
-      'div',
-      { class: 'layout' },
-      el(
-        'section',
-        { class: 'panel', 'aria-labelledby': 'lines-title' },
-        el('div', { class: 'panel-head' }, el('h2', { id: 'lines-title' }, 'Lines'), toolbar),
-        bar,
-        card,
-        status,
-        el('div', { class: 'scroll' }, list),
-        el('div', { class: 'input-bar' }, editor),
-      ),
-      el(
-        'section',
-        { class: 'figure', 'aria-labelledby': 'figure-title' },
-        el('h2', { id: 'figure-title' }, 'Figure'),
-        el(
-          'div',
-          { class: 'placeholder', role: 'note' },
-          el('p', {}, el('strong', {}, 'No drawing yet.')),
-          el('p', {}, 'The figure is a live kernel figure. Every line is checked and run, and the list shows each value, its type and whether it is free or computed. The drawing arrives with the renderer.'),
-          count,
-          ghostNote,
-        ),
-        clock,
-        scriptPanel,
-      ),
-    ),
-    el('details', { class: 'help' }, el('summary', {}, 'Keyboard'), keys),
-  );
-
-  /* ------------------------------ state shown ------------------------------ */
-
-  let pending: Pending | undefined;
-  let playing = false;
-  let frame: number | undefined;
-  let last: number | undefined;
-
   const say = (text: string): void => {
     status.textContent = text;
   };
-  const showError = (e: ErrorObject | null): void => {
-    card.error = e;
-    list.highlighted = e ? errorNames(e) : [];
-  };
-  const outcome = (o: Outcome): boolean => {
-    if (o.ok) {
-      showError(null);
-      say([o.message, ...o.notices].join('. '));
-    } else showError(o.error);
-    return o.ok;
-  };
 
-  const syncUndo = (): void => {
-    const u = session.undoState();
-    undoBtn.disabled = !u.canUndo;
-    redoBtn.disabled = !u.canRedo;
-    const undoName = u.label ? `Undo: ${u.label}` : 'Undo';
-    undoBtn.setAttribute('aria-label', undoName);
-    undoBtn.title = `${undoName} (Ctrl+Z)`;
-    const redoName = u.canRedo ? `Redo (${u.redoDepth} step${u.redoDepth === 1 ? '' : 's'})` : 'Redo';
-    redoBtn.setAttribute('aria-label', redoName);
-    redoBtn.title = `${redoName} (Shift+Ctrl+Z)`;
-  };
+  /* ------------------------------ panes ------------------------------ */
 
-  const syncClock = (): void => {
-    const has = session.hasClock();
-    clock.hidden = !has;
-    if (!has && playing) pause();
-    if (!has) return;
-    const { from, to } = session.range();
-    const t = session.time();
-    readout.textContent = `t = ${Math.round(t * 1000) / 1000} s`;
-    const finite = Number.isFinite(to);
-    scrub.hidden = !finite;
-    if (finite) {
-      scrub.min = String(from);
-      scrub.max = String(to);
-      scrub.value = String(t);
+  const space3Ref: { current?: SpacePane } = {};
+  const holder: { expressions?: ExpressionList; tools?: ToolStrip } = {};
+  const selection = createSelection();
+  const fromCanvas = selectionFrom(selection, 'canvas');
+  const hiddenByStyle = (o: { style: { shown: boolean } }): boolean => o.style.shown === false;
+  /** A kernel colour as CSS: `{ r, g, b, a }` with channels 0 to 255 (or 0 to 1). */
+  const colorCss = (c: unknown): string | undefined => {
+    const o = c as { r?: number; g?: number; b?: number; a?: number };
+    if (typeof o.r !== 'number' || typeof o.g !== 'number' || typeof o.b !== 'number') return undefined;
+    const k = o.r <= 1 && o.g <= 1 && o.b <= 1 ? 255 : 1;
+    return `rgba(${Math.round(o.r * k)}, ${Math.round(o.g * k)}, ${Math.round(o.b * k)}, ${o.a ?? 1})`;
+  };
+  const items = (): SceneItem[] => {
+    const out: SceneItem[] = [];
+    const expressions = holder.expressions;
+    if (!expressions) return out;
+    const traced = new Set(tracedIds(session.figure).map((x) => x as unknown as number));
+    for (const o of session.figure.objects()) {
+      if (!o.cell.defined) continue;
+      // a text is drawn on the graph when it has a place (`with at = …`)
+      if (o.type === 'Text') {
+        const ext = o.style.ext as { at?: { x: number; y: number }; size?: number; anchor?: string; rotate?: number; bg?: unknown; vertical?: boolean; latex?: string };
+        if (!ext.at || expressions.isHidden(o.id) || hiddenByStyle(o)) continue;
+        const bg = typeof ext.bg === 'object' && ext.bg !== null ? colorCss(ext.bg) : undefined;
+        out.push({ id: o.id, name: o.name, type: 'Text', typeText: 'Text', value: o.cell.value, color: expressions.colorOf(o.id, o), free: false, label: false,
+          text: { at: ext.at, size: ext.size ?? 16, anchor: ext.anchor ?? 'sw', rotate: ext.rotate ?? 0, ...(bg ? { bg } : {}), ...(ext.vertical === true ? { vertical: true } : {}), ...(ext.latex === 'full' ? { full: true } : {}) } });
+        continue;
+      }
+      if (expressions.isHidden(o.id)) continue;
+      // hidden with `with visible = false`: left out, or drawn faintly while the show/hide tool is on
+      if (hiddenByStyle(o) && !holder.tools?.showHidden()) continue;
+      // a symbolic row with its show switch on (cas ui.md 4, 7)
+      if ((o.style.ext as { plot?: unknown }).plot === true) {
+        const d = symDrawing(o.cell.value);
+        const base = { id: o.id, name: o.name, typeText: o.typeText, color: expressions.colorOf(o.id, o), free: false, label: false, ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}) };
+        if (d?.kind === 'curve') out.push({ ...base, type: 'Function', value: d.fn, holes: d.holes });
+        else if (d?.kind === 'relation') out.push({ ...base, type: 'Relation', value: d.value });
+        else if (d?.kind === 'axis') out.push({ ...base, type: 'SymAxis', value: d });
+        else if (d?.kind === 'points') out.push({ ...base, type: 'List', typeText: 'List<Point>', value: d.pts });
+        continue;
+      }
+      if (!drawsOnGraph(o.type, o.typeText, o.cell.value)) continue;
+      out.push({ id: o.id, name: o.name, type: o.type, typeText: o.typeText, value: o.cell.value, color: expressions.colorOf(o.id, o), free: o.type === 'Point' && session.draggable(o.name), label: true, ...physicsMarks(session.figure, o), ...(hiddenByStyle(o) ? { ghost: true } : {}), ...(selection.has(o.name) ? { selected: true } : {}), ...(selection.hover() === o.name ? { hovered: true } : {}), ...(o.type === 'Particles' ? { time: session.time() } : {}), ...(traced.has(o.id as unknown as number) ? { trace: tracePoints(session.figure, o.id) as Float64Array } : {}) });
     }
+    const contacts = contactsItem(session.figure);
+    if (contacts) out.push(contacts);
+    return out;
   };
+  const graph = mountGraph({
+    items,
+    bounds: () => {
+      // the figure's own `@view x0 x1 y0 y1` wins over zoom to fit (it is how a film frames itself)
+      const v = /^@view\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/m.exec(session.save());
+      if (v) {
+        const [x0, x1, y0, y1] = v.slice(1, 5).map(Number) as [number, number, number, number];
+        if (x0 < x1 && y0 < y1) return { x0, x1, y0, y1 };
+      }
+      const all = items();
+      const b = sceneBounds(all);
+      // data charts and fits may stretch the axes; geometry keeps one unit the same length both ways
+      const data = all.some((i) => i.type === 'Chart' || i.type === 'Record' || i.type.endsWith('Distribution') || i.typeText === 'List<Point>');
+      const geometry = all.some((i) => ['Circle', 'Arc', 'Polygon', 'Segment', 'Line', 'Ray', 'Vector'].includes(i.type) || i.typeText === 'List<Polygon>' || (i.value as { schema?: string } | undefined)?.schema === 'PieChart');
+      return b ? { ...b, y0: data ? Math.min(b.y0, 0) : b.y0, stretch: data && !geometry } : undefined;
+    },
+    drag: (name, x, y, done) => {
+      const r = session.dragPoint(name, x, y, done);
+      if (!r.ok) say(r.error.message);
+    },
+    tool: () => holder.tools?.graphTool,
+    // a click on an object selects it; on the background it clears the selection (design 3.9)
+    clickable: (id) => {
+      const o = session.figure.get(id as never);
+      return o !== undefined && session.clickable(o.name);
+    },
+    activate: (id) => {
+      const o = session.figure.get(id as never);
+      if (!o) return;
+      const r = session.click(o.name);
+      say(r.ok ? `Clicked ${o.name}.` : r.error.message);
+    },
+    pick: (px, py, vp, extend) => {
+      const hit = hitTest(items(), vp, px, py, 8)[0];
+      if (!hit) {
+        if (!extend) fromCanvas.clear();
+        return;
+      }
+      if (extend) fromCanvas.toggle(hit.name);
+      else fromCanvas.set(hit.name);
+      say(selection.names().length > 1 ? `Selected ${selection.names().join(', ')}.` : `Selected ${hit.name}.`);
+    },
+    hoverAt: (px, py, vp) => fromCanvas.setHover(hitTest(items(), vp, px, py, 8)[0]?.name),
+  });
+  const modeRef: { current?: AppModes } = {};
+  const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection, autoSliders: () => modeRef.current?.mode.defaults.autoSliders ?? true });
+  holder.expressions = exprs;
+  const tools = mountToolStrip({
+    session, registry, say, host: () => graph.element, items, redraw: () => graph.redraw(), flash: (names) => exprs.flash(names),
+    selection: () => selection.names(),
+    viewport: () => graph.viewport,
+  });
+  selection.onChange(() => {
+    graph.redraw();
+    space3Ref.current?.redraw();
+    sim.refresh();
+  });
+  holder.tools = tools;
+  graph.element.append(tools.element, tools.hint);
+  const lab = mountDataLab(session, registry, say);
+  const calc = mountProbCalc(session, registry, say);
+  const cas = mountCasPanel(session, say);
+  const sheet = mountSheet({ session, say, pick: (n) => selection.set(n) });
+  const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
+  graph.element.append(sim.element);
+  // the panel's Simulate section opens the strip (ui.md 6)
+  calc.element.addEventListener('open-simulation', () => {
+    sim.open();
+    graph.element.classList.toggle('has-sim', sim.isShown());
+  });
 
-  const sync = (): void => {
-    list.rows = session.rows();
-    if (!playing) editor.refresh();
-    count.textContent = `${list.rows.length} object${list.rows.length === 1 ? '' : 's'} in the figure.`;
-    syncUndo();
-    syncClock();
-    const warnings = session.figure.takeWarnings();
-    if (warnings.length > 0) say(warnings.map((w) => w.message).join('. '));
+  /* ------------------------------ top bar ------------------------------ */
+
+  const undoBtn = btn('↶', 'icon-btn', 'Undo', () => api.undo());
+  const redoBtn = btn('↷', 'icon-btn', 'Redo', () => api.redo());
+  const examples = el('select', { class: 'examples', 'aria-label': 'Open an example' });
+  /** The menu lists the examples made for the app in use (.kiro/specs/mode-examples R1). */
+  const fillExamples = (mode: AppModeId, title: (m: AppModeId) => string): void => {
+    examples.replaceChildren(el('option', { value: '' }, 'Examples…'));
+    const groups = examplesFor(mode);
+    for (const g of groups) {
+      const into = groups.length > 1 ? el('optgroup', { label: title(g.group) }) : examples;
+      for (const e of g.examples) into.append(el('option', { value: e.id }, e.title));
+      if (into !== examples) examples.append(into);
+    }
+    examples.hidden = groups.length === 0;
   };
+  examples.addEventListener('change', () => {
+    if (examples.value) api.loadExample(examples.value);
+    examples.value = '';
+  });
+  /** One side panel at a time: opening one closes the others. */
+  const closeOthers = (keep: 'lab' | 'calc' | 'cas' | 'sheet'): void => {
+    if (keep !== 'lab' && lab.isOpen()) lab.close();
+    if (keep !== 'calc' && calc.isOpen()) calc.close();
+    if (keep !== 'cas' && cas.isOpen()) cas.close();
+    if (keep !== 'sheet' && sheet.isOpen()) sheet.close();
+    labBtn.classList.toggle('on', lab.isOpen());
+    calcBtn.classList.toggle('on', calc.isOpen());
+    casBtn.classList.toggle('on', cas.isOpen());
+    sheetBtn.classList.toggle('on', sheet.isOpen());
+  };
+  const openSheet = (): void => {
+    closeOthers('sheet');
+    sheet.open();
+    sheetBtn.classList.add('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  };
+  const sheetBtn = btn('Sheet', 'tool-btn', 'Open the spreadsheet: cells are objects', () => {
+    if (sheet.isOpen()) {
+      sheet.close();
+      sheetBtn.classList.remove('on');
+      requestAnimationFrame(() => {
+        graph.paint();
+        graph.fit();
+      });
+    } else openSheet();
+  });
+  const casBtn = btn('CAS', 'tool-btn', 'Open the CAS view: algebra row by row', () => {
+    if (cas.isOpen()) cas.close();
+    else {
+      closeOthers('cas');
+      cas.open();
+      // the engine loads with the view, so the first button press does not wait
+      void loadCasEngine();
+    }
+    casBtn.classList.toggle('on', cas.isOpen());
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  const labBtn = btn('Data analysis', 'tool-btn', 'Open the data-analysis panel', () => {
+    if (lab.isOpen()) lab.close();
+    else {
+      closeOthers('lab');
+      calc.close();
+      calcBtn.classList.remove('on');
+      lab.open();
+    }
+    labBtn.classList.toggle('on', lab.isOpen());
+    // the graph changed width: show the same things in the new space
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  const calcBtn = btn('Probability', 'tool-btn', 'Open the probability calculator', () => {
+    if (calc.isOpen()) calc.close();
+    else {
+      closeOthers('calc');
+      lab.close();
+      labBtn.classList.remove('on');
+      calc.open();
+    }
+    calcBtn.classList.toggle('on', calc.isOpen());
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
+  });
+  const newBtn = btn('New', 'tool-btn', 'Start a new, empty figure', () => {
+    session.load('');
+    graph.viewport.home();
+    say('New figure.');
+  });
+
+  // script dialog: see, copy or load the figure as lines of text
+  const script = el('textarea', { class: 'script-text', rows: '14', spellcheck: 'false', 'aria-label': 'Figure script' });
+  const dialog = el('dialog', { class: 'script-dialog', 'aria-label': 'Figure script' });
+  const report = el('p', { class: 'muted' });
+  dialog.append(
+    el('h2', {}, 'Figure script'),
+    el('p', { class: 'muted' }, 'The figure as lines of text. Load replaces the figure and clears undo.'),
+    script,
+    report,
+    el('div', { class: 'dialog-actions' },
+      btn('Copy', 'secondary', 'Copy the script', () => void navigator.clipboard?.writeText(script.value)),
+      btn('Load', 'primary', 'Load this script', () => {
+        const r = session.load(script.value);
+        report.textContent = r.replaced ? `${r.applied} of ${r.total} lines applied${r.errors.length ? `; ${r.errors.length} failed: ${r.errors[0]?.message ?? ''}` : ''}.` : `Nothing loaded: ${r.errors[0]?.message ?? 'no lines'}`;
+        if (r.replaced) graph.fit();
+      }),
+      btn('Close', 'secondary', 'Close', () => dialog.close())),
+  );
+  const scriptBtn = btn('Script', 'tool-btn', 'See, copy or load the figure as text', () => {
+    script.value = session.save();
+    report.textContent = '';
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  });
+
+  const help = el('dialog', { class: 'script-dialog', 'aria-label': 'Keyboard' });
+  const keys = el('table', { class: 'keys' });
+  for (const [k, what] of KEYS) keys.append(el('tr', {}, el('th', { scope: 'row' }, k), el('td', {}, what)));
+  help.append(el('h2', {}, 'Keyboard'), keys, el('div', { class: 'dialog-actions' }, btn('Close', 'secondary', 'Close', () => help.close())));
+  const helpBtn = btn('?', 'icon-btn', 'Keyboard shortcuts', () => (typeof help.showModal === 'function' ? help.showModal() : help.setAttribute('open', '')));
+
+  const files: FileMenu = mountFileMenu({
+    session, graph, say, status,
+    expressions: () => holder.expressions,
+    mode: () => modeRef.current?.mode.id ?? opts.mode ?? 'classic',
+    setMode: (m) => void modeRef.current?.setMode(m, { force: true }),
+    size3: () => space3Ref.current?.size(),
+  });
+  const topTools = el('div', { class: 'top-tools' }, newBtn, files.element, examples, sheetBtn, labBtn, calcBtn, casBtn, scriptBtn);
+  const topRight = el('div', { class: 'top-right' }, undoBtn, redoBtn, helpBtn);
+  const top = el('header', { class: 'topbar' },
+    el('div', { class: 'brand' }, el('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), el('span', { class: 'brand-name' }, 'Incantly'), el('span', { class: 'brand-sub' }, 'Studio')),
+    topTools,
+    topRight,
+  );
 
   /* ------------------------------ clock ------------------------------ */
 
-  function pause(): void {
-    playing = false;
-    last = undefined;
-    if (frame !== undefined) caf(frame);
-    frame = undefined;
-    playBtn.textContent = 'Play';
-    playBtn.setAttribute('aria-pressed', 'false');
-  }
+  const play = btn('▶', 'icon-btn', 'Play', () => toggleClock());
+  const scrub = el('input', { type: 'range', class: 'scrub', 'aria-label': 'Time', step: 'any' });
+  const readout = el('output', { class: 'readout' });
+  const perf = el('output', { class: 'perf', 'aria-label': 'Physics speed', title: 'Work per frame, bodies awake, touching points' });
+  perf.hidden = true;
+  let frameAvg = 0;
+  const clock = el('div', { class: 'clock', role: 'group', 'aria-label': 'Clock' }, play, scrub, readout, perf);
+  clock.hidden = true;
+  let running = 0;
+  // physics ui.md 2: when a frame's work goes over its share (6 ms), the film plays slower; the steps never change
+  let filmNow = 0;
+  let lastNow: number | undefined;
+  let pace = 1;
+  let mark = '';
   const tick = (now: number): void => {
-    if (!playing) return;
-    const dt = last === undefined ? 0 : Math.max(0, (now - last) / 1000);
-    last = now;
-    const { to } = session.range();
-    const t = session.time() + dt;
-    outcome(session.setTime(t));
-    if (t >= to) pause();
-    else frame = raf(tick);
+    const dt = lastNow === undefined ? 0 : Math.max(0, now - lastNow);
+    lastNow = now;
+    filmNow += dt * pace;
+    const t0 = performance.now();
+    // the kernel's player moves `t`, runs the traces and animated sliders, and starts an ended film again
+    session.frame(filmNow / 1000);
+    const cost = performance.now() - t0;
+    pace = cost > 6 ? Math.max(0.25, pace * 0.9) : Math.min(1, pace * 1.05);
+    const nextMark = session.figure.driversNeedFrames() ? ' · catching up' : pace < 0.95 ? ' · slow' : '';
+    if (nextMark !== mark) {
+      mark = nextMark;
+      clock.title = mark === ' · slow' ? 'This computer is busy. The film is the same, only slower.' : mark === ' · catching up' ? 'The physics is catching up with the time bar.' : '';
+    }
+    readout.textContent = `t = ${session.time().toFixed(2)} s${mark}`;
+    // the physics row of physics ui.md 12: frame time, awake bodies, touching points (in the plane or in space)
+    const pd = worldDriverOf(session.figure);
+    const w = pd.world;
+    perf.hidden = !w && !pd.remote;
+    if (w || pd.remote) {
+      frameAvg = frameAvg * 0.9 + cost * 0.1;
+      // drops when there are any (physics ui.md 12); a world in the worker reports its own counts
+      const r = pd.remoteInfo;
+      const awake = w ? w.awakeCount() : r.awake;
+      const contacts = w ? w.contactCount : r.contacts;
+      const drops = w ? (pd.fluid?.ps.n ?? 0) : r.drops;
+      const where = pd.remote ? ' · in a worker' : '';
+      // which loops the cloth and liquid solvers run: Rust (WebAssembly) or TypeScript, the same film (design 11.6)
+      const rust = w ? physicsKernelsActive(session.figure) : r.kernels;
+      const loops = rust === undefined ? '' : rust ? ' · Rust' : ' · TypeScript';
+      // and cloth points when there are any (round 9)
+      const points = w ? (pd.cloth?.n ?? 0) : (r.cloth ?? 0);
+      const dropsText = (w ? pd.fluid !== undefined : r.drops > 0 || points === 0) ? ` · ${drops} drops` : '';
+      perf.textContent = `${frameAvg.toFixed(1)} ms · ${awake} awake · ${contacts} contacts${dropsText}${points > 0 ? ` · ${points} cloth points` : ''}${loops}${where}`;
+      // over 6 ms on the page, or 8 ms when the world is in the worker, the readout turns amber (ui.md 12)
+      perf.classList.toggle('busy', frameAvg > (pd.remote ? 8 : 6));
+    }
+    // a spinning camera changes no object, so the Space view is told each frame
+    if (!space3Ref.current?.element.hidden) space3Ref.current?.redraw();
+    running = raf(tick);
   };
-  const play = (): void => {
-    const { from, to } = session.range();
-    if (session.time() >= to) session.setTime(from);
-    playing = true;
-    last = undefined;
-    playBtn.textContent = 'Pause';
-    playBtn.setAttribute('aria-pressed', 'true');
-    frame = raf(tick);
+  const toggleClock = (): void => {
+    if (running) {
+      caf(running);
+      running = 0;
+      session.pause();
+      play.textContent = '▶';
+      play.title = 'Play';
+    } else {
+      session.play();
+      lastNow = undefined;
+      running = raf(tick);
+      play.textContent = '❚❚';
+      play.title = 'Pause';
+    }
   };
-  playBtn.setAttribute('aria-pressed', 'false');
-  playBtn.addEventListener('click', () => (playing ? pause() : play()));
-  resetBtn.addEventListener('click', () => {
-    pause();
-    outcome(session.setTime(session.range().from));
-  });
-  scrub.addEventListener('input', () => {
-    pause();
-    session.setTime(Number(scrub.value));
-  });
-
-  /* ------------------------------ rename and delete ------------------------------ */
-
-  const closeBar = (focusName?: string): void => {
-    pending = undefined;
-    bar.hidden = true;
-    bar.replaceChildren();
-    if (focusName !== undefined && list.focusRow(focusName)) return;
-    editor.focus();
-  };
-  bar.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !pending) return;
-    e.preventDefault();
-    const name = pending.name;
-    showError(null);
-    closeBar(name);
-  });
-
-  const openRename = (name: string): void => {
-    pending = { kind: 'rename', name };
-    const input = el('input', { type: 'text', class: 'rename', spellcheck: 'false', autocomplete: 'off', 'aria-label': `New name for ${name}` }) as HTMLInputElement;
-    input.value = name;
-    const ok = button('Rename');
-    const no = button('Cancel');
-    const run = (): void => {
-      const to = input.value.trim();
-      if (to === name) return closeBar(name);
-      if (outcome(session.rename(name, to))) closeBar(to);
-      else input.focus();
-    };
-    ok.addEventListener('click', run);
-    no.addEventListener('click', () => closeBar(name));
-    input.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      run();
-    });
-    bar.setAttribute('aria-label', `Rename ${name}`);
-    bar.replaceChildren(el('label', {}, `Rename ${name} to `, input), ok, no);
-    bar.hidden = false;
-    input.focus();
-    input.select();
-  };
-
-  const runDelete = (name: string): void => {
-    const rows = list.rows;
-    const at = rows.findIndex((r) => r.name === name);
-    if (!outcome(session.delete(name))) return;
-    const after = list.rows;
-    closeBar(after[Math.min(at, after.length - 1)]?.name);
-  };
-
-  const openDelete = (name: string): void => {
-    const plan = session.deletePlan(name);
-    const also = plan.filter((n) => n !== name);
-    if (also.length === 0) {
-      // a leaf: no confirmation, and Undo brings it back
-      runDelete(name);
+  scrub.addEventListener('input', () => session.setTime(Number(scrub.value)));
+  const syncClock = (): void => {
+    const has = session.hasClock();
+    clock.hidden = !has;
+    if (!has) {
+      if (running) toggleClock();
       return;
     }
-    pending = { kind: 'delete', name, plan };
-    const ok = button(`Delete ${plan.length} objects`);
-    const no = button('Cancel');
-    ok.addEventListener('click', () => runDelete(name));
-    no.addEventListener('click', () => closeBar(name));
-    bar.setAttribute('aria-label', `Delete ${name}`);
-    bar.replaceChildren(el('span', {}, `Deleting ${name} also removes ${also.join(', ')}. `), ok, no);
-    bar.hidden = false;
-    no.focus();
+    const { from, to } = session.range();
+    scrub.min = String(from);
+    scrub.max = String(to);
+    scrub.value = String(session.time());
+    readout.textContent = `t = ${session.time().toFixed(2)} s`;
   };
+
+  /* ------------------------------ layout ------------------------------ */
+
+  const panel = el('aside', { class: 'panel', 'aria-label': 'Expressions' },
+    el('div', { class: 'panel-head' }, el('span', {}, 'Expressions'), btn('+', 'icon-btn', 'New expression', () => exprs.focusNew())),
+    exprs.header,
+    exprs.element,
+    clock,
+    el('footer', { class: 'panel-foot' }, status),
+  );
+  const split = el('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize the expression list', tabindex: '0' });
+  // the Space view: camera gestures write lines as the learner, drags move points in space (.kiro/specs/space-3d R4)
+  const space3 = mountSpace({
+    figure: () => session.figure,
+    scene: () => ({ hidden: (o) => exprs.isHidden(o.id), selected: new Set(selection.names()) }),
+    write: (line) => {
+      const r = session.applyLines([line], 'view', 'independent', 'learner');
+      if (!r.ok) say(r.error.message);
+    },
+    drag: (name, p, done) => {
+      const r = session.dragPoint(name, p.x, p.y, done, p.z);
+      return r.ok ? undefined : r.error.message;
+    },
+    draggable: (name) => session.draggable(name),
+    // the arrow keys drive a car in space: they move the sliders its pedals read (physics ui.md 9)
+    slide: (name, value, done) => {
+      const r = session.slide(name, value, done);
+      if (!r.ok) say(r.error.message);
+      else sync();
+    },
+    select: (name) => (name ? fromCanvas.set(name) : fromCanvas.clear()),
+    say,
+    // no WebGL 2: cloth and drops are drawn coarser, said once (physics errors.md 5, 7)
+    notice: (n) => say(n.message),
+  });
+  space3.element.hidden = true;
+  space3Ref.current = space3;
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, space3.element, sheet.element, lab.element, calc.element, cas.element);
+  const appEl = el('div', { class: 'app' }, top, main);
+  root.replaceChildren(appEl, dialog, help, ...files.dialogs);
+
+  // dragging the divider resizes the expression list
+  split.addEventListener('pointerdown', (e) => {
+    split.setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent): void => {
+      const w = Math.min(Math.max(ev.clientX, 260), window.innerWidth * 0.6);
+      panel.style.width = `${w}px`;
+      graph.redraw();
+    };
+    const up = (): void => {
+      split.removeEventListener('pointermove', move);
+      split.removeEventListener('pointerup', up);
+    };
+    split.addEventListener('pointermove', move);
+    split.addEventListener('pointerup', up);
+  });
+  split.addEventListener('keydown', (e) => {
+    const w = panel.getBoundingClientRect().width;
+    if (e.key === 'ArrowLeft') panel.style.width = `${Math.max(260, w - 20)}px`;
+    else if (e.key === 'ArrowRight') panel.style.width = `${w + 20}px`;
+    else return;
+    graph.redraw();
+  });
 
   /* ------------------------------ wiring ------------------------------ */
 
-  editor.figure = session.figure.view;
-  editor.onSubmitLine = (line) => {
-    const r = session.submit(line);
-    if (r.ok) {
-      showError(null);
-      say('');
-    } else list.highlighted = errorNames(r.error);
-    return r;
+  const sync = (): void => {
+    // a deleted object leaves the selection; a renamed one is found by its new name on the next pick
+    selection.keep((n) => session.figure.get(n) !== undefined);
+    exprs.update();
+    const u = session.undoState();
+    undoBtn.disabled = !u.canUndo;
+    redoBtn.disabled = !u.canRedo;
+    undoBtn.title = u.label ? `Undo ${u.label}` : 'Undo';
+    syncClock();
+    tools.figureChanged();
+    lab.refresh();
+    calc.refresh();
+    cas.refresh();
+    sheet.refresh();
+    sciHolder.current?.refresh();
+    soundHolder.current?.refresh();
+    sim.refresh();
+    graph.element.classList.toggle('has-sim', sim.isShown());
+    graph.redraw();
+    space3.redraw();
   };
-  // the figure object changes when a script is loaded
-  session.onChange(() => {
-    if (editor.figure !== session.figure.view) editor.figure = session.figure.view;
-    sync();
+  const off = session.onChange(sync);
+  calc.element.addEventListener('lab-closed', () => {
+    calcBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
   });
-  sync();
-
-  editor.addEventListener('incantly-preview', (e) => {
-    const result = (e as CustomEvent<{ result: PreviewResult | null }>).detail.result;
-    ghostNote.textContent =
-      result && result.ok && result.type ? `Preview: this would draw ${result.name} as a ${tyStr(result.type)} here once drawing exists.` : '';
+  sheet.element.addEventListener('lab-closed', () => {
+    sheetBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
   });
-  list.addEventListener('incantly-row-edit', (e) => {
-    editor.insertText((e as CustomEvent<RowEditDetail>).detail.source, { replace: true });
-    editor.focus();
+  cas.element.addEventListener('lab-closed', () => {
+    casBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
+    });
   });
-  list.addEventListener('incantly-row-insert', (e) => {
-    const d = (e as CustomEvent<RowInsertDetail>).detail;
-    editor.insertText(d.text, { replace: d.replace });
-  });
-  list.addEventListener('incantly-row-rename', (e) => openRename((e as CustomEvent<RowActionDetail>).detail.name));
-  list.addEventListener('incantly-row-delete', (e) => openDelete((e as CustomEvent<RowActionDetail>).detail.name));
-  list.addEventListener('incantly-row-set', (e) => {
-    const d = (e as CustomEvent<RowSetDetail>).detail;
-    outcome(session.setText(d.name, d.text));
-  });
-  list.addEventListener('incantly-row-slide', (e) => {
-    const d = (e as CustomEvent<RowSlideDetail>).detail;
-    const o = session.slide(d.name, d.value, d.done);
-    if (d.done || !o.ok) outcome(o);
-  });
-  card.addEventListener('incantly-fix', (e) => {
-    editor.insertText((e as CustomEvent<FixDetail>).detail.line, { replace: true });
-    editor.focus();
-  });
-  card.addEventListener('incantly-goto', (e) => list.focusRow((e as CustomEvent<GotoDetail>).detail.name));
-
-  const undo = (): void => void outcome(session.undo());
-  const redo = (): void => void outcome(session.redo());
-  undoBtn.addEventListener('click', undo);
-  redoBtn.addEventListener('click', redo);
-
-  const loadExample = (): void => {
-    outcome(session.applyLines(EXAMPLE_LINES, 'Load example'));
-  };
-  example.addEventListener('click', loadExample);
-
-  /* ------------------------------ script ------------------------------ */
-
-  const showReport = (applied: number, total: number, errors: readonly ErrorObject[], replaced: boolean): void => {
-    const head = el('p', {}, replaced ? `Loaded ${applied} of ${total} lines.` : `Nothing was loaded; the current figure is unchanged.`);
-    const kids: Node[] = [head];
-    if (errors.length > 0) {
-      const ul = el('ul', { class: 'problems', 'aria-label': 'Problems' });
-      for (const e of errors) {
-        const li = el('li', {}, `line ${e.line}: ${e.message}`);
-        if (e.hint) li.append(el('span', { class: 'hint' }, ` ${e.hint}`));
-        ul.append(li);
-      }
-      kids.push(ul);
-    }
-    report.replaceChildren(...kids);
-  };
-  saveBtn.addEventListener('click', () => {
-    const text = session.save();
-    script.value = text;
-    report.replaceChildren(el('p', {}, `Saved ${text.split('\n').filter((l) => l.trim() !== '').length} lines to the box above.`));
-    try {
-      if (typeof URL.createObjectURL === 'function') {
-        const a = el('a', { download: 'figure.inc' }) as HTMLAnchorElement;
-        a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-        a.click();
-        URL.revokeObjectURL(a.href);
-      }
-    } catch {
-      // the text is in the box either way
-    }
-  });
-  const loadText = (text: string): void => {
-    pause();
-    const r = session.load(text);
-    showReport(r.applied, r.total, r.errors, r.replaced);
-    if (r.replaced) {
-      showError(null);
-      say('');
-    }
-  };
-  loadBtn.addEventListener('click', () => loadText(script.value));
-  file.addEventListener('change', () => {
-    const f = file.files?.[0];
-    if (!f) return;
-    void f.text().then((text) => {
-      script.value = text;
-      loadText(text);
+  lab.element.addEventListener('lab-closed', () => {
+    labBtn.classList.remove('on');
+    requestAnimationFrame(() => {
+      graph.paint();
+      graph.fit();
     });
   });
 
-  /* ------------------------------ keyboard ------------------------------ */
-
-  const onKeydown = (e: KeyboardEvent): void => {
-    const origin = e.composedPath()[0];
-    const inField = origin instanceof HTMLTextAreaElement || (origin instanceof HTMLInputElement && origin.type === 'text');
-    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (inField || (origin instanceof HTMLElement && origin.isContentEditable)) return;
+  const onKey = (e: KeyboardEvent): void => {
+    const target = e.target as HTMLElement | null;
+    const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT';
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(typing && (target as HTMLInputElement).value !== '')) {
       e.preventDefault();
-      editor.focus();
+      if (e.shiftKey) api.redo();
+      else api.undo();
       return;
     }
-    if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.altKey) {
-      // in a text field with something in it, Ctrl+Z belongs to the field
-      if (inField && (origin as HTMLInputElement | HTMLTextAreaElement).value !== '') return;
+    if (files.keyDown(e)) {
       e.preventDefault();
-      if (e.shiftKey) redo();
-      else undo();
+      return;
+    }
+    // arrow keys give a selected body a small push, Shift five times as much (physics ui.md 4)
+    const pushDir: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+    const dir = pushDir[e.key];
+    if (!typing && dir) {
+      const bodies = selection.names().filter((n) => session.figure.get(n.replace(/\[\d+\]$/, ''))?.type === 'Body');
+      if (bodies.length > 0) {
+        e.preventDefault();
+        const k = e.shiftKey ? 5 : 1;
+        const r = session.applyLines(bodies.map((n) => `Push(${n}, (${dir[0] * k}, ${dir[1] * k}))`), 'push', 'independent', 'learner');
+        say(r.ok ? `Pushed ${bodies.join(', ')}.` : r.error.message);
+        return;
+      }
+    }
+    if (!typing && tools.keyDown(e)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Escape' && !typing && selection.names().length > 0) {
+      selection.clear();
+      return;
+    }
+    if (e.key === '/' && !typing) {
+      e.preventDefault();
+      exprs.focusNew();
     }
   };
-  document.addEventListener('keydown', onKeydown);
+  document.addEventListener('keydown', onKey);
 
-  return { session, editor, list, card, ghostNote, status, loadExample, undo, redo, dispose: () => document.removeEventListener('keydown', onKeydown) };
+  const relayout = (): void => {
+    requestAnimationFrame?.(() => {
+      graph.paint();
+      graph.fit();
+    });
+  };
+  const storage = opts.storage !== undefined ? opts.storage : (() => {
+    try {
+      return typeof localStorage !== 'undefined' ? localStorage : null;
+    } catch {
+      return null;
+    }
+  })();
+  const sciHolder: { current?: ScientificView } = {};
+  const soundHolder: { current?: SoundUi } = {};
+  const examHolder: { current?: ExamScreens } = {};
+  const modes = mountAppModes({
+    app: appEl,
+    session,
+    tools,
+    panes: { algebra: panel, split, graphics: graph.element, space: space3.element },
+    views: {
+      datalab: { open: () => lab.open(), close: () => lab.close(), isOpen: () => lab.isOpen(), button: labBtn },
+      distribution: { open: () => calc.open(), close: () => calc.close(), isOpen: () => calc.isOpen(), button: calcBtn },
+      cas: { open: () => {
+        cas.open();
+        void loadCasEngine();
+      }, close: () => cas.close(), isOpen: () => cas.isOpen(), button: casBtn },
+      sheet: { open: () => openSheet(), close: () => sheet.close(), isOpen: () => sheet.isOpen(), button: sheetBtn },
+      results: { open: () => sciHolder.current?.open(), close: () => sciHolder.current?.close(), isOpen: () => sciHolder.current?.isOpen() ?? false },
+    },
+    canSwitch: () => {
+      const st = examHolder.current?.controller()?.state;
+      return st === 'active' || st === 'finished' ? 'The app cannot change during an exam.' : undefined;
+    },
+    buttons: { script: scriptBtn, examples, newFigure: newBtn },
+    topTools,
+    topRight,
+    say,
+    relayout,
+    setRounding: (r) => exprs.setPrefs({ format: { ...exprs.prefs().format, decimals: r.mode === 'decimals' ? r.digits : exprs.prefs().format.decimals, significant: r.mode === 'sig' ? r.digits : null } }),
+    storage,
+  }, opts.mode ?? 'classic');
+  modeRef.current = modes;
+  const scientific = mountScientific(session, modes.settings, modes.i18n, say);
+  sciHolder.current = scientific;
+  main.append(scientific.element);
+  const keyboard = mountKeyboard({ i18n: modes.i18n, catalogue: modes.catalogue, mode: modes.mode, onLayout: relayout });
+  keyboard.setDefaultTarget(root.querySelector<HTMLInputElement>('.expr-new .expr-input') ?? undefined);
+  keyboard.onToggle((what) => (what === 'exact' ? scientific.toggleExact() : scientific.toggleAngle()));
+  appEl.append(keyboard.element);
+  topRight.prepend(keyboard.toggleButton);
+  const sessionStore = (() => {
+    try {
+      return opts.storage === null ? null : typeof sessionStorage !== 'undefined' ? sessionStorage : null;
+    } catch {
+      return null;
+    }
+  })();
+  const exam = mountExamScreens({
+    session, settings: modes.settings, i18n: modes.i18n, catalogue: modes.catalogue, mode: modes.mode, say,
+    narrowed: (m) => {
+      modes.setNarrowed(m);
+      keyboard.setMode(m ?? modes.mode);
+    },
+    session_storage: sessionStore,
+    ...(opts.every ? { every: opts.every } : {}),
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.requestFullscreen ? { requestFullscreen: opts.requestFullscreen } : {}),
+  });
+  examHolder.current = exam;
+  const sound = mountSoundUi({ session, say, ...(opts.soundEngine ? { engine: opts.soundEngine } : {}), raf, caf });
+  soundHolder.current = sound;
+  (graph.element.querySelector('.graph-controls') ?? graph.element).append(sound.button);
+  sound.setVolume(modes.settings.get<number>('masterVolume') / 100);
+  modes.settings.onChange('masterVolume', (_id, v) => sound.setVolume(Number(v) / 100));
+  // "Start with sound on" (sound ui): the browser still needs a gesture, so the first click anywhere turns it on
+  const firstGesture = (): void => {
+    document.removeEventListener('pointerdown', firstGesture, true);
+    if (modes.settings.get<boolean>('soundOnStart') && !sound.isOn() && !sound.button.hidden) void sound.enable();
+  };
+  document.addEventListener('pointerdown', firstGesture, true);
+  sound.refresh();
+  topRight.prepend(exam.button);
+  appEl.prepend(exam.banner);
+  appEl.append(exam.awayNotice, exam.startDialog, exam.finishDialog);
+  const sciShown = (): void => {
+    const sci = modes.mode.views.initial.includes('results');
+    if (sci) scientific.open();
+    else scientific.close();
+    keyboard.setDefaultTarget(sci ? scientific.input : (root.querySelector<HTMLInputElement>('.expr-new .expr-input') ?? undefined));
+    // the scientific keyboard is always shown (ui 2)
+    if (sci) keyboard.open();
+  };
+  const titleOf = (id: AppModeId): string => modes.i18n.t(`mode.${id}.title`);
+  fillExamples(modes.mode.id, titleOf);
+  modes.onChange((m) => {
+    fillExamples(m.id, titleOf);
+    keyboard.setMode(m);
+    exam.setMode(m);
+    sciShown();
+    placeClock();
+  });
+  /** The play bar sits under the list; with no list (geometry) it floats on the graph, so films can still play. */
+  const foot = panel.querySelector('.panel-foot');
+  const placeClock = (): void => {
+    if (panel.hidden && !graph.element.hidden) {
+      clock.classList.add('clock-float');
+      graph.element.append(clock);
+    } else if (clock.parentElement !== panel) {
+      clock.classList.remove('clock-float');
+      panel.insertBefore(clock, foot);
+    }
+  };
+  sciShown();
+  placeClock();
+  if (opts.start) modes.showStart();
+
+  const api: Mounted = {
+    files,
+    space: space3,
+    modes,
+    scientific,
+    keyboard,
+    exam,
+    sound,
+    session,
+    expressions: exprs,
+    graph,
+    lab,
+    calc,
+    cas,
+    sheet,
+    tools,
+    sim,
+    selection,
+    status,
+    loadExample(id) {
+      const ex = EXAMPLES.find((e) => e.id === id);
+      if (!ex) return;
+      const r = session.load(ex.lines.join('\n'));
+      say(r.replaced ? `${ex.title}: ${r.applied} of ${r.total} lines.${r.errors.length ? ` ${r.errors[0]?.message ?? ''}` : ''}` : `Could not open ${ex.title}.`);
+      // a figure with a sheet opens it, where the app has one (spreadsheet ui 1)
+      if (session.figure.directive('sheet') && !sheetBtn.hidden && !sheet.isOpen()) openSheet();
+      sync();
+      graph.paint();
+      graph.fit();
+    },
+    undo() {
+      const r = session.undo();
+      say(r.ok ? r.message : r.error.message);
+    },
+    redo() {
+      const r = session.redo();
+      say(r.ok ? r.message : r.error.message);
+    },
+    dispose() {
+      sound.dispose();
+      document.removeEventListener('pointerdown', firstGesture, true);
+      exam.dispose();
+      keyboard.dispose();
+      modes.dispose();
+      off();
+      document.removeEventListener('keydown', onKey);
+      tools.dispose();
+      sim.dispose();
+      graph.dispose();
+      if (running) caf(running);
+    },
+  };
+  sync();
+  graph.paint();
+  return api;
 }

@@ -21,6 +21,8 @@ export * from './run';
 export * from './worker';
 export * from './bridge';
 export * from './ops';
+export { casEngine, heldOf, setCasLanes } from './kernel-engine';
+export type { LaneJob } from './kernel-engine';
 
 export type { ErrorObject, Notice, ObjId, Result } from '@incantly/kernel';
 

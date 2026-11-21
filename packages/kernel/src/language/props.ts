@@ -3,7 +3,8 @@
  * The kernel owns the meaning; the language checks key names and literal values.
  * Other areas may append entries.
  */
-export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist';
+/** `point`: a position, written as a point expression (`at = M`, `at = (1, 2)`), text-logic design 2.1. */
+export type PropKind = 'bool' | 'enum' | 'int' | 'number' | 'text' | 'color' | 'boolexpr' | 'textlist' | 'point' | 'boolnum';
 
 export interface PropSpec {
   readonly kind: PropKind;
@@ -60,7 +61,7 @@ export const DIRECTIVES: Record<string, readonly string[]> = {
   clock: ['@clock 0..30'],
   // the input log of a film (animation-time 8.2), written at the end of a saved script
   input: ['@input name value at t', '@input name value base', '@input reset at t'],
-  seed: ['@seed N'],
+  seed: ['@seed N', '@seed N v1'],
   title: ['@title "text"'],
   step: ['@step "title"'],
   sheet: ['@sheet cols rows'],

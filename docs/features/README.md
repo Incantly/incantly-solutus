@@ -41,8 +41,10 @@ Every folder has four files:
 | Apps | [spreadsheet](spreadsheet/) | Cells as objects, references, ranges |
 | Apps | [embed-files-export](embed-files-export/) | Embed API, script file format, export |
 | Apps | [app-modes](app-modes/) | Graphing, Geometry, 3D, CAS, Scientific, Probability, Notes, Classic, exam mode |
+| Motion | [physics](physics/) | Rigid bodies, friction, joints, vehicles, liquids, water, smoke and cloth, in 2D and 3D |
 | Media | [sound](sound/) | Tones, noise, notes, melodies and sonified functions, played with Tone.js |
 | Documents | [tiptap](tiptap/) | Live figures and formulas inside Tiptap documents |
+| Board | [board](board/) | The endless, paged board: pen ink, shapes, figure cards, agents, customisable tools; web now, React Native later |
 
 Performance rules for every area, and our own renderer, are in `docs/design/performance.md`.
 

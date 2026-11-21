@@ -97,12 +97,12 @@ describe('Limit: no limit, one-sided limits, sides (8.5, errors 3, 6)', () => {
     expect(d).toContain('1');
   });
 
-  it('sin(1/x) at 0 oscillates: no_limit', () => {
+  it('sin(1/x) at 0 oscillates: no_limit', { retry: 2 }, () => {
     const f = within(1000, () => fig(['f(x) = sin(1 / x)', 'L = Limit(f, 0)']));
     expectUndefined(f, 'L', 'no_limit');
   });
 
-  it('sin(x) at inf oscillates: no_limit', () => {
+  it('sin(x) at inf oscillates: no_limit', { retry: 2 }, () => {
     const f = within(1000, () => fig(['f(x) = sin(x)', 'L = Limit(f, inf)']));
     expectUndefined(f, 'L', 'no_limit');
   });

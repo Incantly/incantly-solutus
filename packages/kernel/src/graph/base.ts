@@ -185,6 +185,12 @@ export class FigureBase extends FigureCore {
       this.gesture.delete(r);
       this.queue({ ev: 'remove', id: r.id, name: r.p.name });
     }
+    // the newest object (a rollback takes a batch back newest first): no need to walk the list
+    const only = recs.length === 1 ? recs[0] : undefined;
+    if (only && this.list[this.list.length - 1] === only) {
+      this.list.pop();
+      return;
+    }
     const gone = new Set(recs);
     let w = 0;
     for (let i = 0; i < this.list.length; i++) {
@@ -198,26 +204,30 @@ export class FigureBase extends FigureCore {
   protected nameSet(name: Name, rec: ObjRec): void {
     this.byNameMap.set(name, rec);
     const lower = name.toLowerCase();
-    let set = this.byLowerMap.get(lower);
-    if (!set) this.byLowerMap.set(lower, (set = new Set()));
-    set.add(rec);
+    const had = this.byLowerMap.get(lower);
+    if (had === undefined || had === rec) this.byLowerMap.set(lower, rec);
+    else if (had instanceof Set) had.add(rec);
+    else this.byLowerMap.set(lower, new Set([had, rec]));
   }
 
   protected nameDrop(name: Name, rec: ObjRec): void {
     if (this.byNameMap.get(name) === rec) this.byNameMap.delete(name);
     const lower = name.toLowerCase();
-    const set = this.byLowerMap.get(lower);
-    if (set) {
-      set.delete(rec);
-      if (set.size === 0) this.byLowerMap.delete(lower);
+    const had = this.byLowerMap.get(lower);
+    if (had === rec) this.byLowerMap.delete(lower);
+    else if (had instanceof Set) {
+      had.delete(rec);
+      if (had.size === 1) this.byLowerMap.set(lower, [...had][0] as ObjRec);
+      else if (had.size === 0) this.byLowerMap.delete(lower);
     }
   }
 
   /** The objects whose name differs from `name` only by case, other than those in `except`. */
   protected confusablesOf(name: Name, except: readonly ObjRec[] = []): ObjRec[] {
-    const set = this.byLowerMap.get(name.toLowerCase());
-    if (!set) return [];
-    return [...set].filter((o) => o.p.name !== name && !except.includes(o)).sort((a, b) => a.order - b.order);
+    const had = this.byLowerMap.get(name.toLowerCase());
+    if (had === undefined) return [];
+    if (!(had instanceof Set)) return had.p.name !== name && !except.includes(had) ? [had] : [];
+    return [...had].filter((o) => o.p.name !== name && !except.includes(o)).sort((a, b) => a.order - b.order);
   }
 
   protected applyReorder(lo: number, recs: readonly ObjRec[]): void {
@@ -267,6 +277,31 @@ export class FigureBase extends FigureCore {
       this.dirty.add(r);
     }
     return this.flush(true);
+  }
+
+  /**
+   * `settle` for objects just added with their cells already computed: nothing reads a new object yet, so when nothing else
+   * waits to be updated (no dirty object, no clock change, no states) there is no pass to run. Otherwise it is `settle`.
+   */
+  protected settleNew(recs: readonly ObjRec[], precomputed: ReadonlyMap<ObjRec, Cell>): void {
+    if (this.dirty.size > 0 || this.clockDirty || this.stateRecs.size > 0 || recs.some((r) => r.kids.length > 0 || !precomputed.has(r))) {
+      this.settle(recs, precomputed);
+      return;
+    }
+    this.epoch++;
+    for (const r of recs) {
+      r.stale = false;
+      r.changedAt = this.epoch;
+      this.ensureSlots(r.p.checked.slots);
+      const cell = precomputed.get(r) as Cell;
+      if (this.pass && !this.pass.before.has(r) && !this.pass.added.has(r)) this.pass.before.set(r, r.cell);
+      if (!cellsEqual(r.cell, cell)) {
+        r.cell = cell;
+        this.pendingValues.add(r.id);
+      }
+      r.range = undefined;
+      if (r.p.compiled?.range) this.updateRange(r);
+    }
   }
 
   /** The initial value of a state, evaluated now. */

@@ -4,6 +4,8 @@
  * over C, and `SolveODE` for three classes. Parameters stay symbolic with case splits.
  */
 import { closedZeroVerdict } from './equiv';
+import { isNumberNode } from './node';
+import { condText } from './print';
 import type { Assumptions } from './assume';
 import type { SolutionCase } from './contracts';
 import { floatToRatPreferShort } from './num';
@@ -258,10 +260,10 @@ function solveQuadraticRat(f: UPoly, v: SymNode, domain: 'real' | 'complex'): Sy
   if (s > 0) {
     const sq = pow(discExact, ratN(1n, 2n));
     const simp = simplifyNode(sq, ruleCtx()).node;
-    return [
-      divideNodes(add(negateNode(B), simp), mul(TWO, A)),
-      divideNodes(add(negateNode(B), negateNode(simp)), mul(TWO, A)),
-    ];
+    // -B/(2A) ± sqrt(D)/(2A) as two terms, so the number divides each: 1 - sqrt(2), not (-2 sqrt(2) + 2)/2 (SYM-SM-27)
+    const centre = divideNodes(negateNode(B), mul(TWO, A));
+    const half = divideNodes(simp, mul(TWO, A));
+    return [add(centre, half), add(centre, negateNode(half))];
   }
   if (domain === 'complex') {
     const sq = simplifyNode(pow(negateNode(discExact), ratN(1n, 2n)), ruleCtx()).node;
@@ -424,8 +426,10 @@ function solveLinearParam(a: SymNode, b: SymNode): SolveResult {
   };
 }
 
-function solveQuadraticParam(a: SymNode, b: SymNode, c: SymNode, v: SymNode, ctx: RuleCtx): SolveResult {
-  const disc = simplifyNode(add(mul(b, b), negateNode(mul(intN(4), mul(a, c)))), ctx).node;
+function solveQuadraticParam(a: SymNode, b: SymNode, c: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'complex' = 'real'): SolveResult {
+  // b^2 - 4ac built by the constructors is already canonical; a full Simplify would try to factor it (design 5.13)
+  const raw = add(mul(b, b), negateNode(mul(intN(4), mul(a, c))));
+  const disc = freeSymbols(raw).size > 0 ? raw : simplifyNode(raw, ctx).node;
   const sq = pow(disc, ratN(1n, 2n));
   const twoA = mul(TWO, a);
   const r1 = divideNodes(add(negateNode(b), sq), twoA);
@@ -438,6 +442,8 @@ function solveQuadraticParam(a: SymNode, b: SymNode, c: SymNode, v: SymNode, ctx
       { when: andCond(rel('==', a, ZERO), rel('!=', b, ZERO)), solutions: linear.solutions },
       { when: andCond(rel('==', a, ZERO), rel('==', b, ZERO), rel('==', c, ZERO)), solutions: 'all' },
       { when: andCond(rel('==', a, ZERO), rel('==', b, ZERO), rel('!=', c, ZERO)), solutions: 'none' },
+      // over the reals a negative discriminant has no solution (SYM-SM-16)
+      ...(domain === 'real' ? [{ when: andCond(rel('!=', a, ZERO), rel('<', disc, ZERO)), solutions: 'none' as const }] : []),
     ],
     notices: ['cases'],
     unchecked: false,
@@ -503,7 +509,7 @@ export function solveEquation(
   return {
     solutions: sortSolutions(verified),
     all: exact.all,
-    cases: exact.cases,
+    cases: tidyCases(exact.cases, ctx),
     ...(exact.param === undefined ? {} : { param: exact.param }),
     notices: unchecked || exact.unchecked ? [...exact.notices, 'denominator_unchecked'] : exact.notices,
     unchecked: unchecked || exact.unchecked,
@@ -532,7 +538,7 @@ function solveExact(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'comp
   if (params.size > 0) {
     if (deg === 1) return solveLinearParam(coeffs[1] as SymNode, coeffs[0] as SymNode);
     if (deg === 2) {
-      return solveQuadraticParam(coeffs[2] as SymNode, coeffs[1] as SymNode, coeffs[0] as SymNode, v, ctx);
+      return solveQuadraticParam(coeffs[2] as SymNode, coeffs[1] as SymNode, coeffs[0] as SymNode, v, ctx, domain);
     }
     throw new Unsupported(`a degree-${deg} equation with parameters`, 'classify');
   }
@@ -819,7 +825,7 @@ function solveAtomPoly(
   } else {
     return null;
   }
-  const k = domain === 'complex' ? symN(`k${trigParamNext++}`) : null;
+  const k = domain === 'complex' ? nextTrigParam() : null;
   const out: SymNode[] = [];
   for (const val of atomVals) {
     const simp = simplifyNode(val, ctx).node;
@@ -842,7 +848,10 @@ function solveAtomPoly(
       const base = (atom as SymNode & { k: 'pow' }).base;
       const i = constN('i');
       const pi = constN('pi');
-      out.push(divideNodes(add(fn('ln', val), mul(mul(TWO, pi), mul(i, k))), fn('ln', base)));
+      // in complex mode ln of a negative number is ln|v| + i pi (design 8; SYM-SM-27)
+      const vr = asRational(val);
+      const lnVal = vr !== null && vr.n < 0n ? add(fn('ln', negateNode(val)), mul(i, pi)) : fn('ln', val);
+      out.push(divideNodes(add(lnVal, mul(mul(TWO, pi), mul(i, k))), fn('ln', base)));
     }
   }
   if (out.length === 0 && atomVals.length > 0) return noSolutions();
@@ -887,9 +896,18 @@ function isolateLog(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'comp
 /* ------------------------------ trig equations ------------------------------ */
 
 let trigParamNext = 1;
+/** Names free in the input of the current call, which a family parameter must not take (SYM-SM-21). */
+let trigParamTaken: ReadonlySet<string> = new Set();
 
-export function resetTrigParams(): void {
+/** The next family parameter: k1, k2, … skipping any name the input already uses. */
+function nextTrigParam(): SymNode & { k: 'sym' } {
+  while (trigParamTaken.has(`k${trigParamNext}`)) trigParamNext++;
+  return symN(`k${trigParamNext++}`) as SymNode & { k: 'sym' };
+}
+
+export function resetTrigParams(taken: ReadonlySet<string> = new Set()): void {
   trigParamNext = 1;
+  trigParamTaken = taken;
 }
 
 function solveTrig(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 'complex'): SolveResult {
@@ -949,7 +967,7 @@ function solveTrigSingle(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'real' | 
   const cv = evalAt(c, new Map());
   if (cv === null) return null;
   if (domain === 'real' && (atom.kind === 'sin' || atom.kind === 'cos') && Math.abs(cv) > 1 + 1e-12) return noSolutions();
-  const k = symN(`k${trigParamNext++}`);
+  const k = nextTrigParam();
   const pi = constN('pi');
   const base: SymNode[] = [];
   if (atom.kind === 'sin') {
@@ -992,10 +1010,27 @@ function solveTrigLinearCombo(f: SymNode, v: SymNode, ctx: RuleCtx, domain: 'rea
   const R = Math.hypot(av, bv);
   if (R === 0) return null;
   if (domain === 'real' && Math.abs(cv / R) > 1 + 1e-12) return noSolutions();
-  const k = symN(`k${trigParamNext++}`);
+  const k = nextTrigParam();
   const pi = constN('pi');
-  const phi = floatN(Math.atan2(bv, av));
-  const s0 = fn('asin', floatN(cv / R));
+  // exact coefficients give an exact amplitude and phase (SYM-SM-23): R = sqrt(a^2 + b^2), phi = atan(b/a) (+ pi when
+  // a < 0), s0 = asin(c / R); floats only when a coefficient is inexact
+  const ea = asRational(aCoeff);
+  const eb = asRational(bCoeff);
+  const ec = asRational(simplifyNode(negateNode(cConst), ctx).node);
+  let phi: SymNode;
+  let s0: SymNode;
+  if (ea !== null && eb !== null && ec !== null && ea.n !== 0n) {
+    const amp = simplifyNode(pow(add(mul(aCoeff, aCoeff), mul(bCoeff, bCoeff)), ratN(1n, 2n)), ctx).node;
+    const same = ea.n * eb.d === eb.n * ea.d;
+    const opposite = ea.n * eb.d === -eb.n * ea.d;
+    const quarter = divideNodes(pi, intN(4));
+    phi = same ? quarter : opposite ? negateNode(quarter) : eb.n === 0n ? ZERO : fn('atan', divideNodes(bCoeff, aCoeff));
+    if (ea.n < 0n) phi = add(phi, pi);
+    s0 = simplifyNode(fn('asin', divideNodes(negateNode(cConst), amp)), ctx).node;
+  } else {
+    phi = floatN(Math.atan2(bv, av));
+    s0 = fn('asin', floatN(cv / R));
+  }
   const fam1 = divideNodes(add(add(s0, negateNode(phi)), mul(mul(TWO, pi), k)), alpha);
   const fam2 = divideNodes(add(add(add(pi, negateNode(s0)), negateNode(phi)), mul(mul(TWO, pi), k)), alpha);
   const shift = (s: SymNode): SymNode => (isZeroNode(beta) ? s : add(s, divideNodes(negateNode(beta), alpha)));
@@ -2273,7 +2308,7 @@ function solveExpComplex(f: SymNode, v: SymNode, ctx: RuleCtx): SolveResult | nu
   if (containsGen(a, v) || containsGen(b, v) || isZeroNode(a)) return null;
   const c = simplifyNode(divideNodes(negateNode(b), a), ctx).node;
   if (freeSymbols(c).size > 0) return null;
-  const k = symN(`k${trigParamNext++}`);
+  const k = nextTrigParam();
   const i = constN('i');
   const pi = constN('pi');
   const principal = fn('ln', c);
@@ -2467,3 +2502,62 @@ function solveODE2(
   return rel('==', y, add(hom, particular));
 }
 
+/**
+ * The cases of a parametric answer as a person would write them (SYM-SM-16): a comparison of numbers is decided and
+ * dropped when true, the case dropped when false; `-a == 0` is `a == 0` and `4 a < 0` is `a < 0`; repeats go.
+ */
+function tidyCases(cases: readonly ParamCase[], ctx: RuleCtx): ParamCase[] {
+  const out: ParamCase[] = [];
+  const seen = new Set<string>();
+  for (const cs of cases) {
+    const parts = cs.when.c === 'and' ? cs.when.of : [cs.when];
+    const kept: SymCond[] = [];
+    let possible = true;
+    for (const p of parts) {
+      if (p.c !== 'rel') {
+        kept.push(p);
+        continue;
+      }
+      // the constructors already fold numbers; full simplification is only needed to decide a closed comparison
+      const raw = add(p.l, negateNode(p.r));
+      const d = freeSymbols(raw).size === 0 ? simplifyNode(raw, ctx).node : raw;
+      if (freeSymbols(d).size === 0) {
+        const z = closedZeroVerdict(d, ctx);
+        const val = evalAt(d, new Map());
+        const holds = p.op === '==' ? z === 'true' : p.op === '!=' ? z === 'false' : val === null ? undefined
+          : p.op === '<' ? val < 0 : p.op === '<=' ? val <= 0 : p.op === '>' ? val > 0 : val >= 0;
+        if (holds === true) continue;
+        if (holds === false || (p.op === '==' && z === 'false')) {
+          possible = false;
+          break;
+        }
+        kept.push(p);
+        continue;
+      }
+      kept.push(scaledRel(p.op, d));
+    }
+    if (!possible) continue;
+    if (kept.length === 0) continue;
+    const when = kept.length === 1 ? (kept[0] as SymCond) : andCond(...kept);
+    const key = condText(when);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...cs, when });
+  }
+  return out;
+}
+
+/** `d op 0` with a numeric factor of d taken out: `-a == 0` is `a == 0`, `4 a < 0` is `a < 0`, `-2 b > 0` is `b < 0`. */
+function scaledRel(op: '==' | '!=' | '<' | '<=' | '>' | '>=', d: SymNode): SymCond {
+  const flip: Record<string, string> = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==', '!=': '!=' };
+  if (d.k === 'mul') {
+    const num = d.factors.filter((f) => isNumberNode(f));
+    const rest = d.factors.filter((f) => !isNumberNode(f));
+    const k = num.length === 1 ? evalAt(num[0] as SymNode, new Map()) : null;
+    if (k !== null && k !== 0 && rest.length > 0) {
+      const body = rest.length === 1 ? (rest[0] as SymNode) : mul(...rest);
+      return rel((k < 0 ? flip[op] : op) as typeof op, body, ZERO);
+    }
+  }
+  return rel(op, d, ZERO);
+}

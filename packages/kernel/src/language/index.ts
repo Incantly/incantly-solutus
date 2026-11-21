@@ -17,8 +17,10 @@ export { printExpr, printLineNode } from './printer';
 export { checkLine, } from './lines';
 export { OverlayFigure, FIELDS } from './check';
 export type { CheckOptions, CheckedLine, CheckedRange, CheckedStyle } from './check';
+export { lineUses } from './uses';
+export type { LineUses, UsedName } from './uses';
 export type { TNode, TArg, RelTree, RelationShape } from './tnode';
-export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem } from './types';
+export { T, listOf, fnOf, tyEq, tyStr, typeSet, parseTy, accepts, binaryOp, TYPE_ALIASES, CORE_TYPE_NAMES, typeTextProblem, registerSchemaType, registerTypeAlias, isSchemaType } from './types';
 export type { Ty, TypeSet, OpVariant } from './types';
 export { analyseLine, preview, signatureHelp, complete, tokenize } from './tooling';
 export type { PreviewResult, GhostSpec, SignatureHelp, Completion, CompletionKind, HighlightToken, HighlightKind } from './tooling';
@@ -38,7 +40,8 @@ export type {
   BoundArg, RuleFactory, TableProblem, TableProblemKind, CheckTableOptions, DuplicateName, ConstValue,
   ArgFacts, CallCheck, FormCheck, Refusal,
 } from './table';
-export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, PLATFORM_MATH } from './builtins';
+export { BUILTIN_FUNCTIONS, BUILTIN_FUNCTION_SPECS, BUILTIN_CONSTANTS, setMathLib, getMathLib, setExactMath, PLATFORM_MATH } from './builtins';
+export { EXACT_MATH } from './exact-math';
 export type { MathLib, ConstantSpec } from './builtins';
 
 // Names

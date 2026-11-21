@@ -134,13 +134,100 @@ export function formatNumber(v: number, fmt?: string): string {
     const scaled = fmt === 'd' ? (v * 180) / Math.PI : v * 100;
     return Number.isFinite(scaled) ? trim(scaled.toFixed(2)) + (fmt === 'd' ? '°' : '%') : 'undefined';
   }
-  if (fmt === 'f') return toFraction(v);
-  if (fmt.startsWith('.')) {
-    const n = Math.max(1, Math.min(21, Number(fmt.slice(1))));
+  if (fmt === 'f' || fmt === 'frac') return toFraction(v);
+  // the text area's names (text-logic design 2.3)
+  const named = /^(deg|pct|sci)(\d*)$/.exec(fmt);
+  if (named) {
+    const kind = named[1];
+    const digits = named[2] === '' ? undefined : Math.min(20, Number(named[2]));
+    if (kind === 'deg') {
+      const s = (v * 180) / Math.PI;
+      return Number.isFinite(s) ? `${fixedHalfAway(s, digits ?? 0)}°` : 'undefined';
+    }
+    if (kind === 'pct') {
+      const s = v * 100;
+      return Number.isFinite(s) ? `${digits === undefined ? trim(s.toPrecision(6)) : fixedHalfAway(s, digits)}%` : 'undefined';
+    }
+    return sciText(v, digits ?? 3);
+  }
+  if (fmt === 'ord') return Number.isInteger(v) && v >= 0 ? ordinalText(v) : 'undefined';
+  const sf = /^(\d+)sf$/.exec(fmt);
+  if (fmt.startsWith('.') || sf) {
+    const n = Math.max(1, Math.min(21, Number(sf ? sf[1] : fmt.slice(1))));
     return trim(v.toPrecision(n));
   }
   const d = Math.max(0, Math.min(20, Number(fmt)));
-  return v.toFixed(d);
+  return fixedHalfAway(v, d);
+}
+
+/**
+ * `d` decimals, half away from zero on the shortest decimal that names the double (text-logic design 2.3): `1.005`
+ * with 2 decimals is `1.01`, as a learner expects, though the double is a little below 1.005. Never `-0.00`.
+ */
+export function fixedHalfAway(v: number, d: number): string {
+  if (!Number.isFinite(v)) return v !== v ? 'undefined' : v > 0 ? 'inf' : '-inf';
+  // at 1e21 and above every double is a whole number and JavaScript prints an exponent: keep that form
+  if (Math.abs(v) >= 1e21) return v.toFixed(d);
+  const neg = v < 0;
+  const a = Math.abs(v);
+  // the shortest decimal: JavaScript's own printing gives it; expand an exponent form into plain digits
+  let s = String(a);
+  if (/e/i.test(s)) {
+    const [m, e] = s.split(/e/i) as [string, string];
+    const exp = Number(e);
+    const [ip, fp = ''] = m.split('.') as [string, string?];
+    const digits = ip + fp;
+    const point = ip.length + exp;
+    s = point <= 0 ? `0.${'0'.repeat(-point)}${digits}` : point >= digits.length ? digits + '0'.repeat(point - digits.length) : `${digits.slice(0, point)}.${digits.slice(point)}`;
+  }
+  const [ip, fp = ''] = s.split('.') as [string, string?];
+  let intDigits = ip;
+  let frac = fp.padEnd(d + 1, '0');
+  const roundUp = Number(frac[d] ?? '0') >= 5;
+  frac = frac.slice(0, d);
+  if (roundUp) {
+    // add one at the last kept place, carrying through the fraction and the integer part
+    const all = (intDigits + frac).split('').map(Number);
+    let k = all.length - 1;
+    while (k >= 0) {
+      if ((all[k] as number) < 9) {
+        all[k] = (all[k] as number) + 1;
+        break;
+      }
+      all[k] = 0;
+      k--;
+    }
+    let joined = all.join('');
+    if (k < 0) joined = `1${joined}`;
+    intDigits = joined.slice(0, joined.length - d);
+    frac = joined.slice(joined.length - d);
+  }
+  const out = d > 0 ? `${intDigits}.${frac}` : intDigits;
+  const zero = /^[0.]*$/.test(out);
+  return neg && !zero ? `-${out}` : out;
+}
+
+/** `1.23e4` style for plain text: mantissa with `sig` significant figures and a power of ten. */
+function sciText(v: number, sig: number): string {
+  if (!Number.isFinite(v)) return 'undefined';
+  if (v === 0) return '0';
+  const e = Math.floor(Math.log10(Math.abs(v)));
+  let m = v / 10 ** e;
+  let ex = e;
+  let ms = trim(m.toPrecision(Math.max(1, sig)));
+  if (Math.abs(Number(ms)) >= 10) {
+    m /= 10;
+    ex += 1;
+    ms = trim(m.toPrecision(Math.max(1, sig)));
+  }
+  return `${ms} × 10^${ex}`;
+}
+
+/** 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st, 101st, 111th (English, text-logic design 4.2). */
+export function ordinalText(n: number): string {
+  const h = n % 100;
+  const suffix = h >= 11 && h <= 13 ? 'th' : n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th';
+  return `${n}${suffix}`;
 }
 
 function trim(s: string): string {

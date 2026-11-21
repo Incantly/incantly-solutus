@@ -126,22 +126,24 @@ function inputSpec(): CommandSpec {
               const target = call.ids[0];
               if (target === undefined) return call.fail('target_not_free', 'the target must be a free object');
               const v = call.values[0];
+              // the caption shown left of the box (ui.md 3)
+              const caption = typeof call.values[1] === 'string' ? call.values[1] : '';
               // A target that stops being free (it was redefined as a formula) disables the box. The slice of a
               // source that is not free is an error, which is the kernel's own answer to "is this free?".
               const isFunction = typeof v === 'object' && v !== null && typeof (v as { arity?: unknown }).arity === 'number';
               if (!isFunction && 'ok' in call.slice(target, target)) return call.fail('target_not_free', 'the target is computed');
               if (typeof v === 'number') {
                 if (!Number.isFinite(v)) return call.fail('not_finite');
-                return { text: String(v), valid: true, target };
+                return { text: String(v), valid: true, target, caption };
               }
-              if (typeof v === 'boolean') return { text: String(v), valid: true, target };
-              if (typeof v === 'string') return { text: v, valid: true, target };
+              if (typeof v === 'boolean') return { text: String(v), valid: true, target, caption };
+              if (typeof v === 'string') return { text: v, valid: true, target, caption };
               if (typeof v === 'object' && v !== null) {
                 const o = v as Record<string, unknown>;
                 if (typeof o['x'] === 'number' && typeof o['y'] === 'number') {
-                  return { text: `(${String(o['x'])}, ${String(o['y'])})`, valid: true, target };
+                  return { text: `(${String(o['x'])}, ${String(o['y'])})`, valid: true, target, caption };
                 }
-                if (typeof o['arity'] === 'number') return { text: 'function', valid: true, target };
+                if (typeof o['arity'] === 'number') return { text: 'function', valid: true, target, caption };
               }
               return call.fail('input_undefined');
             },

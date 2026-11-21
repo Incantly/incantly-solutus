@@ -17,4 +17,9 @@ Pipeline: `docs/process/pipeline.md`. Branch: `feat/lists-matrices`.
 - [ ] 6. Add regression tests for each finding (tester)
 - [ ] 7. Review the code against the docs; fix the must-fix items in one round (spec reviewer, fixer)
 - [ ] 8. Build the area's studio screens (studio builder)
-- [ ] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [x] 9. Merge into `integration` once lint, typecheck and tests pass (integrator)
+- [ ] 10. `Zip(…, trim = true)`: named arguments
+- [ ] 11. Jordan form in `Diagonalize`
+- [ ] 12. The plane-map drawable of a 2×2 or 3×3 matrix (`with map = true`) and the editable grid
+- [ ] 13. The `cost` hint for heavy rules while dragging (design 8.3)
+- [ ] 14. Warnings `large_result` and `exact_dropped`

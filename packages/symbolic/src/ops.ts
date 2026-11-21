@@ -381,7 +381,7 @@ function undefinedness(root: SymNode): Undefinedness | null {
         }
         if (bv !== null && x.exp.k === 'int' && Math.abs(bv) > 1) {
           const digits = Number(x.exp.v < 0n ? -x.exp.v : x.exp.v) * Math.log10(Math.abs(bv));
-          if (digits > 100000) return { reason: 'limit', code: 'Y209', text: `${toText(x)} has more than 100000 digits (limit: digits 100000).` };
+          if (digits > 100000) return { reason: 'limit', code: 'Y209', text: `${shortText(toText(x))} has more than 100000 digits (limit: digits 100000).` };
         }
         return walk(x.base) ?? walk(x.exp);
       }
@@ -1823,7 +1823,7 @@ function opIntegral(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
       return okOut({
         defined: false,
         reason: 'divergent',
-        detail: { code: 'Y204', text: `The integral does not converge; singular near ${r.at}.` },
+        detail: { code: 'Y204', text: `The integral does not converge; singular near ${snapPoint(r.at)}.` },
       });
     }
     const notices = r.notice === 'numeric_fallback'
@@ -1982,11 +1982,10 @@ function opPreviousPrime(args: readonly SymArg[], _named: ReadonlyMap<string, Sy
 }
 
 function opPrimeFactors(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>, _ctx: OpCtx): OpOut {
-  void _ctx;
   noExtras(args, 1, 'PrimeFactors');
   const n = wholeArg(need(args, 0, 'PrimeFactors'), 'PrimeFactors');
   if (n === 0n || n === 1n || n === -1n) return okOut(defined({ k: 'list', items: [] }));
-  const f = primeFactorsBig(n);
+  const f = primeFactorsBig(n, 2000000, _ctx.tick);
   if (f === null) {
     return okOut({ defined: false, reason: 'timeout', detail: { code: 'Y208', text: 'Factorisation ran out of steps.', stage: 'factor' } });
   }
@@ -2002,7 +2001,7 @@ function opDivisors(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
   if (n === 0n) {
     return okOut({ defined: false, reason: 'out_of_domain', detail: { code: 'Y210', text: `${op} needs a nonzero number.` } });
   }
-  const f = primeFactorsBig(n);
+  const f = primeFactorsBig(n, 2000000, ctx.tick);
   if (f === null) {
     return okOut({ defined: false, reason: 'timeout', detail: { code: 'Y208', text: 'Factorisation ran out of steps.', stage: 'factor' } });
   }
@@ -2015,8 +2014,7 @@ function opDivisors(args: readonly SymArg[], _named: ReadonlyMap<string, SymArg>
   if (count > BigInt(MAX_DIVISORS_LISTED)) {
     return okOut({ defined: false, reason: 'limit', detail: { code: 'Y209', text: `The number has ${count.toString()} divisors; at most ${MAX_DIVISORS_LISTED} are listed.`, stage: 'divisors' } });
   }
-  ctx.tick.tick(Number(count));
-  const divs = divisorsFromFactors(groups);
+  const divs = divisorsFromFactors(groups, ctx.tick);
   return okOut(defined({ k: 'list', items: divs.map((x) => numOrExpr(x)) }));
 }
 
@@ -2233,8 +2231,24 @@ export function exactStationaryPoints(f: SymNode, v: SymNode, ctx: OpCtx): SymNo
 }
 
 /** Exact binomial coefficient for the calculator area (`nCr`, `nPr`, `Binomial`). */
-export function binomialExact(n: bigint, k: bigint): bigint {
-  return binomialBig(n, k);
+export function binomialExact(n: bigint, k: bigint): bigint | undefined {
+  // nothing throws across the package boundary: a k too large to compute is undefined
+  try {
+    return binomialBig(n, k);
+  } catch (err) {
+    if (err instanceof LimitExceeded) return undefined;
+    throw err;
+  }
 }
 
+/** An expression for a message: the text itself when short, else its two ends (a reason must stay readable aloud). */
+function shortText(t: string, max = 60): string {
+  return t.length <= max ? t : `${t.slice(0, 20)}…${t.slice(-20)} (${t.length} characters)`;
+}
 
+/** A pole found by root isolation, printed as the number it stands for: 0 for -4.5e-13, pi/2 kept as 1.5708. */
+function snapPoint(x: number): string {
+  const r = Math.round(x * 1e6) / 1e6;
+  const near = Math.abs(x - r) < 1e-9 * Math.max(1, Math.abs(x)) ? r : x;
+  return String(Number(near.toPrecision(10)) + 0);
+}
