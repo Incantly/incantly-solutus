@@ -181,3 +181,42 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-38.** A live figure card in the Board app draws with the studio's frame style (axes and grid off in the Board app), because `frameStyle` in the SDK's `screen/paint.ts` is one module-wide object set by the app mode, while a card's picture (made in a headless app) draws axes and grid. A card and its picture can look different. Fix: let `createApp` take its frame style as an option, or have the picture use the same style.
 - **BR-39.** Not built in round 4: the long press that opens the context menu on touch, the main menu's New, Open and Export (the host adds them through `menus.main`; Save is there), the minimap part of `ui`, and a French or Arabic catalogue for the board's strings beyond the tool names (the rest fall back to English).
 - **BR-40.** The card toolbar is above the selected card only on the page the card is on and is not a real toolbar for the keyboard (Tab from the board does not reach it); the Edit lines panel and the toolbar buttons are reachable by Tab only after a click.
+
+## Round 4 (PR #135, reviewed at `f64b465`)
+
+### Fix now
+
+#### BR-38. Live cards draw without axes or grid (new lint rule)
+
+- **Where:** `packages/sdk/src/screen/paint.ts` `frameStyle`, one module-wide object; `packages/sdk/src/export.ts` and the studio's app mode write into it.
+- **What:** the app mode sets the page-wide style, so a card live in Board mode loses its axes and grid while its picture (made in a headless app) has them: the card changes look when it goes live (`round4-five-cards.png`). Two apps on one page share one style.
+- **Fix:** the frame style belongs to each app (`MountedApp` holds its own, from its mode and `@axes`/`@grid`); `paintScene`, the grid painter and the export take it as an argument; nothing writes a module's object from outside. New rule `incantly/no-imported-mutation` in `tools/eslint-rules/`: assigning to a property of an imported binding (`x.y = …`, `x.y++`, `Object.assign(x, …)` where `x` is imported) is an error ("a module's object is shared by everyone who imports it; pass state in, or give each owner its own"), registered as 'error' for product code, with RuleTester cases. Fix whatever else it finds so the repo lints clean. Test: a live card and its picture draw the same axes and grid; two apps with different `@axes` on one page each keep their own.
+
+#### BR-46. The live cap is broken (new lint rule)
+
+- **Where:** `web/figures.ts` card layer `goLive`/`activate`; B26 has no `release` row in `mounting`.
+- **What:** giving the input to a fourth card while 3 are live makes 4 (`makeRoom` returning false is ignored); a fast pan has up to 5 cards mounting, live or moving (bench). B26's invariant is at most 3.
+- **Fix:** a card claims a place only when `makeRoom` says there is one; otherwise it stays a picture and the scheduler's next order decides. `mounting` gets a `release` row (the app being made is freed when it arrives). Tests: the tester's failing test and failing bench row.
+- **New rule `incantly/state-refusal-reported`:** in `packages/board`, `packages/tiptap` and `tools`, `new StateMachine(...)` without the third argument (`onRefused`) is an error, so a refused move is reported, never silent (the mount-failure case of BR-47). Board machines report through the board's `onError` as `internal` with the state and event. RuleTester cases.
+
+#### BR-47. A lost app is not noticed
+
+- **Where:** `web/figures.ts`.
+- **What:** a `webglcontextlost` on a card's canvas, or an app destroyed from outside, leaves the card holding a dead app; after a lost context the card is not claimed again; a script that fails at mount ends in `picture` instead of `failed` (the app is freed before `fail` is sent, and `picture` has no `fail` row).
+- **Fix:** the card listens for context loss and the app's destroy, frees the app (`unmounted`), and is claimed again when the scheduler still wants it, as the Tiptap figure does; a mount failure sends `fail` before the app is freed. Tests: the tester's four failing tests.
+
+#### BR-48. `defaultTools`
+
+- **Ruling:** `defaultTools` is every built-in tool (design 10, R7.2); the round-2 six become `inkTools`. Remove `boardTools` or make it the same list; the studio and tests use `defaultTools`.
+
+#### BR-49. String lookup order
+
+- **Fix:** host strings, then the language catalogue, then the English table, then a tool's own label (design 10). Test: the tester's failing test.
+
+#### BR-50. Key order
+
+- **Fix:** a key string is written `mod+shift+alt+key` (B30). Test: the tester's failing test.
+
+### Later
+
+- **BR-39** and **BR-40** above (from the builder) stay on the fix-later list. BR-38 moved up to Fix now.
