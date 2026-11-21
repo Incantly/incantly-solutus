@@ -17,6 +17,7 @@ packages/
   modes/      app mode records and exam profiles, as data (no DOM)
   sdk/        createApp, embed API, iframe protocol, file format, export
   tiptap/     the Tiptap extension: figure and formula nodes
+  board/      the endless, paged board: store, ink, shapes, tools, agent actions (core has no DOM)
   teacher/    the AI's draw and figure tools, catalogue, streaming apply
   server/     Node service: Muse Spark calls, keys, rate limits, headless checks
 apps/
@@ -49,6 +50,7 @@ handoff/      per-area pipeline notes: builder notes, test reports, findings, re
 | `packages/modes` | Graphing, Geometry, 3D, CAS, Scientific and exam setups |
 | `packages/sdk` | The public embed API and file format |
 | `packages/tiptap` | Figures and formulas inside documents |
+| `packages/board` | The board: pages, ink, shapes, tools, figure cards, agent actions |
 | `packages/teacher` | The model's tools and streaming |
 | `packages/server` | Every model call and secret |
 | `apps/studio` | Screens that wire the packages together |
