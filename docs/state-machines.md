@@ -1453,7 +1453,8 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 | `dead` | script or mode change | | `placeholder` | registered again |
 | any | `destroy` | | `destroyed` | |
 
-- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight leaves the figure unmounted with `wantsMount` true (TT-R9, later). A remount that yields to a save, or a save during a mode change, made the old mode's picture (TT-R10, fixed: the picture is made from the script in the new mode).
+- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight mounts again in the new mode (TT-R9 was not a bug; a test now holds it). A remount that yields to a save, or a save during a mode change, made the old mode's picture (TT-R10, fixed: the picture is made from the script in the new mode).
+- **Explicit since `feat/lint-rules`:** the lifecycle is one `StateMachine` over `FIGURE_MACHINE` in `node-view.ts` (states `idle`, `mounting`, `live`, `saving`, `lost`, `dead`, `destroyed`; events `claim`, `release`, `mounted`, `unmounted`, `lose`, `regain`, `giveUp`, `revive`, `destroy`). `wantsMount` is `mounting`, `live` or `lost`; the former flags `wantsMount`, `dead`, `destroyed` and `contextLost` are gone. `bad` stays a display state derived from the attributes. `test/spec/life.test.ts` walks every row of the table.
 
 ### T2. Script sync between the node, the live figure and the code panel
 

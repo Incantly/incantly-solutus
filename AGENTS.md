@@ -21,12 +21,19 @@ Where a feature folder and the core design disagree, `docs/features/README.md` a
 
 - TypeScript, strict, ES2022 modules. Node 22 or later.
 - Packages under `packages/`, the web app under `apps/studio`. Each package exports from `src/index.ts`.
-- `kernel`, `plot`, `symbolic`, `modes` and `view/src/core` have no DOM, timers, network or `Date`. They must run in Node, a worker and on mobile.
+- `kernel`, `plot`, `symbolic`, `modes`, `view/src/core` and `board/src/core` have no DOM, timers, network or `Date`. They must run in Node, a worker and on mobile.
 - Nothing throws across a package boundary. Public functions return `Result<T>` from `packages/kernel/src/contracts/errors.ts`, and errors use the format in `docs/features/errors/design.md`.
 - Shared contracts live in `packages/kernel/src/contracts/`. Other areas may only append entries to their registries.
 - No `eval`, no `new Function`, no running code from figures or files.
 - No `console` in package code.
 - Determinism: no wall clock and no unseeded randomness in the kernel.
+- Explicit state: a part's states live in one field changed through a `*_MACHINE` table (`StateMachine` or `transition` from `@incantly/kernel`), never in several flags that must agree. Write the machine in `docs/state-machines.md` before the code.
+
+## Rules are checked by code
+
+- A rule is not done until code checks it: a lint rule in `tools/eslint-rules/` (the `incantly` plugin in `eslint.config.js`), a check in `tools/check-repo.mjs`, or a test. `npm run lint` runs both.
+- Fix every lint error; never turn a rule off in a file to get past it. New and rebuilt code (`packages/board`, `packages/tiptap`) has every rule as an error; older code has the state rules and `no-throw-export` as warnings until a batch fixes it.
+- The rules: `state-no-flag-soup`, `state-transition-only`, `state-union-type`, `state-table-required`, `state-no-stale-after-await`, `allowed-imports` (from `docs/design/libraries.md`), `no-throw-export`, `no-ai-credit`, DOM-free globals and `Math.random`, and core folders that may not import a web or GPU layer. The repository check: no name of the reference app, a spec for every package with code, `.kiro` never ignored.
 
 ## Tests
 
