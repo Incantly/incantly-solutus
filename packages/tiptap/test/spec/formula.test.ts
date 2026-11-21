@@ -161,6 +161,18 @@ describe('formats and evaluation (design 11)', () => {
     app.destroy();
   });
 
+  it('evaluateExpr keeps a clear formula_failed for a bare name that is no object, with close names', () => {
+    const app = createHeadlessApp({ mode: 'graphing', script: 'abc = 3\na = 2' });
+    const r = evaluateExpr(app, 'ab', 'auto', 'fig_f');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.kind).toBe('formula_failed');
+      expect(`${r.error.message} ${r.error.hint ?? ''}`).toContain('abc');
+    }
+    expect(app.list().map((o) => o.name)).toEqual(['abc', 'a']);
+    app.destroy();
+  });
+
   it('evaluateExpr gives a formula_failed error for a format word that is not one, and for an expression that fails', () => {
     const app = createHeadlessApp({ mode: 'graphing', script: 'a = 2' });
     const badFormat = evaluateExpr(app, 'a', 'bogus', 'fig_f');

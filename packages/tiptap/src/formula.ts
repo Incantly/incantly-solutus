@@ -67,6 +67,22 @@ function formatWith(type: Ty, value: unknown, spec: FormatSpec): string | undefi
 
 export type FormulaResult = { readonly ok: true; readonly text: string } | { readonly ok: false; readonly error: TiptapError };
 
+const BARE_NAME = /^[\p{L}_][\p{L}\p{N}_]*$/u;
+
+/**
+ * The kernel reads a lone name as an incomplete definition. A formula of one name reads that name's value, so the
+ * name is previewed as the right side of a definition under a temporary name the figure does not use. An unknown name
+ * then fails with the kernel's own message and close names.
+ */
+function readableForm(expr: string, app: App): string {
+  const name = expr.trim();
+  if (!BARE_NAME.test(name)) return expr;
+  const view = app.figure.view;
+  let temp = 'pvw1';
+  for (let k = 2; view.lookup(temp); k++) temp = `pvw${k}`;
+  return `${temp} = ${name}`;
+}
+
 /** The value of `expr` in the figure of `app`, written with `format`. Never throws. */
 export function evaluateExpr(app: App, expr: string, format: string, node?: string): FormulaResult {
   const fail = (message: string, hint?: string): FormulaResult => ({
@@ -77,7 +93,7 @@ export function evaluateExpr(app: App, expr: string, format: string, node?: stri
   if (!spec) return fail(`"${format}" is not a format.`, `Use one of: ${FORMAT_WORDS}.`);
   if (expr.trim() === '') return fail('The formula has no expression.', 'Write an expression such as Area(p).');
   try {
-    const p = preview(expr, app.figure.view);
+    const p = preview(readableForm(expr, app), app.figure.view);
     if (!p.ok) return fail(p.error.message, p.error.hint);
     const g = p.ghost;
     if (g && spec.kind !== 'auto') {
