@@ -1411,7 +1411,7 @@ Checked at commit `3266a74` on `feat/symbolic` (pass 1, pipeline step 4). Paths 
 
 ## tiptap
 
-Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). Paths are under `packages/tiptap/src/`; line numbers refer to `20d5770`. Findings are in `handoff/tiptap/findings.md` (TT-R1 to TT-R8). JavaScript is single-threaded, so "concurrency" below means work interleaved across `await`s: a mount, a picture export or an AI stream, with scheduler orders, editor updates and other requests in between.
+Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). Paths are under `packages/tiptap/src/`; line numbers refer to `20d5770`. Findings are in `handoff/tiptap/findings.md` (TT-R1 to TT-R10; TT-R1 to TT-R5 are fixed). JavaScript is single-threaded, so "concurrency" below means work interleaved across `await`s: a mount, a picture export or an AI stream, with scheduler orders, editor updates and other requests in between.
 
 ### T1. Figure node view lifecycle
 
@@ -1445,15 +1445,15 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 | `saving` | picture made | not wanted again | `saved` | unmount; picture written without an undo step |
 | `saving` | `goLive` during the export | | `live` | `saved` dropped |
 | `live` | attrs turn bad | | `bad` | unmount queued |
-| `bad` | attrs good again | | `placeholder` | no new order: TT-R4 |
+| `bad` | attrs good again | | `placeholder` | asks again for the mount the scheduler holds as `live` or `ready` (TT-R4, fixed) |
 | `live` | mode change | not to or from 3D, `setMode` ok | `live` | |
-| `live` | mode change | otherwise | `mounting` | unmount, mount again without `makeRoom`: TT-R5 |
+| `live` | mode change | otherwise | `mounting` | unmount, mount again; keeps its place under the cap, and a `save` order that arrives first wins (TT-R5, fixed) |
 | `live` | `webglcontextlost` | | `context-lost` | `context_lost` |
-| `context-lost` | `webglcontextrestored` | | `mounting` | reader's state kept, mount again without `makeRoom`: TT-R5 |
+| `context-lost` | `webglcontextrestored` | | `mounting` | reader's state kept, mount again; same rule as a mode change (TT-R5, fixed) |
 | `dead` | script or mode change | | `placeholder` | registered again |
 | any | `destroy` | | `destroyed` | |
 
-- **Reachable invalid states or transitions:** a figure fixed after being `bad` stays a placeholder in view, because the scheduler still holds it as `live` (TT-R4, fix now). A remount after a mode change or a restored context skips `makeRoom` and drops a `save` order sent in between, so more than `liveLimit` figures can be mounted, one of them off screen (TT-R5, fix now).
+- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight leaves the figure unmounted with `wantsMount` true (TT-R9, later). A remount that yields to a save keeps the old picture (TT-R10, later).
 
 ### T2. Script sync between the node, the live figure and the code panel
 
@@ -1483,12 +1483,12 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
 | none | `askIncantly` | good attrs | `streaming` | older request aborted, `beginAi`, panel opens |
-| `streaming` | lines | fits 64 KB | `streaming` | lines run in the live figure, or a headless app when not live |
+| `streaming` | lines | fits 64 KB | `streaming` | lines run in the live figure, or a headless app of base plus accepted lines when not live |
 | `streaming` | `done` | | `done` | one commit of `base` plus accepted lines |
 | `streaming` | error, or end without `done` | | `stopped` | accepted lines committed, `ai_partial` or `ai_unavailable` |
-| `streaming` | newer request | | `superseded` | `resetToNode` |
+| `streaming` | newer request | | `superseded` | `resetToNode` only when no newer request runs on the figure (TT-R2, fixed) |
 
-- **Reachable invalid states or transitions:** a superseded request's `resetToNode` runs after the newer request began, wiping its lines from the figure (TT-R2, fix now). The headless fallback starts from `base`, without the accepted lines (TT-R3, fix now).
+- **Reachable invalid states or transitions:** none known for TT-R2 and TT-R3 after the fixes (commit `733cda0`): a superseded request leaves the figure and panel to the newer request, and the headless fallback starts from the base script plus the accepted lines.
 
 ### T4. Editor scheduler
 
