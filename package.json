@@ -11,7 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint .",
+    "lint": "eslint . && node tools/check-repo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench --run",
