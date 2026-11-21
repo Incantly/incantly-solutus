@@ -9,10 +9,10 @@
 
 import type { Figure } from '../../graph/figure';
 import type { Name, ObjId } from '../../contracts/values';
-import { FIELDS, registerFieldTyper } from '../../language/check';
+import { registerFields, registerFieldTyper } from '../../language/check';
 import type { Ty } from '../../language/types';
 import { registerFieldReader } from '../../language/compile';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import type { PropSpec } from '../../language/props';
 import { T, listOf } from '../../language/types';
 import { registerPropertyTypes, registerTypeStyle } from '../../graph/props';
@@ -55,16 +55,16 @@ export function registerNumbersProperties(): void {
   if (registered) return;
   registered = true;
   for (const [key, { spec, types }] of Object.entries(PROPS)) {
-    if (!Object.hasOwn(PROPERTIES, key)) PROPERTIES[key] = spec;
+    if (!Object.hasOwn(PROPERTIES, key)) registerProperty(key, spec);
     registerPropertyTypes(key, types);
   }
   registerTypeStyle('Button', { defaults: { color: 'grey', label: 'caption' }, drawable: false });
   registerTypeStyle('Choice', { defaults: { label: 'caption' }, drawable: false });
   registerTypeStyle('Input', { defaults: { label: 'caption' }, drawable: false });
   // Slider and control fields (checking only; evaluation needs a kernel field hook).
-  FIELDS['Number'] = { ...(FIELDS['Number'] ?? {}), min: T.Number, max: T.Number, step: T.Number, animating: T.Bool };
-  FIELDS['Choice'] = { index: T.Number, count: T.Number };
-  FIELDS['Input'] = { text: T.Text, valid: T.Bool };
+  registerFields('Number', { min: T.Number, max: T.Number, step: T.Number, animating: T.Bool });
+  registerFields('Choice', { index: T.Number, count: T.Number });
+  registerFields('Input', { text: T.Text, valid: T.Bool });
   // d.value is the selected option, so its type is the type of the options (controls-scripting design 3.1)
   registerFieldTyper('Choice', (field, target, fig) => {
     if (field !== 'value' || target.n !== 'ref') return undefined;

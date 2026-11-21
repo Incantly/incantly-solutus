@@ -9,7 +9,8 @@ import {
 import type { AppModeId, CommandRef, ModeChangeResult, ModeConfig, Rounding, SettingDef, StorageLike, ViewKind } from '@incantly/modes';
 import type { KernelSession } from '../session';
 import type { ToolStrip } from '../tools-ui';
-import { frameStyle } from '@incantly/sdk/screen';
+import { DEFAULT_FRAME_STYLE } from '@incantly/sdk/screen';
+import type { FrameStyle } from '@incantly/sdk/screen';
 
 /** The parts of the page a mode shows, hides or narrows. */
 export interface ModeHostParts {
@@ -39,6 +40,8 @@ export interface ModeHostParts {
 export interface AppModes {
   readonly mode: ModeConfig;
   readonly settings: Settings;
+  /** How this page's graph draws its axes and grid (the settings and the figure's `@axes`/`@grid` lines). */
+  readonly frameStyle: FrameStyle;
   readonly i18n: I18n;
   readonly catalogue: readonly CommandRef[];
   /** Switches mode. Without `force`, a switch that would remove objects asks first (and returns its dry run). */
@@ -130,15 +133,20 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
 
   /* ------------------------------ settings ------------------------------ */
 
+  /** This page's own frame style; a new record each time the settings apply. */
+  let frame: FrameStyle = DEFAULT_FRAME_STYLE;
   const applySettings = (): void => {
     const s = settings;
     // the figure's own @axes and @grid lines win over the setting
     const script = p.session.save();
     const axes = /^@axes (on|off)\b/m.exec(script)?.[1];
     const grid = /^@grid (off|major|minor|on)\b/m.exec(script)?.[1];
-    frameStyle.axes = axes ? axes === 'on' : (s.get<boolean>('axes'));
-    frameStyle.grid = grid ? (grid === 'off' ? 'none' : grid === 'on' ? 'major' : grid) as 'none' | 'major' | 'minor' : s.get<'none' | 'major' | 'minor'>('grid');
-    frameStyle.highContrast = s.get<boolean>('highContrast');
+    frame = {
+      ...DEFAULT_FRAME_STYLE,
+      axes: axes ? axes === 'on' : (s.get<boolean>('axes')),
+      grid: grid ? (grid === 'off' ? 'none' : grid === 'on' ? 'major' : grid) as 'none' | 'major' | 'minor' : s.get<'none' | 'major' | 'minor'>('grid'),
+      highContrast: s.get<boolean>('highContrast'),
+    };
     const root = p.app;
     root.classList.toggle('high-contrast', s.get<boolean>('highContrast'));
     const rm = s.get<string>('reducedMotion');
@@ -359,6 +367,9 @@ export function mountAppModes(p: ModeHostParts, initial: AppModeId = 'classic'):
       return mode;
     },
     settings,
+    get frameStyle() {
+      return frame;
+    },
     i18n,
     catalogue,
     setMode(id, opts = {}) {

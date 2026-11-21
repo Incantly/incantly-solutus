@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mountStudio } from '../src/studio-page';
 import type { Mounted } from '../src/studio-page';
-import { frameStyle } from '@incantly/sdk/screen';
 
 describe('app modes in the studio', () => {
   let root: HTMLElement;
@@ -41,8 +40,8 @@ describe('app modes in the studio', () => {
   it('geometry: graphics only, construction tools, no axes or grid (R10.2)', () => {
     mount('geometry');
     expect((root.querySelector('.panel') as HTMLElement).hidden).toBe(true);
-    expect(frameStyle.axes).toBe(false);
-    expect(frameStyle.grid).toBe('none');
+    expect(m.modes.frameStyle.axes).toBe(false);
+    expect(m.modes.frameStyle.grid).toBe('none');
     expect(m.tools.element.hidden).toBe(false);
     expect((root.querySelector('.top-tools button[title^="Open the data-analysis"]') as HTMLElement).hidden).toBe(true);
   });
@@ -137,7 +136,7 @@ describe('app modes in the studio', () => {
     m.modes.settings.set('angleUnit', 'degree');
     expect(m.session.save()).toMatch(/^@angleunit degree$/m);
     m.modes.settings.set('axes', false);
-    expect(frameStyle.axes).toBe(false);
+    expect(m.modes.frameStyle.axes).toBe(false);
     expect(m.session.save()).toMatch(/^@axes off$/m);
   });
 

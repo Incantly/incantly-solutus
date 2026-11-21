@@ -12,7 +12,7 @@ import type { ObjId } from '../../contracts/values';
 import type { CommandRegistry, CommandRule, RuleCall } from '../../graph/registry';
 import { registerPropertyTypes } from '../../graph/props';
 import { registerLineRewriter } from '../../graph/registry';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import { registerValueText } from '../../language/runtime';
 import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import type { TNode } from '../../language/tnode';
@@ -255,14 +255,14 @@ function registerTypes(): void {
   registerValueText((v) => (isSymValue(v) ? v.text : undefined));
   // `k = Symbol() with domain = positive` (agent.md 1): the domain is part of the unknown, so the line is read as
   // `k = Symbol(domain = "positive")`
-  PROPERTIES['domain'] ??= {
+  if (!Object.hasOwn(PROPERTIES, 'domain')) registerProperty('domain', {
     kind: 'enum',
     values: ['real', 'positive', 'nonneg', 'negative', 'nonpos', 'nonzero', 'integer', 'natural', 'rational', 'complex'],
     allowed: 'real, positive, nonneg, negative, nonpos, nonzero, integer, natural, rational or complex',
-  } as (typeof PROPERTIES)[string];
+  } as (typeof PROPERTIES)[string]);
   registerPropertyTypes('domain', ['Symbol']);
   // the row's show switch (ui.md 1 and 4): off by default, so a worked solution does not fill the graph by itself
-  PROPERTIES['plot'] ??= { kind: 'bool', allowed: 'true or false' } as (typeof PROPERTIES)[string];
+  if (!Object.hasOwn(PROPERTIES, 'plot')) registerProperty('plot', { kind: 'bool', allowed: 'true or false' } as (typeof PROPERTIES)[string]);
   registerPropertyTypes('plot', ['Expr', 'Cond', 'List']);
   registerLineRewriter((_fig, text) => {
     const m = /^(\s*[A-Za-z\u0370-\u03FF][\w\u0370-\u03FF]*\s*=\s*Symbol\(\s*\))\s+with\s+(.*)$/.exec(text);

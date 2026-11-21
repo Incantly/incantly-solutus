@@ -3,7 +3,7 @@
  * the language's area hooks.
  */
 import type { Pt } from '../../contracts/values';
-import { FIELDS, registerFieldNames, registerFieldTyper } from '../../language/check';
+import { registerFields, registerFieldNames, registerFieldTyper } from '../../language/check';
 import { registerFieldReader } from '../../language/compile';
 import type { Env } from '../../language/runtime';
 import { fail, formatNumber, registerValueText, valueText } from '../../language/runtime';
@@ -223,7 +223,7 @@ export function registerListOps(): void {
   });
 
   // fields: M.rows, M.cols, M.trace; a record's fields from its schema
-  (FIELDS as Record<string, Record<string, Ty>>)['Matrix'] = { rows: T.Number, cols: T.Number, trace: T.Number };
+  registerFields('Matrix', { rows: T.Number, cols: T.Number, trace: T.Number });
   registerFieldReader('Matrix', (field, value) => {
     if (!isMatrix(value)) return undefined;
     if (field === 'rows') return value.rows;

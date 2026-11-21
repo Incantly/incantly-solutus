@@ -7,7 +7,7 @@ import { CommandRegistry } from '../../graph/registry';
 import { registerPropertyTypes, registerTypeStyle } from '../../graph/props';
 import { registerReasonPhrase } from '../../errors/phrases';
 import { CORE_TYPE_NAMES } from '../../language/types';
-import { PROPERTIES } from '../../language/props';
+import { registerProperty } from '../../language/props';
 import { GEOMETRY_COMMANDS } from './commands';
 import { geometryLineCheck, geometryLineRewrite } from './linecheck';
 import { registerLineCheck, registerLineRewriter } from '../../graph/registry';
@@ -60,8 +60,8 @@ export function registerGeometry(registry: CommandRegistry): void {
   registerTypeStyle('Polyline', { defaults: { color: '#111827', width: 2, label: 'none' } });
   registerTypeStyle('Transform', { drawable: false });
 
-  PROPERTIES['vertexlabels'] = { kind: 'enum', values: ['none', 'names', 'prime'], allowed: 'none, names or prime' };
-  PROPERTIES['fillRule'] = { kind: 'enum', values: ['evenodd', 'nonzero'], allowed: 'evenodd or nonzero' };
+  registerProperty('vertexlabels', { kind: 'enum', values: ['none', 'names', 'prime'], allowed: 'none, names or prime' });
+  registerProperty('fillRule', { kind: 'enum', values: ['evenodd', 'nonzero'], allowed: 'evenodd or nonzero' });
   registerPropertyTypes('vertexlabels', ['Polygon', 'Polyline']);
   registerPropertyTypes('fillRule', ['Polygon']);
 

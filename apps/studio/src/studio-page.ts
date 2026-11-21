@@ -194,8 +194,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     if (contacts) out.push(contacts);
     return out;
   };
+  const modeRef: { current?: AppModes } = {};
   const graph = mountGraph({
     items,
+    style: () => modeRef.current?.frameStyle,
     bounds: () => {
       // the figure's own `@view x0 x1 y0 y1` wins over zoom to fit (it is how a film frames itself)
       const v = /^@view\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/m.exec(session.save());
@@ -238,7 +240,6 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     hoverAt: (px, py, vp) => fromCanvas.setHover(hitTest(items(), vp, px, py, 8)[0]?.name),
   });
-  const modeRef: { current?: AppModes } = {};
   const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection, autoSliders: () => modeRef.current?.mode.defaults.autoSliders ?? true });
   holder.expressions = exprs;
   const tools = mountToolStrip({
@@ -253,8 +254,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   });
   holder.tools = tools;
   graph.element.append(tools.element, tools.hint);
-  const lab = mountDataLab(session, registry, say);
-  const calc = mountProbCalc(session, registry, say);
+  const lab = mountDataLab(session, registry, say, () => modeRef.current?.frameStyle);
+  const calc = mountProbCalc(session, registry, say, () => modeRef.current?.frameStyle);
   const cas = mountCasPanel(session, say);
   const sheet = mountSheet({ session, say, pick: (n) => selection.set(n) });
   const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
