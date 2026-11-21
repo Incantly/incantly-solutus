@@ -7,8 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { MachineTable } from '@incantly/kernel';
-import { CAMERA_MACHINE, HANDLE_MACHINE, HISTORY_MACHINE, PAGES_MACHINE, TX_MACHINE, Camera } from '../../src/index';
-import type { Store } from '../../src/index';
+import { CAMERA_MACHINE, HANDLE_MACHINE, HISTORY_MACHINE, TX_MACHINE, Camera, Pages, Store } from '../../src/index';
 import { addRects, makeBoard, must, shape } from './helpers';
 
 type Row<S extends string, E extends string> = readonly [from: S, event: E, to: S];
@@ -69,14 +68,7 @@ walk('B2 HISTORY_MACHINE', HISTORY_MACHINE, ['recording', 'undoing', 'redoing'],
   ['redoing', 'done', 'recording'],
 ]);
 
-// B3: every state accepts every event
-const PAGE_STATES = ['empty', 'single', 'several', 'full'] as const;
-const PAGE_EVENTS = ['to_empty', 'to_single', 'to_several', 'to_full'] as const;
-const pageRows: Row<(typeof PAGE_STATES)[number], (typeof PAGE_EVENTS)[number]>[] = [];
-for (const s of PAGE_STATES) {
-  pageRows.push([s, 'to_empty', 'empty'], [s, 'to_single', 'single'], [s, 'to_several', 'several'], [s, 'to_full', 'full']);
-}
-walk('B3 PAGES_MACHINE', PAGES_MACHINE, PAGE_STATES, PAGE_EVENTS, pageRows);
+// B3 has no table: `Pages.state` is derived from the page count (see the test below)
 
 // B4
 walk('B4 CAMERA_MACHINE', CAMERA_MACHINE, ['steady', 'zooming'], ['zoom', 'settle'], [
@@ -169,6 +161,20 @@ describe('moves with no row are refused by the running code', () => {
     expect(b.history.undo().ok).toBe(true);
   });
 
+  it('B3: the state is derived from the page count each time it is read: empty, single, several, full', () => {
+    const store = new Store({ limits: { pages: 3 } });
+    const pages = new Pages(store);
+    expect(pages.state).toBe('empty');
+    must(pages.addPage());
+    expect(pages.state).toBe('single');
+    const second = must(pages.addPage());
+    expect(pages.state).toBe('several');
+    must(pages.addPage());
+    expect(pages.state).toBe('full');
+    must(pages.removePage(second.id));
+    expect(pages.state).toBe('several');
+  });
+
   it('B3: removePage in single is last_page and addPage in full is limit', () => {
     const b = makeBoard({ pages: 2 });
     expect(b.pages.state).toBe('single');
@@ -211,7 +217,6 @@ describe('the tables match the document, row by row', () => {
     B1: { table: TX_MACHINE as MachineTable<string, string>, handle: false },
     'B1 handle': { table: HANDLE_MACHINE as MachineTable<string, string>, handle: true },
     B2: { table: HISTORY_MACHINE as MachineTable<string, string>, handle: false },
-    B3: { table: PAGES_MACHINE as MachineTable<string, string>, handle: false },
     B4: { table: CAMERA_MACHINE as MachineTable<string, string>, handle: false },
   };
 

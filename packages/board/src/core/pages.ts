@@ -1,11 +1,9 @@
 /**
  * Pages (design 5): a document holds 1 to 100 pages in order, each an endless plane. The commands `addPage`,
  * `removePage`, `renamePage`, `movePage` and `duplicatePage` are one store transaction each, so one undo step each;
- * `goToPage` only moves the current page and is not a step. The page count's states are `PAGES_MACHINE`
- * (docs/state-machines.md, B3).
+ * `goToPage` only moves the current page and is not a step. The page count's states are read from the count each
+ * time, never kept in a field (docs/state-machines.md, B3).
  */
-import { StateMachine } from '@incantly/kernel';
-import type { MachineTable } from '@incantly/kernel';
 import { cameraIdOf } from './camera';
 import { PAGE_NAME_MAX } from './check';
 import { boardError, ok } from './errors';
@@ -15,18 +13,8 @@ import type { Store } from './store';
 import { isBinding, isCamera, isPage } from './types';
 import type { BindingRecord, CameraRecord, Diff, Origin, PageBackground, PageRecord, ShapeRecord } from './types';
 
-type PagesState = 'empty' | 'single' | 'several' | 'full';
-type PagesEvent = 'to_empty' | 'to_single' | 'to_several' | 'to_full';
-
-const ANY: Readonly<Record<PagesEvent, PagesState>> = { to_empty: 'empty', to_single: 'single', to_several: 'several', to_full: 'full' };
-
-/** B3: the state follows the number of page records; every state accepts every count. */
-export const PAGES_MACHINE: MachineTable<PagesState, PagesEvent> = {
-  empty: ANY,
-  single: ANY,
-  several: ANY,
-  full: ANY,
-};
+/** B3: `empty` (no page), `single` (one), `several` (2 up to the limit minus one), `full` (the limit). */
+export type PagesState = 'empty' | 'single' | 'several' | 'full';
 
 export interface AddPageOptions {
   /** Default `Page N`. */
@@ -43,7 +31,6 @@ const byOrder = (a: PageRecord, b: PageRecord): number => (a.index < b.index ? -
 
 export class Pages {
   readonly #store: Store;
-  readonly #machine = new StateMachine(PAGES_MACHINE, 'empty');
   #sorted: readonly PageRecord[] = [];
   #current: string | null = null;
   #listeners: readonly CurrentListener[] = [];
@@ -60,9 +47,12 @@ export class Pages {
     this.#listeners = [];
   }
 
-  /** `empty`, `single`, `several` or `full` (the page limit). */
-  get state(): 'empty' | 'single' | 'several' | 'full' {
-    return this.#machine.state;
+  /** `empty`, `single`, `several` or `full` (the page limit), derived from the number of pages each time it is read. */
+  get state(): PagesState {
+    const count = this.#sorted.length;
+    if (count === 0) return 'empty';
+    if (count === 1) return 'single';
+    return count >= this.#store.limits.pages ? 'full' : 'several';
   }
 
   /** The pages in order. */
@@ -96,7 +86,7 @@ export class Pages {
   }
 
   addPage(options: AddPageOptions = {}, origin: Origin = 'user'): BoardResult<PageRecord> {
-    if (this.#machine.is('full')) return this.#limit();
+    if (this.state === 'full') return this.#limit();
     const position = this.#positionAfter(options.after);
     if (!position.ok) return position;
     const name = options.name ?? `Page ${this.#sorted.length + 1}`;
@@ -112,7 +102,7 @@ export class Pages {
   /** Removes a page with its shapes, its camera and the bindings of its shapes. The last page cannot go. */
   removePage(id: string, origin: Origin = 'user'): BoardResult<undefined> {
     if (this.get(id) === undefined) return boardError('bad_argument', `There is no page "${id}".`, { detail: { page: id } });
-    if (this.#machine.is('single', 'empty')) {
+    if (this.state === 'single' || this.state === 'empty') {
       return boardError('last_page', 'The last page cannot be removed.', { hint: 'Add another page first.', detail: { page: id } });
     }
     const done = this.#store.change(origin, (tx) => {
@@ -160,7 +150,7 @@ export class Pages {
   duplicatePage(id: string, origin: Origin = 'user'): BoardResult<PageRecord> {
     const page = this.get(id);
     if (page === undefined) return boardError('bad_argument', `There is no page "${id}".`, { detail: { page: id } });
-    if (this.#machine.is('full')) return this.#limit();
+    if (this.state === 'full') return this.#limit();
     const position = this.#positionAfter(id);
     if (!position.ok) return position;
     const done = this.#store.change(origin, (tx) => {
@@ -218,8 +208,6 @@ export class Pages {
     const before = this.#sorted;
     const pages = this.#store.all('page').filter(isPage).sort(byOrder);
     this.#sorted = pages;
-    const limit = this.#store.limits.pages;
-    this.#machine.send(pages.length === 0 ? 'to_empty' : pages.length === 1 ? 'to_single' : pages.length >= limit ? 'to_full' : 'to_several');
     const current = this.#current;
     if (current !== null && pages.some((p) => p.id === current)) return;
     const was = before.findIndex((p) => p.id === current);

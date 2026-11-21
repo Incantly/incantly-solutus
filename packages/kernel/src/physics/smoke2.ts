@@ -23,7 +23,7 @@
 import type { DropsView, FireParams } from './fire2';
 import { advectFire, burnFuel, confine, coolFire, fireLift, fireSource, quench } from './fire2';
 import { StateMachine } from '../contracts/state-machine';
-import { GRID_MACHINE } from './grid-life';
+import { GRID_MACHINE, restoreLife } from './grid-life';
 import type { World2 } from './world2';
 import { BodyType, FK } from './world2';
 
@@ -1098,7 +1098,7 @@ export class Smoke2 {
     const nu = this.u.length;
     const nv = this.v.length;
     const ns = this.s.length;
-    this.life.send(src[1] === 1 ? 'blowUp' : 'reset');
+    restoreLife(this.life, src[1] === 1);
     // the walls are marked again from where they are in the world loaded with this checkpoint
     this.wallsMoved++;
     const nb = src[2] as number;

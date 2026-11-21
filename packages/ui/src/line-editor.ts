@@ -44,8 +44,8 @@ type ErrorState = 'typing' | 'quiet' | 'error';
 type ErrorEvent = 'type' | 'settleQuiet' | 'settleError' | 'fail';
 const ERROR_MACHINE: MachineTable<ErrorState, ErrorEvent> = {
   typing: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
-  quiet: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
-  error: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
+  quiet: { type: 'typing', fail: 'error' },
+  error: { type: 'typing', fail: 'error' },
 };
 
 /**

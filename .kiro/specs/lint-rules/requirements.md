@@ -10,8 +10,9 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 2. A field named `state`, `phase` or `status` SHALL change only through `transition(...)` or a `StateMachine` (`incantly/state-transition-only`); a constructor may set its first value.
 3. Such a field SHALL have a type that is a union of string literals or a named type alias, not `string`, `number`, `any` or no type (`incantly/state-union-type`).
 4. `transition(...)` and `new StateMachine(...)` SHALL take a table whose name ends in `_MACHINE` (`incantly/state-table-required`).
-5. A local copy of a state field made before an `await` SHALL NOT be read after it (`incantly/state-no-stale-after-await`).
-6. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
+5. A `*_MACHINE` table whose rows are all the same identifier, or all object literals with the same events and targets, SHALL be refused: a table that refuses nothing is a value, so it is derived or written with only the moves that may happen (`incantly/state-table-refuses`).
+6. A local copy of a state field made before an `await` SHALL NOT be read after it (`incantly/state-no-stale-after-await`).
+7. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
 
 ### R2. Package rules (AGENTS.md)
 
