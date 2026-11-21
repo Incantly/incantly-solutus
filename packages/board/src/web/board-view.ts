@@ -8,16 +8,27 @@ import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { BoardCore } from '../core/board';
 import type { BoardCoreOptions } from '../core/board';
+import { addImage } from '../core/assets';
+import { clipboardText, copySelection, pasteAny, readClipboardText, isBoardClipboard, pasteData } from '../core/clipboard';
 import { diffRegions, tileBox } from '../core/draw';
 import type { OverlayItems, Tile } from '../core/draw';
+import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
+import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
 import { ok } from '../core/errors';
-import { shapeBounds } from '../core/geometry';
+import { fixStrokes, strokesToFix } from '../core/fix';
+import { shapeGeometry } from '../core/geometry';
 import type { InputSink, TouchDraws } from '../core/input';
-import { createOverlayState, defaultStyles, defaultTools } from '../core/tools/index';
+import { DASHES, FONT_FAMILIES } from '../core/paint';
+import type { Dash, FontFamily } from '../core/paint';
+import { selectionView } from '../core/selection-view';
+import { cssFontFor, setFontMeasure } from '../core/text';
+import { SHAPE_TOOLS, createOverlayState, defaultStyles, defaultTools } from '../core/tools/index';
 import type { ToolContext, ToolList } from '../core/tools/index';
 import { ToolHost } from '../core/tools/host';
-import type { Bounds } from '../core/types';
+import type { StylePatch } from '../core/kinds/def';
+import type { Bounds, ShapeRecord } from '../core/types';
+import { ImageCache } from './images';
 import { WebInput } from './input';
 import { WebPainter } from './painter';
 import { TILE_GUTTER } from './painter-2d';
@@ -127,10 +138,16 @@ export interface BoardView {
   goToPage(id: string): BoardResult<undefined>;
   /** Adds a page after the current one and goes to it. */
   addPage(): BoardResult<undefined>;
+  /** Turns the selected strokes, or the newest stroke, into clean shapes (the toolbar's Fix). Returns the new shape ids. */
+  fix(): BoardResult<string[]>;
+  /** Adds an image from its bytes at the middle of the view (`asset_invalid` when they are not an image). */
+  insertImage(bytes: Uint8Array): BoardResult<undefined>;
   dispose(): void;
 }
 
 const STYLE_ID = 'incantly-board-view-style';
+/** The shapes in the "More shapes" menu. */
+const MORE_SHAPES: readonly string[] = ['triangle', 'diamond', 'star'];
 const CSS = `
 .ib-view{position:relative;width:100%;height:100%;min-height:200px;overflow:hidden;background:#fbfbfa;color:#1f2430;font:13px/1.3 system-ui,sans-serif;user-select:none;-webkit-user-select:none}
 .ib-surface{position:absolute;inset:0;outline:none;cursor:crosshair}
@@ -138,8 +155,11 @@ const CSS = `
 .ib-bar button,.ib-bar select{font:inherit;border:1px solid transparent;border-radius:7px;background:transparent;padding:5px 9px;cursor:pointer;color:inherit}
 .ib-bar button:hover{background:#eef0f4}.ib-bar button[aria-pressed=true]{background:#e0e7ff;border-color:#a5b4fc}
 .ib-bar button:disabled{opacity:.4;cursor:default}
-.ib-tools{left:50%;bottom:14px;transform:translateX(-50%);flex-wrap:wrap;justify-content:center;max-width:94%}
-.ib-style{left:50%;bottom:64px;transform:translateX(-50%)}
+.ib-tools{left:0;right:0;margin:0 auto;bottom:14px;width:max-content;max-width:calc(100% - 340px);gap:2px;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.ib-tools button{flex:none;white-space:nowrap;padding:5px 5px;font-size:12px}
+.ib-tools .ib-sep{flex:none}
+.ib-list.ib-more{left:0;top:auto;bottom:62px;min-width:120px}
+.ib-style{right:12px;top:70px;flex-wrap:wrap;max-width:300px;justify-content:flex-start}
 .ib-style[hidden],.ib-list[hidden]{display:none}
 .ib-sep{width:1px;align-self:stretch;background:#d5d7dd;margin:2px 2px}
 .ib-swatch{width:22px;height:22px;padding:0!important;border-radius:50%!important;border:2px solid #fff!important;box-shadow:0 0 0 1px #c5c8d0}
@@ -150,6 +170,14 @@ const CSS = `
 .ib-zoom{right:12px;bottom:14px}
 .ib-zoom output{min-width:46px;text-align:center}
 .ib-size{width:90px}
+.ib-actions{left:50%;top:12px;transform:translateX(-50%);flex-wrap:wrap;justify-content:center;max-width:92%}
+.ib-actions[hidden]{display:none}
+.ib-actions button{padding:4px 7px;font-size:12px}
+.ib-swatch-none{background:linear-gradient(135deg,#fff 45%,#dc2626 45%,#dc2626 55%,#fff 55%)}
+.ib-edit{position:absolute;margin:0;padding:4px;border:2px solid #2563eb;border-radius:4px;outline:none;resize:none;overflow:hidden;box-sizing:border-box;background:#fff;color:#1f2430;white-space:pre-wrap;line-height:1.3;z-index:5;transform-origin:center center}
+.ib-edit[hidden]{display:none}
+.ib-fixed{position:absolute;left:50%;top:60px;transform:translateX(-50%);background:#1f2430;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;opacity:.92}
+.ib-fixed[hidden]{display:none}
 `;
 
 const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] => {
@@ -165,11 +193,30 @@ const NIB_LABELS = [['pen', 'Pen nib'], ['marker', 'Marker nib'], ['pencil', 'Pe
 /** At most this many tiles are drawn in one frame; the rest follow on the next ones. */
 const TILES_PER_FRAME = 6;
 
+/** The widths of glyphs from a canvas, for the text and maths layout of the core. */
+function installFontMeasure(doc: Document): void {
+  const ctx = doc.createElement('canvas').getContext('2d');
+  if (ctx === null) return;
+  setFontMeasure((text, font, px, family) => {
+    ctx.font = cssFontFor(font, family, px);
+    const m = ctx.measureText(text);
+    if (font === 'text') return { w: m.width, asc: m.fontBoundingBoxAscent > 0 ? m.fontBoundingBoxAscent : px * 0.8, desc: m.fontBoundingBoxDescent > 0 ? m.fontBoundingBoxDescent : px * 0.22, right: m.actualBoundingBoxRight };
+    return { w: m.width, asc: Math.max(px * 0.3, m.actualBoundingBoxAscent), desc: Math.max(0, m.actualBoundingBoxDescent), right: m.actualBoundingBoxRight };
+  });
+}
+
+/** Size steps of the style bar: line widths, and text sizes follow from them. */
+const SIZE_STEPS = [['S', 2], ['M', 4], ['L', 8], ['XL', 14]] as const;
+const SHAPE_COLORS = ['#1f2430', '#dc2626', '#2563eb', '#16a34a', '#f59e0b', '#7c3aed'] as const;
+const FILL_COLORS = ['none', '#fecaca', '#bfdbfe', '#bbf7d0', '#fde68a', '#ddd6fe'] as const;
+const FONT_LABELS: Readonly<Record<FontFamily, string>> = { sans: 'Sans', serif: 'Serif', mono: 'Mono', hand: 'Hand' };
+
 /** Mounts a board in `options.container`. Returns `render_failed` only when no drawing at all is possible. */
 export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView> {
   const created = options.core !== undefined ? ok(options.core) : BoardCore.create(options.coreOptions ?? {});
   if (!created.ok) return created;
   const core = created.value;
+  const editor = core.editor;
   const doc = options.container.ownerDocument;
   if (doc.getElementById(STYLE_ID) === null) {
     const style = h('style', { id: STYLE_ID }, CSS);
@@ -195,6 +242,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     strokeDropped: () => painter.abortLive(),
   };
   const host = new ToolHost(ctx, options.tools ?? defaultTools, 'pen');
+  installFontMeasure(doc);
+  core.index.refresh();
+  const images = new ImageCache(core.store, () => {
+    painter.tiles.invalidateAll();
+    loop.request();
+  });
+  painter.setImages(images.lookup);
 
   // ---- DOM
   const root = h('div', { class: 'ib-view', 'data-board-view': '' });
@@ -252,17 +306,25 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       painter.drawLiveStroke(null);
     }
     if (waiting === 0) painter.settleLive();
-    const selected: Bounds[] = [];
-    for (const id of core.selection.ids) {
-      const s = core.index.shape(id);
-      const b = s === undefined ? undefined : shapeBounds(s);
-      if (b !== undefined) selected.push(b);
-    }
-    const items: OverlayItems = { laser: overlay.laser, loop: overlay.loop, selection: selected, cursor: overlay.cursor };
+    const items: OverlayItems = {
+      laser: overlay.laser,
+      loop: overlay.loop,
+      selection: [],
+      cursor: overlay.cursor,
+      selected: editor.state === 'closed' ? selectionView(core, camera.zoom) : null,
+      guides: overlay.guides,
+      marquee: overlay.marquee,
+      hint: overlay.hint,
+    };
+    placeField();
     painter.drawOverlay(items);
     painter.endFrame();
     zoomOut.value = `${Math.round(camera.zoom * 100)}%`;
     root.dataset['backend'] = painter.backend;
+    root.dataset['selected'] = String(core.selection.size);
+    root.dataset['shapes'] = String(core.store.shapeCount(page));
+    root.dataset['tool'] = host.tool;
+    root.dataset['editing'] = editor.state;
     root.dataset['tiles'] = String(painter.tiles.size);
     return more;
   };
@@ -274,7 +336,10 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
 
   // ---- input
   const sink: InputSink = {
-    sample: (s) => host.sample(s),
+    sample: (s) => {
+      pointer = { x: s.x, y: s.y };
+      host.sample(s);
+    },
     key: (k) => {
       if (host.key(k)) loop.request();
     },
@@ -286,7 +351,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
     const page = core.pages.current;
-    if (page !== null) for (const region of diffRegions(diff, page)) painter.tiles.invalidate(region);
+    if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds)) painter.tiles.invalidate(region);
     loop.request();
   });
   let lastPage = core.pages.current;
@@ -307,16 +372,108 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     pagesState.send('close');
     loop.request();
   });
-  const stopSelection = core.selection.on(() => loop.request());
+  const stopSelection = core.selection.on(() => {
+    renderStyle();
+    renderActions();
+    loop.request();
+  });
 
   // ---- tool strip and style strip
   const toolButtons = new Map<string, HTMLButtonElement>();
+  const shapeToolIds = new Set(SHAPE_TOOLS.map((t) => t.id));
+  // triangle, diamond and star are in a "More shapes" menu on the rectangle's group, so the strip stays one row (ui.md)
+  const moreMenu = h('div', { class: 'ib-list ib-more', role: 'menu', 'aria-label': 'More shapes', hidden: '' });
+  const moreBtn = h('button', { type: 'button', title: 'More shapes', 'aria-label': 'More shapes', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'more-shapes' }, '▾');
+  /** Opens or closes the menu above its button. The menu's `hidden` is its state: no other field says it. */
+  const showMore = (open: boolean): void => {
+    moreMenu.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const at = moreBtn.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    moreMenu.style.left = `${Math.max(0, at.left - box.left)}px`;
+  };
+  const hasMore = host.tools.some((t) => MORE_SHAPES.includes(t.id)) && host.tools.some((t) => t.id === 'rect');
   for (const def of host.tools) {
+    const extra = hasMore && MORE_SHAPES.includes(def.id);
+    // the shape tools sit in a group of their own
+    if (def.id === SHAPE_TOOLS[0]?.id) toolBar.append(h('span', { class: 'ib-sep' }));
     const b = h('button', { type: 'button', 'aria-pressed': 'false', title: def.key !== undefined ? `${def.label} (${def.key})` : def.label, 'data-tool': def.id }, def.label);
-    b.addEventListener('click', () => host.setTool(def.id));
-    toolBar.append(b);
+    b.addEventListener('click', () => {
+      showMore(false);
+      host.setTool(def.id);
+    });
+    if (extra) {
+      b.setAttribute('role', 'menuitem');
+      moreMenu.append(b);
+    } else {
+      toolBar.append(b);
+      if (hasMore && def.id === 'rect') toolBar.append(moreBtn);
+    }
     toolButtons.set(def.id, b);
   }
+  if (hasMore) {
+    moreBtn.addEventListener('click', () => showMore(moreMenu.hasAttribute('hidden')));
+    moreBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') showMore(false);
+    });
+    moreMenu.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      showMore(false);
+      moreBtn.focus();
+    });
+    // a press anywhere else on the board closes the menu
+    root.addEventListener('pointerdown', (e) => {
+      const t = e.target as Node;
+      if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
+    });
+    root.append(moreMenu);
+  }
+  // an image comes from a file; Fix turns the newest stroke (or the selected ones) into a clean shape
+  const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', hidden: '', 'aria-label': 'Choose an image' });
+  const imageBtn = h('button', { type: 'button', title: 'Add an image (or paste one)', 'data-action': 'image' }, 'Image');
+  imageBtn.addEventListener('click', () => fileInput.click());
+  const fixBtn = h('button', { type: 'button', title: 'Fix a rough shape: line, circle, polygon or arrow (or hold the pen still for half a second)', 'data-action': 'fix' }, 'Fix');
+  const note = h('div', { class: 'ib-fixed', role: 'status', hidden: '' });
+  let noteTimer = 0;
+  const say = (text: string): void => {
+    note.textContent = text;
+    note.hidden = false;
+    window.clearTimeout(noteTimer);
+    noteTimer = window.setTimeout(() => {
+      note.hidden = true;
+    }, 2200);
+  };
+  const viewCentre = (): { x: number; y: number } => {
+    const { w, h: height } = sizeOf();
+    const p = core.camera?.toPage(w / 2, height / 2);
+    return p ?? { x: 0, y: 0 };
+  };
+  const addImageBytes = (bytes: Uint8Array, at: { x: number; y: number }): BoardResult<undefined> => {
+    const added = addImage(core, bytes, { at });
+    if (!added.ok) {
+      options.onError?.(added);
+      say(added.message);
+      return added;
+    }
+    core.selection.set([added.value.id]);
+    host.setTool('select');
+    loop.request();
+    return ok(undefined);
+  };
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file === undefined) return;
+    void file.arrayBuffer().then((buf) => addImageBytes(new Uint8Array(buf), viewCentre()));
+  });
+  fixBtn.addEventListener('click', () => {
+    const fixed = fixStrokes(core, strokesToFix(core));
+    if (fixed.ok && fixed.value.length > 0) core.selection.set(fixed.value);
+    else say(fixed.ok ? 'No clean shape fits that stroke.' : fixed.message);
+    loop.request();
+  });
+  root.append(note, fileInput);
   const undoBtn = h('button', { type: 'button', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo' }, '↶');
   const redoBtn = h('button', { type: 'button', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo' }, '↷');
   undoBtn.addEventListener('click', () => {
@@ -327,7 +484,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     core.history.redo();
     loop.request();
   });
-  toolBar.append(h('span', { class: 'ib-sep' }), undoBtn, redoBtn);
+  toolBar.append(h('span', { class: 'ib-sep' }), imageBtn, fixBtn, h('span', { class: 'ib-sep' }), undoBtn, redoBtn);
   const syncHistory = (): void => {
     undoBtn.disabled = !core.history.canUndo;
     redoBtn.disabled = !core.history.canRedo;
@@ -377,17 +534,281 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
         styles.eraser.radius = Number(size.value);
       });
       kids.push(size);
+    } else if (shapeToolIds.has(tool) || (tool === 'select' && core.selection.size > 0)) {
+      kids.push(...shapeStyleControls());
     }
     styleBar.replaceChildren(...kids);
     styleBar.hidden = kids.length === 0;
     for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(id === tool));
-    surface.style.cursor = tool === 'hand' ? 'grab' : 'crosshair';
+    moreBtn.setAttribute('aria-pressed', String(MORE_SHAPES.includes(tool)));
+    surface.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
+  };
+
+  /** Colour, fill, dash, size and font: they set what new shapes are made with and change the selected shapes. */
+  const shapeStyleControls = (): (Node | string)[] => {
+    const st = styles.shape;
+    const kids: (Node | string)[] = [];
+    const apply = (patch: StylePatch): void => {
+      styles.shape = {
+        ...styles.shape,
+        ...(patch.color !== undefined ? { color: patch.color } : {}),
+        ...(patch.fill !== undefined ? { fill: patch.fill } : {}),
+        ...(patch.dash !== undefined ? { dash: patch.dash } : {}),
+        ...(patch.size !== undefined ? { size: patch.size } : {}),
+        ...(patch.font !== undefined ? { font: patch.font } : {}),
+      };
+      if (host.tool === 'select' && core.selection.size > 0) styleShapes(core, core.selection.ids, patch);
+      renderStyle();
+      loop.request();
+    };
+    for (const color of SHAPE_COLORS) {
+      const sw = h('button', { type: 'button', class: 'ib-swatch', 'data-style': 'color', 'aria-label': `Colour ${color}`, 'aria-pressed': String(st.color === color), style: `background:${color}` });
+      sw.addEventListener('click', () => apply({ color }));
+      kids.push(sw);
+    }
+    kids.push(h('span', { class: 'ib-sep' }));
+    for (const fill of FILL_COLORS) {
+      const sw = h('button', {
+        type: 'button',
+        class: fill === 'none' ? 'ib-swatch ib-swatch-none' : 'ib-swatch',
+        'data-style': 'fill',
+        'aria-label': fill === 'none' ? 'No fill' : `Fill ${fill}`,
+        'aria-pressed': String(st.fill === fill),
+        ...(fill === 'none' ? {} : { style: `background:${fill}` }),
+      });
+      sw.addEventListener('click', () => apply({ fill }));
+      kids.push(sw);
+    }
+    kids.push(h('span', { class: 'ib-sep' }));
+    const dash = h('select', { 'aria-label': 'Dash', 'data-style': 'dash' });
+    for (const d of DASHES) dash.append(h('option', { value: d }, d));
+    dash.value = st.dash;
+    dash.addEventListener('change', () => apply({ dash: dash.value as Dash }));
+    kids.push(dash);
+    for (const [label, size] of SIZE_STEPS) {
+      const b = h('button', { type: 'button', 'data-style': 'size', title: `Size ${label}`, 'aria-pressed': String(st.size === size) }, label);
+      b.addEventListener('click', () => apply({ size }));
+      kids.push(b);
+    }
+    const font = h('select', { 'aria-label': 'Font', 'data-style': 'font' });
+    for (const f of FONT_FAMILIES) font.append(h('option', { value: f }, FONT_LABELS[f]));
+    font.value = st.font;
+    font.addEventListener('change', () => apply({ font: font.value as FontFamily }));
+    kids.push(font);
+    return kids;
   };
   host.onTool(() => {
     renderStyle();
     loop.request();
   });
   renderStyle();
+
+  // ---- what to do with the selection
+  const actionBar = h('div', { class: 'ib-bar ib-actions', 'aria-label': 'Selection' });
+  actionBar.hidden = true;
+  root.append(actionBar);
+  const act = (label: string, title: string, run: () => void): HTMLButtonElement => {
+    const b = h('button', { type: 'button', title, 'data-action': label.toLowerCase() }, label);
+    b.addEventListener('click', () => {
+      run();
+      loop.request();
+    });
+    return b;
+  };
+  const menu = (label: string, choices: readonly (readonly [string, () => void])[]): HTMLSelectElement => {
+    const sel = h('select', { 'aria-label': label, 'data-action': label.toLowerCase() }, h('option', { value: '' }, label));
+    choices.forEach(([name], i) => sel.append(h('option', { value: String(i) }, name)));
+    sel.addEventListener('change', () => {
+      const pick = choices[Number(sel.value)];
+      sel.value = '';
+      if (pick !== undefined) pick[1]();
+      loop.request();
+    });
+    return sel;
+  };
+  const ids = (): readonly string[] => core.selection.ids;
+  const align = (how: AlignHow): void => void alignShapes(core, ids(), how);
+  const renderActions = (): void => {
+    actionBar.hidden = core.selection.size === 0 || editor.state !== 'closed';
+  };
+  actionBar.append(
+    act('Duplicate', 'Duplicate (Ctrl+D)', () => {
+      const copies = pasteData(core, copySelectionData(), undefined);
+      if (copies.ok) core.selection.set(copies.value);
+    }),
+    act('Group', 'Group (Ctrl+G)', () => {
+      const g = groupShapes(core, ids());
+      if (g.ok) core.selection.set(g.value);
+    }),
+    act('Ungroup', 'Ungroup (Ctrl+Shift+G)', () => {
+      const g = ungroupShapes(core, ids());
+      if (g.ok) core.selection.set(g.value);
+    }),
+    act('Lock', 'Lock or unlock', () => void setLocked(core, ids())),
+    act('Flip H', 'Flip left to right', () => void flipShapes(core, ids(), 'x')),
+    act('Flip V', 'Flip top to bottom', () => void flipShapes(core, ids(), 'y')),
+    act('Front', 'Bring to front (Ctrl+])', () => void orderShapes(core, ids(), 'front')),
+    act('Back', 'Send to back (Ctrl+[)', () => void orderShapes(core, ids(), 'back')),
+    menu('Align', [
+      ['Left', () => align('left')],
+      ['Centre', () => align('centerX')],
+      ['Right', () => align('right')],
+      ['Top', () => align('top')],
+      ['Middle', () => align('middleY')],
+      ['Bottom', () => align('bottom')],
+    ]),
+    menu('Distribute', [
+      ['Horizontally', () => void distributeShapes(core, ids(), 'x')],
+      ['Vertically', () => void distributeShapes(core, ids(), 'y')],
+    ]),
+    act('Delete', 'Delete (Delete)', () => {
+      const going = [...ids()];
+      core.selection.clear();
+      deleteShapes(core, going);
+    }),
+  );
+  function copySelectionData(): Parameters<typeof pasteData>[1] {
+    const data = copySelection(core, ids());
+    return data.ok ? data.value : { shapes: [], bindings: [], assets: [] };
+  }
+
+  // ---- typing in a shape: a text field over it, the core keeps the text
+  const field = h('textarea', { class: 'ib-edit', 'aria-label': 'Edit text', spellcheck: 'false', rows: '1' });
+  field.hidden = true;
+  root.append(field);
+  const lineCount = (text: string): number => text.split('\n').length;
+  function placeField(): void {
+    if (editor.state === 'closed') return;
+    const camera = core.camera;
+    const r = core.store.get(editor.shapeId);
+    const shape = r !== undefined && r.id.startsWith('shape:') ? (r as ShapeRecord) : undefined;
+    const g = shape === undefined ? undefined : shapeGeometry(shape, core.store.kinds);
+    if (camera === undefined || shape === undefined || g === undefined) return;
+    const p = shape.props as Record<string, unknown>;
+    const zoom = camera.zoom;
+    let px: number;
+    let family: FontFamily = 'sans';
+    let align: string = 'center';
+    let bg = '#ffffff';
+    let box = g.box;
+    let rotate = shape.rotation;
+    if (shape.kind === 'text') {
+      px = p['size'] as number;
+      family = p['font'] as FontFamily;
+      align = p['align'] === 'center' ? 'center' : p['align'] === 'end' ? 'right' : 'left';
+    } else if (shape.kind === 'sticky') {
+      px = p['size'] as number;
+      family = p['font'] as FontFamily;
+      align = 'left';
+      bg = p['color'] as string;
+    } else if (shape.kind === 'frame') {
+      px = 14;
+      box = { minX: 0, minY: -26, maxX: Math.max(160, Math.min(g.box.maxX, 320)), maxY: -2 };
+      align = 'left';
+      rotate = 0;
+    } else {
+      px = 18;
+      family = (p['font'] as FontFamily | undefined) ?? 'sans';
+    }
+    const screenPx = px * zoom;
+    const centre = g.toPage((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2);
+    const bw = Math.max(70, (box.maxX - box.minX) * zoom);
+    const bh = Math.max(screenPx * 1.3 + 12, (box.maxY - box.minY) * zoom);
+    const st = field.style;
+    st.left = `${(centre.x - camera.x) * zoom - bw / 2}px`;
+    st.top = `${(centre.y - camera.y) * zoom - bh / 2}px`;
+    st.width = `${bw}px`;
+    st.height = `${bh}px`;
+    st.font = cssFontFor('text', family, screenPx);
+    st.lineHeight = '1.3';
+    st.textAlign = align;
+    st.background = bg;
+    st.transform = rotate === 0 ? '' : `rotate(${rotate}rad)`;
+    const boxLabel = shape.kind !== 'text' && shape.kind !== 'sticky' && shape.kind !== 'frame';
+    st.paddingTop = boxLabel ? `${Math.max(4, (bh - lineCount(field.value) * screenPx * 1.3) / 2)}px` : '4px';
+  }
+  const openField = (): void => {
+    field.value = editor.text;
+    field.hidden = false;
+    renderActions();
+    placeField();
+    field.focus({ preventScroll: true });
+    field.setSelectionRange(field.value.length, field.value.length);
+  };
+  const closeField = (): void => {
+    field.hidden = true;
+    renderActions();
+    renderStyle();
+    surface.focus({ preventScroll: true });
+    loop.request();
+  };
+  const stopEditor = editor.on((open) => (open ? openField() : closeField()));
+  field.addEventListener('input', () => {
+    editor.set(field.value, field.selectionStart, field.selectionEnd);
+    placeField();
+  });
+  field.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+      e.preventDefault();
+      editor.commit();
+    }
+  });
+  field.addEventListener('compositionstart', () => void editor.compose());
+  field.addEventListener('compositionend', () => void editor.endCompose());
+  field.addEventListener('blur', () => {
+    if (editor.state !== 'closed') editor.commit();
+  });
+
+  // ---- the system clipboard: a copy is board JSON with a type tag, so it moves between boards
+  let pointer = { x: 0, y: 0 };
+  const pasteAt = (): { x: number; y: number } => {
+    const p = core.camera?.toPage(pointer.x, pointer.y);
+    return p ?? viewCentre();
+  };
+  const copied = (e: ClipboardEvent, cut: boolean): void => {
+    if (editor.state !== 'closed' || e.target === field || core.selection.size === 0) return;
+    const data = copySelection(core, core.selection.ids);
+    if (!data.ok) return;
+    const text = clipboardText(core, data.value);
+    if (!text.ok) return;
+    e.clipboardData?.setData('text/plain', text.value);
+    e.preventDefault();
+    if (cut) {
+      const going = [...core.selection.ids];
+      core.selection.clear();
+      deleteShapes(core, going);
+    }
+    loop.request();
+  };
+  const onCopy = (e: ClipboardEvent): void => copied(e, false);
+  const onCut = (e: ClipboardEvent): void => copied(e, true);
+  const onPaste = (e: ClipboardEvent): void => {
+    if (editor.state !== 'closed' || e.target === field) return;
+    const clip = e.clipboardData;
+    if (clip === null) return;
+    const picture = Array.from(clip.files).find((f) => f.type.startsWith('image/'));
+    e.preventDefault();
+    if (picture !== undefined) {
+      const at = pasteAt();
+      void picture.arrayBuffer().then((buf) => addImageBytes(new Uint8Array(buf), at));
+      return;
+    }
+    const text = clip.getData('text/plain');
+    const made = isBoardClipboard(text) ? readClipboardText(core, text) : undefined;
+    const pasted = made !== undefined && !made.ok ? made : pasteAny(core, text, pasteAt());
+    if (!pasted.ok) {
+      options.onError?.(pasted);
+      say(pasted.message);
+      return;
+    }
+    if (pasted.value.length > 0) core.selection.set(pasted.value);
+    host.setTool('select');
+    loop.request();
+  };
+  root.addEventListener('copy', onCopy);
+  root.addEventListener('cut', onCut);
+  root.addEventListener('paste', onPaste);
 
   // ---- page bar
   const pagesState = new StateMachine(PAGEBAR_MACHINE, 'closed');
@@ -459,6 +880,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       loop.runNow(now);
     },
     requestFrame: () => loop.request(),
+    fix: () => {
+      const fixed = fixStrokes(core, strokesToFix(core));
+      if (fixed.ok && fixed.value.length > 0) core.selection.set(fixed.value);
+      loop.request();
+      return fixed;
+    },
+    insertImage: (bytes) => addImageBytes(bytes, viewCentre()),
     resize: () => {
       input.measure();
       loop.request();
@@ -481,6 +909,12 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       stopPages();
       stopSelection();
       stopHistory();
+      stopEditor();
+      images.dispose();
+      window.clearTimeout(noteTimer);
+      root.removeEventListener('copy', onCopy);
+      root.removeEventListener('cut', onCut);
+      root.removeEventListener('paste', onPaste);
       root.removeEventListener('keydown', onKeyEscape);
       painter.dispose();
       root.remove();

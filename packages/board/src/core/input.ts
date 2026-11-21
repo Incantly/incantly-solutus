@@ -16,6 +16,11 @@ export const BUTTON_BARREL = 2;
 export const BUTTON_MIDDLE = 4;
 export const BUTTON_ERASER = 32;
 
+/** `InputSample.modifiers`: bit 1 Shift, 2 Alt, 4 Ctrl or Cmd. */
+export const MOD_SHIFT = 1;
+export const MOD_ALT = 2;
+export const MOD_MOD = 4;
+
 /**
  * One pen, touch or mouse sample in screen pixels. The adapter reuses one object for every event, so a consumer reads
  * it during the call and copies what it keeps.
@@ -38,6 +43,8 @@ export interface InputSample {
   readonly time: number;
   /** A guess of a future sample; never stored. */
   readonly predicted: boolean;
+  /** The keys held while the pointer moved: `MOD_SHIFT`, `MOD_ALT`, `MOD_MOD` (0 or absent for none). */
+  readonly modifiers?: number;
 }
 
 /** A key going down or up; `mod` is Ctrl or Cmd. */

@@ -12,8 +12,8 @@ import { TILE_PX, tileBox } from '../core/draw';
 import type { Tile, TileContent } from '../core/draw';
 import { boardError, DONE, ok } from '../core/errors';
 import type { BoardResult } from '../core/errors';
-import { TILE_GUTTER, TILE_SIZE } from './painter-2d';
-import type { TileRaster } from './painter-2d';
+import { TILE_GUTTER, TILE_SIZE, drawItems2D } from './painter-2d';
+import type { ImageLookup, TileRaster } from './painter-2d';
 
 const INK_VERTEX = [
   '#version 300 es',
@@ -67,6 +67,7 @@ function tryContext(canvas: HTMLCanvasElement): WebGL2RenderingContext | null {
 }
 
 export class GlRaster implements TileRaster {
+  readonly #gl: WebGL2RenderingContext;
   readonly #backend: WebGL2Backend;
   readonly #ink: Program;
   readonly #quad: Program;
@@ -77,12 +78,16 @@ export class GlRaster implements TileRaster {
   #screen: Target | null = null;
   #devW = 1;
   #devH = 1;
+  /** A tile with shapes in it is drawn on this canvas with Canvas 2D, then copied into the tile's texture. */
+  #paper: HTMLCanvasElement | null = null;
+  #images: ImageLookup = () => null;
   #vbuf = new Float32Array(1024 * INK_FLOATS);
   #ibuf = new Uint32Array(3072);
   /** Draw calls of the last frame, for the painter's statistics. */
   drawCalls = 0;
 
-  private constructor(backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target) {
+  private constructor(gl: WebGL2RenderingContext, backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target) {
+    this.#gl = gl;
     this.#backend = backend;
     this.#ink = ink;
     this.#quad = quad;
@@ -109,19 +114,69 @@ export class GlRaster implements TileRaster {
     if (!quadArena.ok) return failed('the tile buffer');
     const scratch = backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 4, depth: true, float: false });
     if (!scratch.ok) return failed('the tile target');
-    return ok(new GlRaster(backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value));
+    return ok(new GlRaster(gl, backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value));
   }
 
   get backend(): GpuBackend {
     return this.#backend;
   }
 
-  render(tile: Tile, content: TileContent): BoardResult<undefined> {
+  setImages(lookup: ImageLookup): void {
+    this.#images = lookup;
+  }
+
+  /** A tile's target, made when it has none. */
+  #targetOf(tile: Tile): BoardResult<Target> {
     if (tile.handle === null) {
       const made = this.#backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 1, depth: false, float: false });
       if (!made.ok) return failed('a tile target');
       tile.handle = made.value;
     }
+    return ok(tile.handle as Target);
+  }
+
+  /**
+   * A tile that holds shapes (vector parts, text, images) is drawn with Canvas 2D and copied into the tile's texture,
+   * rows flipped and colours premultiplied as the tile quads expect. Tiles of strokes only stay on the GPU.
+   */
+  #renderVia2D(tile: Tile, content: TileContent): BoardResult<undefined> {
+    const target = this.#targetOf(tile);
+    if (!target.ok) return target;
+    const texture = (target.value as unknown as { colorTex?: WebGLTexture }).colorTex;
+    if (texture === undefined) return failed('a tile texture');
+    let paper = this.#paper;
+    if (paper === null) {
+      paper = document.createElement('canvas');
+      paper.width = TILE_SIZE;
+      paper.height = TILE_SIZE;
+      this.#paper = paper;
+    }
+    const ctx = paper.getContext('2d');
+    if (ctx === null) return failed('a tile canvas');
+    const scale = Math.pow(2, tile.k);
+    const box = tileBox(tile.k, tile.tx, tile.ty);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+    drawItems2D(ctx, content.items, scale, box.minX - TILE_GUTTER / scale, box.minY - TILE_GUTTER / scale, this.#images);
+    const gl = this.#gl;
+    try {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, paper);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    } catch {
+      return failed('copying a tile');
+    }
+    return DONE;
+  }
+
+  render(tile: Tile, content: TileContent): BoardResult<undefined> {
+    if (content.items.some((i) => i.k === 'shape')) return this.#renderVia2D(tile, content);
+    const own = this.#targetOf(tile);
+    if (!own.ok) return own;
     const scale = Math.pow(2, tile.k);
     const box = tileBox(tile.k, tile.tx, tile.ty);
     const x0 = box.minX - TILE_GUTTER / scale;
@@ -138,7 +193,7 @@ export class GlRaster implements TileRaster {
     const maxIndices = Math.floor(INK_ARENA_BYTES / 8) - 3;
     for (let j = 0; j < n; j++) {
       const item = items[j];
-      if (item === undefined) continue;
+      if (item === undefined || item.k !== 'ink') continue;
       const verts = item.outline.vertices;
       const idx = item.outline.indices;
       const vn = verts.length / 2;
@@ -154,10 +209,15 @@ export class GlRaster implements TileRaster {
       const ox = item.ox - x0;
       const oy = item.oy - y0;
       const vb = this.#vbuf;
+      // a turned stroke: its points move about the pivot before they go to the page
+      const cos = item.rot === 0 ? 1 : Math.cos(item.rot);
+      const sin = item.rot === 0 ? 0 : Math.sin(item.rot);
       for (let v = 0; v < vn; v++) {
         const at = (vcount + v) * INK_FLOATS;
-        vb[at] = (verts[v * 2] as number) + ox;
-        vb[at + 1] = (verts[v * 2 + 1] as number) + oy;
+        const vx = verts[v * 2] as number;
+        const vy = verts[v * 2 + 1] as number;
+        vb[at] = (item.rot === 0 ? vx : item.px + (vx - item.px) * cos - (vy - item.py) * sin) + ox;
+        vb[at + 1] = (item.rot === 0 ? vy : item.py + (vx - item.px) * sin + (vy - item.py) * cos) + oy;
         vb[at + 2] = z;
         vb[at + 3] = item.r;
         vb[at + 4] = item.g;

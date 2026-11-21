@@ -12,11 +12,12 @@ import { ok } from './errors';
 import { History } from './history';
 import { LiveStroke } from './ink/live';
 import { OutlineCache } from './ink/outline';
-import { inkKind } from './kinds/ink';
 import { KindRegistry } from './kinds/def';
+import { registerBuiltIns } from './kinds/builtin';
 import { PageIndex } from './page-index';
 import { Pages } from './pages';
 import { Selection } from './selection';
+import { TextEditor } from './text-editor';
 import { Store } from './store';
 import type { Limits } from './types';
 
@@ -28,9 +29,9 @@ export interface BoardCoreOptions {
   readonly onError?: (error: BoardError) => void;
 }
 
-/** Registers the kinds this build draws; a kind that is already there is left. */
+/** Registers the kinds this build draws (ink and the shapes of round 3); a kind that is already there is left. */
 export function registerBuiltInKinds(kinds: KindRegistry): void {
-  if (!kinds.has(inkKind.kind)) kinds.register(inkKind);
+  registerBuiltIns(kinds);
 }
 
 export class BoardCore {
@@ -40,6 +41,8 @@ export class BoardCore {
   readonly history: History;
   readonly index: PageIndex;
   readonly selection = new Selection();
+  /** The text being typed into a shape (B21). */
+  readonly editor: TextEditor;
   readonly outlines = new OutlineCache();
   readonly drawList: DrawList;
   /** The stroke being drawn; the pen tools write to it and the painter reads it. */
@@ -50,6 +53,7 @@ export class BoardCore {
     this.pages = new Pages(store);
     this.cameras = new Cameras(store);
     this.history = new History(store);
+    this.editor = new TextEditor(store, this.history);
     this.index = new PageIndex(store, this.pages);
     this.drawList = new DrawList(this.index, this.outlines);
   }

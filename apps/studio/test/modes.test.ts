@@ -192,7 +192,28 @@ describe('the Board app shows the board (app-modes ui 2 Board; board design 15)'
   it('the board has its tools, a page bar with an add button, and undo and redo', () => {
     mount('notes');
     const board = m.board.element;
-    expect([...board.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool'])).toEqual(['pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand']);
+    // docs/features/board/ui.md Layout: Select, Hand, Pen, Highlighter, Eraser, Laser, Lasso, then Rect, Ellipse, Arrow, Line, Text, Sticky, Frame
+    // (Image, Figure and Ask come in later rounds). Triangle, Diamond and Star are in the "More shapes" menu of the rectangle's group (round 3, BR-30).
+    const toolbar = board.querySelector('[role="toolbar"]') as HTMLElement;
+    const inBar = [...toolbar.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool']);
+    const documented = ['select', 'hand', 'pen', 'highlighter', 'eraser', 'laser', 'lasso', 'rect', 'ellipse', 'arrow', 'line', 'text', 'sticky', 'frame'];
+    expect(inBar).toEqual(documented);
+    const more = board.querySelector('button[aria-label="More shapes"]') as HTMLButtonElement;
+    const menu = board.querySelector('[role="menu"][aria-label="More shapes"]') as HTMLElement;
+    expect(toolbar.contains(menu)).toBe(false);
+    expect(toolbar.querySelector('[data-tool="rect"]')?.nextElementSibling).toBe(more);
+    expect(menu.hidden).toBe(true);
+    expect([...menu.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool'])).toEqual(['triangle', 'diamond', 'star']);
+    more.click();
+    expect(menu.hidden).toBe(false);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    (menu.querySelector('[data-tool="star"]') as HTMLButtonElement).click();
+    expect(menu.hidden).toBe(true);
+    expect(m.board.view()?.host.tool).toBe('star');
+    expect(more.getAttribute('aria-pressed')).toBe('true');
+    // one row that scrolls on a phone: the strip never wraps (round 3, BR-30; the screenshot shows it on a laptop)
+    const css = document.getElementById('incantly-board-view-style')?.textContent ?? '';
+    expect(css).toMatch(/\.ib-tools\{[^}]*flex-wrap:nowrap[^}]*overflow-x:auto/);
     expect(board.querySelector('button[aria-label="Add a page"]')).not.toBeNull();
     expect(board.querySelector('button[aria-label="Undo"]')).not.toBeNull();
     expect(board.querySelector('button[aria-label="Redo"]')).not.toBeNull();

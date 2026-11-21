@@ -3,7 +3,7 @@
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
 import type { AppModeId, StorageLike } from '@incantly/modes';
-import { mountBoardView } from '@incantly/board';
+import { boardTools, mountBoardView } from '@incantly/board';
 import type { BoardView } from '@incantly/board';
 import { mountAppModes } from './modes/app';
 import { mountSoundUi } from './sound-ui';
@@ -538,7 +538,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     open: (): void => {
       boardHost.hidden = false;
       if (boardRef.current === undefined) {
-        const made = mountBoardView({ container: boardHost, onError: (e) => say(e.message) });
+        const made = mountBoardView({ container: boardHost, tools: boardTools, onError: (e) => say(e.message) });
         if (made.ok) boardRef.current = made.value;
         else say(made.message);
       } else {

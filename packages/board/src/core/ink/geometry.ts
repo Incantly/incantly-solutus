@@ -3,6 +3,7 @@
  * eraser passed, and how many of its points a loop encloses. Plain numbers in, plain numbers out; no DOM.
  */
 import { pointInPolygon } from '../index-grid';
+import { rotateAbout } from '../math2d';
 import type { InkProps } from '../kinds/ink';
 import type { Bounds, ShapeRecord } from '../types';
 
@@ -40,6 +41,68 @@ export function inkBounds(shape: ShapeRecord<string, InkProps>): Bounds {
   return box;
 }
 
+/**
+ * A stroke turns about the middle of its points' box (BR-21; `core/geometry.ts`): its page point is
+ * `(x, y) + c + R(rotation) (l - c)` for a point `l` of its own coordinates. These find `c` and move points between the
+ * two, so the eraser and the lasso read a turned stroke where it is drawn.
+ */
+const pivots = new WeakMap<object, { readonly x: number; readonly y: number }>();
+
+/** The centre of the stroke's points' box, in its own coordinates. */
+export function inkPivot(shape: ShapeRecord<string, InkProps>): { readonly x: number; readonly y: number } {
+  const known = pivots.get(shape);
+  if (known !== undefined) return known;
+  const { points, stride } = shape.props;
+  const n = Math.floor(points.length / stride);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = points[i * stride] as number;
+    const y = points[i * stride + 1] as number;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const c = n === 0 ? { x: 0, y: 0 } : { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  pivots.set(shape, c);
+  return c;
+}
+
+/** A page point in the stroke's own coordinates (the point itself, less the origin, when the stroke is not turned). */
+export function inkToLocal(shape: ShapeRecord<string, InkProps>, px: number, py: number): { x: number; y: number } {
+  const dx = px - shape.x;
+  const dy = py - shape.y;
+  if (shape.rotation === 0) return { x: dx, y: dy };
+  const c = inkPivot(shape);
+  return rotateAbout(dx, dy, c.x, c.y, -shape.rotation);
+}
+
+/** A stroke's point (its own coordinates) on the page. */
+export function inkToPage(shape: ShapeRecord<string, InkProps>, lx: number, ly: number): { x: number; y: number } {
+  if (shape.rotation === 0) return { x: shape.x + lx, y: shape.y + ly };
+  const c = inkPivot(shape);
+  const r = rotateAbout(lx, ly, c.x, c.y, shape.rotation);
+  return { x: shape.x + r.x, y: shape.y + r.y };
+}
+
+/** The same stroke with its turn written into its points (rotation 0), so a piece cut from it keeps its place. */
+export function bakeInkRotation(shape: ShapeRecord<string, InkProps>): ShapeRecord<string, InkProps> {
+  if (shape.rotation === 0) return shape;
+  const c = inkPivot(shape);
+  const { points, stride } = shape.props;
+  const out = points.slice();
+  const n = Math.floor(out.length / stride);
+  for (let i = 0; i < n; i++) {
+    const r = rotateAbout(out[i * stride] as number, out[i * stride + 1] as number, c.x, c.y, shape.rotation);
+    out[i * stride] = r.x;
+    out[i * stride + 1] = r.y;
+  }
+  return { ...shape, rotation: 0, props: { ...shape.props, points: out } };
+}
+
 /** The squared distance from the point to the segment `a`-`b`. */
 export function pointSegmentDistSq(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax;
@@ -74,10 +137,12 @@ export function inkTouches(shape: ShapeRecord<string, InkProps>, ax: number, ay:
   const n = Math.floor(points.length / stride);
   const reach = radius + size * 0.5;
   const reach2 = reach * reach;
-  const lax = ax - shape.x;
-  const lay = ay - shape.y;
-  const lbx = bx - shape.x;
-  const lby = by - shape.y;
+  const la = inkToLocal(shape, ax, ay);
+  const lb = inkToLocal(shape, bx, by);
+  const lax = la.x;
+  const lay = la.y;
+  const lbx = lb.x;
+  const lby = lb.y;
   if (n === 1) return pointSegmentDistSq(points[0] as number, points[1] as number, lax, lay, lbx, lby) <= reach2;
   for (let i = 0; i + 1 < n; i++) {
     const x0 = points[i * stride] as number;
@@ -94,7 +159,9 @@ export function inkTouches(shape: ShapeRecord<string, InkProps>, ax: number, ay:
  * points that are left are the pieces (new arrays; the stroke's own array is not written). Returns null when the path
  * touched nothing, an empty list when nothing is left.
  */
-export function cutInk(shape: ShapeRecord<string, InkProps>, ax: number, ay: number, bx: number, by: number, radius: number): Float32Array[] | null {
+export function cutInk(turned: ShapeRecord<string, InkProps>, ax: number, ay: number, bx: number, by: number, radius: number): Float32Array[] | null {
+  // a turned stroke is cut where it is drawn; its pieces have the turn written in and belong to a shape with rotation 0
+  const shape = bakeInkRotation(turned);
   const { points, stride, size } = shape.props;
   const n = Math.floor(points.length / stride);
   const reach = radius + size * 0.5;
@@ -133,7 +200,8 @@ export function pointsInside(shape: ShapeRecord<string, InkProps>, polygon: read
   const n = Math.floor(points.length / stride);
   let inside = 0;
   for (let i = 0; i < n; i++) {
-    if (pointInPolygon(shape.x + (points[i * stride] as number), shape.y + (points[i * stride + 1] as number), polygon)) inside++;
+    const p = inkToPage(shape, points[i * stride] as number, points[i * stride + 1] as number);
+    if (pointInPolygon(p.x, p.y, polygon)) inside++;
   }
   return inside;
 }
@@ -149,7 +217,8 @@ export function mostlyInside(shape: ShapeRecord<string, InkProps>, polygon: read
   let inside = 0;
   let outside = 0;
   for (let i = 0; i < n; i++) {
-    if (pointInPolygon(shape.x + (points[i * stride] as number), shape.y + (points[i * stride + 1] as number), polygon)) {
+    const p = inkToPage(shape, points[i * stride] as number, points[i * stride + 1] as number);
+    if (pointInPolygon(p.x, p.y, polygon)) {
       inside++;
       if (inside * 2 > n) return true;
     } else {

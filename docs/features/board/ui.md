@@ -6,7 +6,7 @@ What a user sees and does. Every part below can be changed or removed by the hos
 
 | Part | Where | Default |
 |---|---|---|
-| Toolbar | Bottom centre | Select, Hand, Pen, Highlighter, Eraser, Laser, Lasso · Rect, Ellipse, Arrow, Line, Text, Sticky, Frame, Image · Figure, Ask |
+| Toolbar | Bottom centre | Select, Hand, Pen, Highlighter, Eraser, Laser, Lasso · Rect (with a More shapes menu: Triangle, Diamond, Star), Ellipse, Arrow, Line, Text, Sticky, Frame, Image · Figure, Ask |
 | Style bar | Right, when a tool or a selection has styles | Colour, size, nib, fill, dash, opacity, font |
 | Page bar | Top left | Current page name, a list of pages, add page |
 | Zoom bar | Bottom right | −, the zoom as a number (click for 100%), +, zoom to fit, zoom to selection |
@@ -14,7 +14,7 @@ What a user sees and does. Every part below can be changed or removed by the hos
 | Context menu | Right-click or long press | Depends on the target |
 | Agent panel | Right, when an agent is set | The conversation with the talking agent |
 
-The canvas fills the rest. On a phone the toolbar is a single scrolling row and the style bar opens from it.
+The canvas fills the rest. The toolbar is one row that never wraps: it fits a laptop, and on a phone it scrolls sideways and the style bar opens from it. The More shapes menu is the small arrow after the Rect button; it opens above the toolbar, closes when a shape is chosen, on Esc or on a press elsewhere, and its arrow shows as pressed while one of its shapes is the tool.
 
 ## Pen
 
@@ -31,6 +31,7 @@ The canvas fills the rest. On a phone the toolbar is a single scrolling row and 
 | Select, Hand | `v`, `h` (hold Space for the hand) |
 | Pen, Highlighter, Eraser, Laser, Lasso | `p`, `shift+p`, `e`, `k`, `l` |
 | Rect, Ellipse, Arrow, Line, Text, Sticky, Frame | `r`, `o`, `a`, `shift+l`, `t`, `n`, `f` |
+| Triangle, Diamond, Star (More shapes) | `shift+t`, `d`, `shift+s` |
 | Figure, Ask | `g`, `?` |
 | Undo, Redo | `mod+z`, `mod+shift+z` and `mod+y` |
 | Copy, Cut, Paste, Duplicate | `mod+c`, `mod+x`, `mod+v`, `mod+d` |
@@ -46,10 +47,12 @@ The canvas fills the rest. On a phone the toolbar is a single scrolling row and 
 
 - Drag on the canvas with a shape tool to make the shape; click makes the default size.
 - Hold Shift while drawing a shape for a square or a circle; Alt draws from the centre.
-- A selected shape shows 8 handles to resize, one to rotate, and its own handles (an arrow's bend, a line's points).
+- A selected shape shows 8 handles to resize, one to rotate, and its own handles (an arrow's bend, a line's points). A line or an arrow alone shows only its own handles; select it with another shape and the box with its 8 handles and the rotate handle shows.
+- Esc or a cancelled touch in the middle of a drag, a resize, a turn or an arrow-end drag puts everything back as it was, the bindings an arrow end dropped included, and leaves nothing to undo.
+- Bring forward and send back keep the order of the shapes you selected.
 - Moving shows snap lines in the accent colour when edges, centres or gaps line up.
 - Double-click a shape with text (or press Enter) to type in it.
-- Draw a rough circle, line or polygon and keep the pen still for half a second: it turns into a clean shape. Undo brings the ink back.
+- Draw a rough circle, line or polygon and keep the pen still for half a second: it turns into a clean shape (a pentagon or a hexagon stays a pentagon or a hexagon, and a circle stays a circle). Undo brings the ink back.
 
 ## Figure cards
 

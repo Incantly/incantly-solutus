@@ -10,12 +10,12 @@ import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import type { CameraView } from '../core/camera';
 import { TILE_CAP_BYTES, TILE_CAP_BYTES_LOW, TileCache } from '../core/draw';
-import type { BoardPainter, DrawItem, LiveStrokeView, OverlayItems, Tile, TileContent } from '../core/draw';
+import type { BoardPainter, DrawItem, LiveStrokeView, OverlayItems, SelectionView, Tile, TileContent } from '../core/draw';
 import { boardError, DONE } from '../core/errors';
 import type { BoardError, BoardResult } from '../core/errors';
 import { GlRaster } from './painter-gl';
-import { CanvasRaster, fillTriangles, rgbCss } from './painter-2d';
-import type { TileRaster } from './painter-2d';
+import { CanvasRaster, drawItems2D, fillTriangles, rgbCss } from './painter-2d';
+import type { ImageLookup, TileRaster } from './painter-2d';
 
 type BackendState = 'gl' | 'lost' | 'canvas2d';
 type BackendEvent = 'contextLost' | 'contextRestored' | 'fail';
@@ -87,6 +87,8 @@ export class WebPainter implements BoardPainter {
   readonly #live: CanvasRenderingContext2D | null;
   readonly #overlay: CanvasRenderingContext2D | null;
   #raster: TileRaster | null = null;
+  /** Where image shapes get their pictures; handed to every raster the painter opens. */
+  #images: ImageLookup = () => null;
   readonly #shown: Tile[] = [];
   readonly #extra: DrawItem[] = [];
   #tail: LiveStrokeView | null = null;
@@ -128,6 +130,12 @@ export class WebPainter implements BoardPainter {
     }
   }
 
+  /** Sets where the pictures of image shapes come from; tiles that hold images are drawn again by the caller when one arrives. */
+  setImages(lookup: ImageLookup): void {
+    this.#images = lookup;
+    this.#raster?.setImages(lookup);
+  }
+
   /** `gl`, `lost` or `canvas2d`. */
   get backend(): BackendState {
     return this.#backend.state;
@@ -149,6 +157,7 @@ export class WebPainter implements BoardPainter {
       const gl = GlRaster.open(this.#tileCanvas);
       if (gl.ok) {
         this.#raster = gl.value;
+        gl.value.setImages(this.#images);
         const lost = (e: Event): void => {
           e.preventDefault();
           if (this.#backend.send('contextLost')) this.tiles.lose();
@@ -179,6 +188,7 @@ export class WebPainter implements BoardPainter {
     this.#tileCanvas = fresh;
     const r = CanvasRaster.open(fresh);
     this.#raster = r.ok ? r.value : null;
+    if (r.ok) r.value.setImages(this.#images);
     if (this.size.devW > 1 || this.size.devH > 1) this.#applySize();
   }
 
@@ -207,6 +217,7 @@ export class WebPainter implements BoardPainter {
       return;
     }
     this.#raster = gl.value;
+    gl.value.setImages(this.#images);
     this.#backend.send('contextRestored');
     this.tiles.invalidateAll();
     this.#applySize();
@@ -363,12 +374,7 @@ export class WebPainter implements BoardPainter {
     ctx.clearRect(0, 0, this.#overlayCanvas.width, this.#overlayCanvas.height);
     const k = zoom * dpr;
     // items that are in no tile
-    for (const item of this.#extra) {
-      ctx.setTransform(k, 0, 0, k, (item.ox - camX) * k, (item.oy - camY) * k);
-      ctx.globalAlpha = item.a;
-      ctx.fillStyle = rgbCss(item.r, item.g, item.b);
-      fillTriangles(ctx, item.outline.vertices, item.outline.indices, 0, item.outline.indices.length);
-    }
+    drawItems2D(ctx, this.#extra, k, camX, camY, this.#images);
     ctx.globalAlpha = 1;
     // the part of the live stroke that is not final yet, and its predicted tail
     const tail = this.#tail;
@@ -403,6 +409,49 @@ export class WebPainter implements BoardPainter {
     return DONE;
   }
 
+  /** A closed path of page points `[x0, y0, …]` in CSS pixels. */
+  #polygon(ctx: CanvasRenderingContext2D, pts: readonly number[]): void {
+    const { x: camX, y: camY, zoom } = this.frame;
+    ctx.beginPath();
+    for (let i = 0; i + 1 < pts.length; i += 2) {
+      const x = ((pts[i] as number) - camX) * zoom;
+      const y = ((pts[i + 1] as number) - camY) * zoom;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  /** The outline of each selected shape, the frame round them, and the handles at the same size at every zoom. */
+  #drawSelection(ctx: CanvasRenderingContext2D, sel: SelectionView): void {
+    const { x: camX, y: camY, zoom } = this.frame;
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    for (const outline of sel.outlines) {
+      if (outline.length < 6) continue;
+      this.#polygon(ctx, outline);
+      ctx.stroke();
+    }
+    if (sel.frame !== null) {
+      ctx.lineWidth = 1.5;
+      this.#polygon(ctx, sel.frame);
+      ctx.stroke();
+    }
+    for (const h of sel.handles) {
+      const x = (h.x - camX) * zoom;
+      const y = (h.y - camY) * zoom;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (h.kind === 'resize') ctx.rect(x - 4, y - 4, 8, 8);
+      else ctx.arc(x, y, h.kind === 'rotate' ? 5 : 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
   /** Selection, lasso loop, laser trail and the cursor ring, in CSS pixels. */
   #drawChrome(ctx: CanvasRenderingContext2D, overlay: OverlayItems): void {
     const { x: camX, y: camY, zoom } = this.frame;
@@ -420,6 +469,37 @@ export class WebPainter implements BoardPainter {
         ctx.strokeRect(x, y, w, h);
       }
       ctx.setLineDash([]);
+    }
+    const sel = overlay.selected;
+    if (sel !== undefined && sel !== null) this.#drawSelection(ctx, sel);
+    const hint = overlay.hint;
+    if (hint !== undefined && hint !== null && hint.length >= 6) {
+      ctx.strokeStyle = '#16a34a';
+      ctx.lineWidth = 2.5;
+      this.#polygon(ctx, hint);
+      ctx.stroke();
+    }
+    const guides = overlay.guides;
+    if (guides !== undefined && guides.length > 0) {
+      ctx.strokeStyle = '#ec4899';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      for (const g of guides) {
+        ctx.beginPath();
+        ctx.moveTo((g.x0 - camX) * zoom, (g.y0 - camY) * zoom);
+        ctx.lineTo((g.x1 - camX) * zoom, (g.y1 - camY) * zoom);
+        ctx.stroke();
+      }
+    }
+    const marquee = overlay.marquee;
+    if (marquee !== undefined && marquee !== null) {
+      ctx.fillStyle = 'rgba(37,99,235,0.08)';
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 1;
+      const mx = (marquee.minX - camX) * zoom;
+      const my = (marquee.minY - camY) * zoom;
+      ctx.fillRect(mx, my, (marquee.maxX - marquee.minX) * zoom, (marquee.maxY - marquee.minY) * zoom);
+      ctx.strokeRect(mx, my, (marquee.maxX - marquee.minX) * zoom, (marquee.maxY - marquee.minY) * zoom);
     }
     const loop = overlay.loop;
     if (loop !== null && loop.count > 1) {

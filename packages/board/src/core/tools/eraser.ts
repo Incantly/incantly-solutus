@@ -1,11 +1,14 @@
 /**
  * The eraser (design 6.4, docs/state-machines.md B8). Whole mode removes every stroke the eraser's path touches;
  * partial mode cuts a stroke at each segment the path touches and keeps the runs of two or more points as new
- * strokes. A drag is one undo step: its writes share a merge key, and the history is sealed when the pen comes up.
+ * strokes. A drag is one undo step: its writes go through one gesture (`core/edit.ts`, B25), the history is sealed when
+ * the pen comes up, and a cancel puts back everything the drag erased.
  * Locked shapes are never erased. The pen's eraser end picks this tool through the tool host.
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
+import { beginGesture } from '../edit';
+import type { Gesture } from '../edit';
 import { cutInk, inkTouches } from '../ink/geometry';
 import type { InputSample } from '../input';
 import { isInk } from '../geometry';
@@ -25,7 +28,8 @@ class EraserTool implements ToolHandlers {
   readonly #ids: string[] = [];
   #lastX = 0;
   #lastY = 0;
-  #drag = 0;
+  /** What the drag in progress wrote; it begins with the first stroke erased. */
+  readonly #drag: { edit: Gesture | undefined } = { edit: undefined };
 
   constructor(ctx: ToolContext) {
     this.#ctx = ctx;
@@ -38,7 +42,7 @@ class EraserTool implements ToolHandlers {
   onDown(s: InputSample): void {
     const camera = this.#ctx.camera();
     if (camera === undefined || !this.#machine.send('down')) return;
-    this.#drag++;
+    this.#drag.edit = undefined;
     this.#ctx.core.selection.clear();
     const p = camera.toPage(s.x, s.y);
     this.#lastX = p.x;
@@ -65,12 +69,18 @@ class EraserTool implements ToolHandlers {
     if (this.#machine.state !== 'erasing') return;
     this.onMove(s);
     this.#machine.send('up');
+    this.#drag.edit?.commit();
+    this.#drag.edit = undefined;
     this.#ctx.core.history.seal();
     this.#ctx.requestFrame();
   }
 
   onCancel(): void {
-    if (this.#machine.send('cancel')) this.#ctx.core.history.seal();
+    if (this.#machine.send('cancel')) {
+      this.#drag.edit?.cancel();
+      this.#drag.edit = undefined;
+      this.#ctx.core.history.seal();
+    }
     this.#ctx.overlay.cursor = null;
     this.#ctx.requestFrame();
   }
@@ -84,7 +94,7 @@ class EraserTool implements ToolHandlers {
   #erase(ax: number, ay: number, bx: number, by: number): void {
     const camera = this.#ctx.camera();
     if (camera === undefined) return;
-    const { store, index } = this.#ctx.core;
+    const { index } = this.#ctx.core;
     const radius = this.#ctx.styles.eraser.radius / camera.zoom;
     this.#ids.length = 0;
     index.grid.queryBox({ minX: Math.min(ax, bx) - radius, minY: Math.min(ay, by) - radius, maxX: Math.max(ax, bx) + radius, maxY: Math.max(ay, by) + radius }, this.#ids);
@@ -103,20 +113,17 @@ class EraserTool implements ToolHandlers {
     }
     if (hits.length === 0) return;
     // a refused write leaves every stroke as it was; the next move tries again
-    store.change(
-      'user',
-      (tx) => {
-        for (const hit of hits) {
-          const shape = index.shape(hit.id);
-          tx.remove(hit.id);
-          if (hit.pieces === null || shape === undefined || !isInk(shape)) continue;
-          for (const points of hit.pieces) {
-            tx.put({ ...shape, id: tx.newId('shape'), props: { ...shape.props, points }, meta: { ...shape.meta } });
-          }
+    this.#drag.edit ??= beginGesture(this.#ctx.core);
+    this.#drag.edit.write((tx) => {
+      for (const hit of hits) {
+        const shape = index.shape(hit.id);
+        tx.remove(hit.id);
+        if (hit.pieces === null || shape === undefined || !isInk(shape)) continue;
+        for (const points of hit.pieces) {
+          tx.put({ ...shape, id: tx.newId('shape'), rotation: 0, props: { ...shape.props, points }, meta: { ...shape.meta } });
         }
-      },
-      { mergeKey: `erase:${this.#drag}` },
-    );
+      }
+    });
   }
 }
 

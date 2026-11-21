@@ -38,6 +38,26 @@ interface Step {
 
 const DEFAULT_MAX_STEPS = 1000;
 
+/** True when two values are the same number, string or object with the same fields and the same bytes in its typed arrays. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+    if (!ArrayBuffer.isView(a) || !ArrayBuffer.isView(b) || a.constructor !== b.constructor || a.byteLength !== b.byteLength) return false;
+    const x = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    const y = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  const keys = Object.keys(x);
+  if (keys.length !== Object.keys(y).length) return false;
+  for (const k of keys) if (!Object.hasOwn(y, k) || !sameValue(x[k], y[k])) return false;
+  return true;
+}
+
 export type HistoryListener = () => void;
 
 export class History {
@@ -158,9 +178,17 @@ export class History {
     for (const r of diff.added) note(r.id, undefined, r);
     for (const u of diff.updated) note(u.after.id, u.before, u.after);
     for (const r of diff.removed) note(r.id, r, undefined);
-    // a record that was added and removed inside one merged step, or ended as it began, is no part of the step
+    // a record that was added and removed inside one merged step, or ended as it began, is no part of the step; a record
+    // a write put back (a cancelled gesture) is a new object with the same values, so the records this write touched
+    // are compared by value
     for (const [id, entry] of step.entries) {
       if (entry.before === entry.after) step.entries.delete(id);
+    }
+    if (merges) {
+      for (const r of [...diff.added, ...diff.updated.map((u) => u.after)]) {
+        const entry = step.entries.get(r.id);
+        if (entry?.before !== undefined && entry.after !== undefined && sameValue(entry.before, entry.after)) step.entries.delete(r.id);
+      }
     }
     this.#redo.length = 0;
     if (!merges) {

@@ -6,10 +6,12 @@
  */
 import { boardError, ok } from '../errors';
 import type { BoardResult } from '../errors';
+import { inkBounds, pointSegmentDistSq } from '../ink/geometry';
 import { NIBS } from '../ink/outline';
 import type { Nib } from '../ink/outline';
 import type { Stride } from '../ink/samples';
-import type { KindDef } from './def';
+import type { Bounds, ShapeRecord } from '../types';
+import type { KindDef, KindGeometry, StylePatch } from './def';
 
 export interface InkProps {
   readonly points: Float32Array;
@@ -55,6 +57,40 @@ export function parseColor(color: string): readonly [number, number, number, num
 
 const bad = (field: string, message: string): ReturnType<typeof boardError> => boardError('record_invalid', message, { detail: { field } });
 
+/** The extents of a stroke's points, in the shape's own coordinates; the empty box at the origin for none. */
+function pointExtents(p: InkProps): Bounds {
+  const n = Math.floor(p.points.length / p.stride);
+  if (n === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = p.points[i * p.stride] as number;
+    const y = p.points[i * p.stride + 1] as number;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** How far a stroke reaches beyond its points (the widest half width a nib can make, and half a unit); `inkBounds` uses the same. */
+const inkPad = (size: number): number => size * 0.5 * 1.65 + 0.5;
+
+/** A copy of the stroke's points with `map` applied to each `x, y`; pressure and tilt stay. */
+function mapStroke(p: InkProps, map: (x: number, y: number) => readonly [number, number]): Float32Array {
+  const out = p.points.slice();
+  const n = Math.floor(out.length / p.stride);
+  for (let i = 0; i < n; i++) {
+    const [x, y] = map(out[i * p.stride] as number, out[i * p.stride + 1] as number);
+    out[i * p.stride] = x;
+    out[i * p.stride + 1] = y;
+  }
+  return out;
+}
+
 export const inkKind: KindDef<InkProps> = {
   kind: 'ink',
   defaults: INK_DEFAULTS,
@@ -89,4 +125,49 @@ export const inkKind: KindDef<InkProps> = {
     return ok({ points: own, stride, nib: nib as Nib, size, color, opacity });
   },
   points: (props) => props.points.length / props.stride,
+  geometry(shape: ShapeRecord<string, InkProps>): KindGeometry {
+    const page = inkBounds(shape);
+    const { points, stride, size } = shape.props;
+    const n = Math.floor(points.length / stride);
+    const reach = size * 0.5;
+    return {
+      box: { minX: page.minX - shape.x, minY: page.minY - shape.y, maxX: page.maxX - shape.x, maxY: page.maxY - shape.y },
+      pad: 0,
+      hit(x, y, tol) {
+        const r = reach + tol;
+        const r2 = r * r;
+        if (n === 1) return pointSegmentDistSq(x, y, points[0] as number, points[1] as number, points[0] as number, points[1] as number) <= r2;
+        for (let i = 0; i + 1 < n; i++) {
+          if (pointSegmentDistSq(x, y, points[i * stride] as number, points[i * stride + 1] as number, points[(i + 1) * stride] as number, points[(i + 1) * stride + 1] as number) <= r2) return true;
+        }
+        return false;
+      },
+    };
+  },
+  onResize(shape, box): Partial<InkProps> {
+    const p = shape.props;
+    const from = pointExtents(p);
+    const pad = inkPad(p.size);
+    const to: Bounds = {
+      minX: Math.min(box.minX + pad, (box.minX + box.maxX) / 2),
+      minY: Math.min(box.minY + pad, (box.minY + box.maxY) / 2),
+      maxX: Math.max(box.maxX - pad, (box.minX + box.maxX) / 2),
+      maxY: Math.max(box.maxY - pad, (box.minY + box.maxY) / 2),
+    };
+    const fw = from.maxX - from.minX;
+    const fh = from.maxY - from.minY;
+    const sx = fw > 0 ? (to.maxX - to.minX) / fw : 1;
+    const sy = fh > 0 ? (to.maxY - to.minY) / fh : 1;
+    return { points: mapStroke(p, (x, y) => [to.minX + (x - from.minX) * sx, to.minY + (y - from.minY) * sy]) };
+  },
+  applyStyle(_props, style: StylePatch): Partial<InkProps> {
+    return {
+      ...(style.color !== undefined ? { color: style.color } : {}),
+      ...(style.size !== undefined ? { size: Math.min(INK_SIZE_MAX, Math.max(0.5, style.size)) } : {}),
+    };
+  },
+  flip(shape, axis): Partial<InkProps> {
+    const b = pointExtents(shape.props);
+    return { points: mapStroke(shape.props, (x, y) => (axis === 'x' ? [b.minX + b.maxX - x, y] : [x, b.minY + b.maxY - y])) };
+  },
 };

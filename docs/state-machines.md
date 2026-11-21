@@ -1501,7 +1501,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 
 ## board
 
-Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B17 (below); rounds 3 to 5 append theirs (shape tools, figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); rounds 4 and 5 append theirs (figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
 
 Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
 
@@ -1537,7 +1537,7 @@ Three machines and one derived state in round 1: the store transaction (B1), the
 
 - **Where:** `core/history.ts` `History`, `HISTORY_MACHINE`.
 - **States:** `recording` (the history listens to the store and records steps), `undoing` and `redoing` (the history is writing a step back through the store).
-- **Invariants:** a transaction with `history: false` is not a step; a replayed step is not recorded again; any recorded step empties the redo stack; a step with the `mergeKey` of the step on top of the undo stack joins it (the stroke's samples, a drag's moves) and keeps its first `before` and its last `after` per record; `seal()`, `undo` and `redo` end merging; one `undo` or `redo` is one store transaction, so listeners see one diff; a refused replay leaves both stacks as they were; the undo stack holds at most `maxSteps` steps.
+- **Invariants:** a transaction with `history: false` is not a step; a replayed step is not recorded again; any recorded step empties the redo stack; a step with the `mergeKey` of the step on top of the undo stack joins it (the stroke's samples, a drag's moves) and keeps its first `before` and its last `after` per record, and a record that ends a merged step with the same values it began with (a cancelled gesture put it back) is no part of the step, so a step with no record left is dropped; `seal()`, `undo` and `redo` end merging; one `undo` or `redo` is one store transaction, so listeners see one diff; a refused replay leaves both stacks as they were; the undo stack holds at most `maxSteps` steps.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -1644,7 +1644,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 
 - **Where:** `core/tools/eraser.ts` `EraserTool`, `ERASER_MACHINE`.
 - **States:** `idle`, `erasing` (the pointer is down; every move erases along the segment from the last point).
-- **Invariants:** a drag is one undo step (the writes share the merge key `erase:<n>` and `seal()` ends them); the whole mode removes every stroke whose outline meets the eraser's circle; the partial mode cuts a stroke at each of its segments that meets the circle and keeps the runs of 2 or more points as new strokes; locked shapes are never erased; the pen's eraser end picks this tool through B12 for as long as it is used.
+- **Invariants:** a drag is one undo step (the writes go through one gesture, B25, and `seal()` ends them); a cancel puts back every stroke the drag erased or cut, and leaves no undo step; the whole mode removes every stroke whose outline meets the eraser's circle; the partial mode cuts a stroke at each of its segments that meets the circle and keeps the runs of 2 or more points as new strokes; locked shapes are never erased; the pen's eraser end picks this tool through B12 for as long as it is used.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -1652,7 +1652,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 | `idle` | `down` | | `erasing` | erase at the point |
 | `erasing` | `move` | | `erasing` | erase along the segment |
 | `erasing` | `up` | | `idle` | history sealed |
-| `erasing` | `cancel` | | `idle` | history sealed |
+| `erasing` | `cancel` | | `idle` | the gesture is cancelled (what was erased comes back), history sealed |
 
 - **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row. A refused write (a `limit` on the pieces of a cut stroke) leaves the stroke as it was.
 
@@ -1818,6 +1818,136 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 | `again` | `done` | | `queued` | next frame scheduled |
 
 - **Reachable invalid states or transitions:** `run` and `done` in `idle`, and `run` in `running`, have no row.
+
+### Round 3 (branch `feat/board-3`: shapes and editing)
+
+Written before the code of round 3 (`core/tools/select.ts`, `core/tools/shape.ts`, `core/text-editor.ts`, `core/snap.ts`, `core/ink/hold.ts`, `web/images.ts`). Round 3 has no new store or history state: every change a tool makes is a transaction (B1) and an undo step (B2), and a gesture that makes many writes (a drag, a resize, typing in a shape) shares one merge key, so it is one step, sealed when the gesture ends. Data that is not a state sits next to its machine and is named in the invariants: the gesture record of a tool (`gesture`: what was hit, where the pointer went down, the records as they were at the start), the guides of the snapper, the text and the selection range of the editor. Every table refuses at least one move.
+
+### B19. Select tool
+
+- **Where:** `core/tools/select.ts` `SelectTool`, `SELECT_MACHINE`.
+- **States:** `idle`; `pointing` (the pointer is down on a shape or on empty page and has not moved past the slop of 4 screen pixels); `dragging` (the selection moves); `resizing` (one of the 8 resize handles is held); `rotating` (the rotate handle is held); `handling` (a handle of the kind, such as an arrow's end or bend or a line's point, is held); `brushing` (a box is dragged on empty page to select what it meets); `editing` (the text editor of B21 is open on a shape of this board).
+- **Invariants:** what the pointer went down on is in `gesture` (`hit`, `handle`, `start`, `originals`), reset by every `down` and never read in `idle`; a drag, a resize, a rotation and a handle drag write one transaction for each move through one gesture (B25, begun with the first write), and the gesture is committed on `up`, so each press is one undo step; the shapes moved are the selection and everything inside a selected frame or group; a locked shape is selected but never changed; the arrows bound to a changed shape follow it in the same transaction (`core/bindings.ts`); a shape dropped inside a frame is parented to it, one dragged out of its frame is not; the selection is not in the store and is not an undo step; a click on a shape of a group selects the whole group; Shift toggles the shape in the selection; `editing` starts when the text editor opens (a double click on a shape with text, Enter, or a new text shape) and ends when it closes (a click outside, Esc); a `down` while `editing` closes the editor first; the snap guides (B22) are shown only in `dragging` and `resizing`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | the point is not on a handle | `pointing` | the hit shape is selected (Shift toggles) |
+| `idle` | `grabResize` | the point is on a resize handle of the selection | `resizing` | originals kept |
+| `idle` | `grabRotate` | the point is on the rotate handle | `rotating` | originals and start angle kept |
+| `idle` | `grabHandle` | the point is on a handle of the kind | `handling` | original kept |
+| `idle` | `edit` | the text editor opened | `editing` | |
+| `pointing` | `dragShape` | moved past the slop on a shape | `dragging` | snapper begins (B22) |
+| `pointing` | `brush` | moved past the slop on empty page | `brushing` | box starts |
+| `pointing` | `up` | | `idle` | a click on empty page clears the selection; a double click opens the editor |
+| `pointing` | `cancel` | | `idle` | |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `move` | | same | one merged transaction (a box: the selection is set) |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `up` | | `idle` | history sealed; a dragged shape may change its parent; the snapper ends |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `cancel` | | `idle` | the gesture is cancelled: every record any write changed is put back from the store's diffs (the arrow, the binding an end drag dropped, the arrows that followed, a group's members), and no undo step is left |
+| `editing` | `close` | the editor closed | `idle` | |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle`, `edit` in any state but `idle`, and `dragShape` or `brush` anywhere but `pointing` have no row. A refused write (a limit, a locked shape) leaves the shapes as they were; the next move tries again.
+
+### B20. Shape tools (rect, ellipse, triangle, diamond, star, line, arrow, text, sticky, frame)
+
+- **Where:** `core/tools/shape.ts` `ShapeTool`, `SHAPE_TOOL_MACHINE`. One table; each tool is one instance of the class for its kind (`rect`, `ellipse`, `triangle`, `diamond`, `star`, `line`, `arrow`, `text`, `sticky`, `frame`) and keeps its own state.
+- **States:** `idle`; `making` (the pointer is down: the shape follows it).
+- **Invariants:** a drag makes the shape from the down point to the pointer; a `up` before the pointer moved past the slop makes the kind's default size centred on the point; Shift makes the box square (a circle for an ellipse) and snaps a line or arrow to steps of 15 degrees; Alt makes the box from its centre; the shape is written on the first move past the slop and updated on every move, all through one gesture (B25), so it is one undo step; when the shape is made the selection is the new shape and the tool host chooses the select tool again; `text` and `sticky` open the text editor on the new shape when the pointer comes up (an empty text shape is removed when the editor closes); a cancel removes the shape that was started and the frame it joined, and leaves no undo step; a click makes the kind's own default size (`KindDef.defaults`); new shapes take the styles of the style bar (`ToolStyles.shape`); locked or missing pages refuse the tool (the `down` is ignored).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | a page exists | `making` | start point kept |
+| `making` | `move` | | `making` | shape written or updated |
+| `making` | `up` | | `idle` | default size if it was a click; selected; text editor for `text` and `sticky`; history sealed |
+| `making` | `cancel` | | `idle` | the gesture is cancelled: the started shape goes |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B21. Text editor
+
+- **Where:** `core/text-editor.ts` `TextEditor`, `EDITOR_MACHINE`; `BoardCore.editor`. The web view puts a hidden text field over the shape and sends what it holds (`set`) and its composition events; nothing in the core knows a DOM.
+- **States:** `closed`; `editing` (the editor holds a shape id, its text and the selection range); `composing` (an input method is making a character; the text is the field's text with the composition in it).
+- **Invariants:** the shape id, the text and the range are the state's data, kept in `session` (empty id when `closed`); every `set` in `editing` or `composing` writes the shape's `text` (a `label` for a box shape) with the merge key `edit:<n>`, so typing is one undo step, sealed on close; closing a `text` or `sticky` shape that holds only white space removes it in the same step; `open` is refused for a locked shape, a shape of a kind that holds no text, or a shape that is not there (`bad_argument`); listeners are told on `open` and on `close` (the select tool's `editing`, the web field).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | the shape takes text and is not locked | `editing` | session set, listeners told |
+| `editing` | `set` | | `editing` | text and range written to the shape |
+| `editing` | `compose` | an input method started | `composing` | |
+| `editing` | `commit` | | `closed` | history sealed, empty text shape removed, session cleared |
+| `composing` | `set` | | `composing` | text written |
+| `composing` | `endCompose` | | `editing` | |
+| `composing` | `commit` | | `closed` | as above |
+
+- **Reachable invalid states or transitions:** `set`, `compose` and `commit` in `closed` have no row; `open` in `editing` or `composing` has no row, so a second shape cannot be opened before the first is committed; `compose` in `composing` has no row.
+
+### B22. Snap
+
+- **Where:** `core/snap.ts` `Snapper`, `SNAP_MACHINE`.
+- **States:** `idle` (no gesture); `tracking` (a move or a resize is running and no guide is near); `snapped` (at least one guide holds the box).
+- **Invariants:** the moving box is snapped to the edges and the centres of the other shapes on the page (those the index finds near it), to equal gaps (the gap on one side of the box equals a gap between two other boxes, or the gaps on both sides are equal) and to the page grid when the page shows one (24 units); the threshold is 6 screen pixels, so `6 / zoom` page units; for a move the box's three vertical and three horizontal lines are tried, for a resize only the lines of the edges that move; the nearest line within the threshold wins on each axis; `guides` holds the lines to draw (a guide has two ends in page units and a kind: `edge`, `centre`, `gap`, `grid`) and is empty unless `snapped`; the snapper has no clock and writes nothing to the store; `end` empties the guides.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | | `tracking` | candidate boxes read |
+| `tracking` | `found` | a line is within the threshold | `snapped` | guides set |
+| `tracking` | `miss` | | `tracking` | guides empty |
+| `snapped` | `found` | | `snapped` | guides set |
+| `snapped` | `miss` | | `tracking` | guides emptied |
+| `tracking` `snapped` | `end` | | `idle` | guides emptied |
+
+- **Reachable invalid states or transitions:** `found`, `miss` and `end` in `idle` have no row; `begin` while `tracking` or `snapped` has no row, so a second gesture cannot start before the first ends.
+
+### B23. Recognise hold
+
+- **Where:** `core/ink/hold.ts` `HoldWatch`, `HOLD_MACHINE`; used by the pen tool (`core/tools/pen.ts`).
+- **States:** `idle` (no stroke, or the stroke ended); `watching` (the pen is down and the stroke is being drawn; the time since the pen last moved is counted); `fired` (the pen stayed still for 500 ms and the stroke was handed to shape fixing; the pen is still down).
+- **Invariants:** the clock is the input layer's (`time` of the samples and the `now` of `tick`); the pen has moved when it is more than 3 screen pixels from where it last moved; the data of `watching` is the place and the time of the last move (`since`); the hold fires only for a stroke of at least 8 points and 40 screen pixels of length (a dot or a tap is not a shape); the highlighter does not watch; `fired` commits the stroke (one undo step), then replaces the ink by the clean shape in a second step when the fit is under 6% (`core/ink/recognise.ts`), and leaves the ink when nothing fits; after `fired` the rest of the gesture is ignored until the pen comes up; the toolbar's Fix does the same on the selected strokes (or the newest stroke) without this machine.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | the stroke began | `watching` | place and time kept |
+| `watching` | `move` | the pen moved | `watching` | place and time kept again |
+| `watching` | `fire` | 500 ms since the last move | `fired` | the stroke is committed and fixed |
+| `watching` | `end` | the pen came up | `idle` | |
+| `watching` | `cancel` | | `idle` | |
+| `fired` | `end` | the pen came up | `idle` | |
+| `fired` | `cancel` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `fire` in `idle` or `fired` has no row (a hold fires once); `move` in `fired` has no row, so the ink of a fixed stroke cannot grow; `begin` in `watching` or `fired` has no row.
+
+### B24. Image decode
+
+- **Where:** `web/images.ts` `ImageEntry`, `IMAGE_MACHINE`; one entry for each image asset the page shows.
+- **States:** `pending` (the browser is decoding the asset's bytes); `ready` (the picture can be drawn); `failed` (it cannot be decoded; a grey box with a cross is drawn).
+- **Invariants:** an entry is made the first time a tile asks for the asset and is kept until the asset record is gone; `ready` and `failed` are final; the entry's picture is released when the entry is dropped; the board draws a grey box with the asset's name while an entry is `pending` or `failed`, and asks for the tiles of the image to be drawn again when an entry leaves `pending`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `pending` | `decoded` | | `ready` | tiles of the image shapes marked, a frame asked for |
+| `pending` | `fail` | | `failed` | the same, with the cross |
+
+- **Reachable invalid states or transitions:** every move out of `ready` and `failed` has no row.
+
+### B25. Gesture
+
+- **Where:** `core/edit.ts` `Gesture`, `GESTURE_MACHINE`, `beginGesture(core, origin)`. Added in the round 3 fixes (BR-26); the select tool, the shape tools and the eraser write only through it, and `eslint.config.js` makes a `.change(` call in `core/tools/` an error ("tools write through a gesture, so a cancel puts back everything"). The editing commands of `core/edit.ts` take it in `WriteOptions.gesture`.
+- **States:** `open` (the gesture takes writes); `committed` (finished, its writes stay); `cancelled` (finished, its writes were put back).
+- **Invariants:** the gesture has one merge key (`gesture:<n>`, a count for each store), so every write of it joins one undo step; `write(fn)` runs `fn` as one store transaction (B1) and, when it was accepted, keeps for each record in its diff what the record was before the gesture's first write to it (`undefined` for a record the gesture added); a refused write changes nothing and is not counted; `cancel` writes every kept record back (a record the gesture added is removed, one it removed or changed is put back exactly) in one transaction with the same merge key, so the history finds the step empty and drops it; `commit` and `cancel` seal the history, so the next write starts a new step; a write after `commit` or `cancel` is refused (`bad_argument`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `open` | `write` | | `open` | one transaction; the records before are kept |
+| `open` | `commit` | | `committed` | history sealed |
+| `open` | `cancel` | | `cancelled` | every kept record written back; history sealed |
+
+- **Reachable invalid states or transitions:** every event in `committed` and `cancelled` has no row (a second `commit` or `cancel` and a late `write` do nothing). A listener that writes while the gesture's transaction notifies makes a diff of its own; the gesture does not keep it.
 
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
