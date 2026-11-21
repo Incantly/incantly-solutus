@@ -6,6 +6,7 @@
  */
 import { cameraIdOf } from './camera';
 import { PAGE_NAME_MAX } from './check';
+import { copyProps } from './copy';
 import { boardError, ok } from './errors';
 import type { BoardResult } from './errors';
 import { FIRST_KEY, keyBetween } from './fractional';
@@ -162,21 +163,21 @@ export class Pages {
       for (const s of shapes) map.set(s.id, tx.newId('shape'));
       for (const s of shapes) {
         const parent = s.parent === null ? null : (map.get(s.parent) ?? null);
-        const next: ShapeRecord = { ...s, id: map.get(s.id) as string, page: copy.id, parent };
+        const next: ShapeRecord = { ...s, id: map.get(s.id) as string, page: copy.id, parent, props: copyProps(s.props), meta: copyProps(s.meta) };
         tx.put(next);
       }
       for (const b of this.#store.all('binding')) {
         if (!isBinding(b)) continue;
         const from = map.get(b.from);
         const to = map.get(b.to);
-        if (from !== undefined && to !== undefined) tx.put({ ...b, id: tx.newId('binding'), from, to } satisfies BindingRecord);
+        if (from !== undefined && to !== undefined) tx.put({ ...b, id: tx.newId('binding'), from, to, props: copyProps(b.props) } satisfies BindingRecord);
       }
       const saved = this.#store.get(cameraIdOf(id));
       if (saved !== undefined && isCamera(saved)) {
         tx.put({ ...saved, id: cameraIdOf(copy.id), page: copy.id } satisfies CameraRecord);
       }
       return made;
-    });
+    }, { allowUnknownKinds: true });
     if (!done.ok) return done;
     const made = done.value.value;
     return made.ok ? ok(made.value as PageRecord) : made;

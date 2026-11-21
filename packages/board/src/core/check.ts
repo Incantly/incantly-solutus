@@ -2,6 +2,7 @@
  * The check of one record, on every write and every load (R2.1). A record is plain data: the type comes from the id's
  * prefix, the fields are checked here, and a shape's props are checked by its kind (`KindDef.check`).
  */
+import { freezeCopy } from './copy';
 import { isKey } from './fractional';
 import { boardError, ok, recordInvalid, withDetail } from './errors';
 import type { BoardResult } from './errors';
@@ -25,6 +26,18 @@ const FIELDS: Readonly<Record<RecordType, readonly string[]>> = {
   binding: ['id', 'kind', 'from', 'to', 'props'],
   asset: ['id', 'mime', 'size', 'data'],
 };
+
+/**
+ * Shapes the load kept as they were because their props fail their kind's check (`record_kept_raw`). Records are plain
+ * data, so the mark is the record object itself: a copy a write makes of it (undo, a move) is marked again.
+ */
+const keptRaw = new WeakSet<object>();
+
+/** Marks a record object as kept raw; `checkRecord` then keeps its props without asking the kind. */
+export const markKeptRaw = (record: object): void => void keptRaw.add(record);
+
+/** True for a record the load kept raw. */
+export const isKeptRaw = (record: object): boolean => keptRaw.has(record);
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v) && !ArrayBuffer.isView(v);
@@ -86,11 +99,19 @@ function checkShape(id: string, r: Record<string, unknown>, kinds: KindRegistry,
         detail: { record: id, kind },
       });
     }
-    return ok(Object.freeze({ ...r }) as unknown as BoardRecord);
+    return ok(Object.freeze({ ...r, props: freezeCopy(r['props']) }) as unknown as BoardRecord);
   }
+  if (keptRaw.has(r)) return ok(keep({ ...r, props: freezeCopy(r['props']) }));
   const props = def.check(r['props']);
   if (!props.ok) return withDetail(props, { record: id, field: 'props', kind });
-  return ok(Object.freeze({ ...r, props: props.value }) as unknown as BoardRecord);
+  return ok(Object.freeze({ ...r, props: freezeCopy(props.value) }) as unknown as BoardRecord);
+}
+
+/** The frozen record that is stored for a kept-raw shape; it stays marked, so undo and moves keep it raw. */
+function keep(r: Record<string, unknown>): BoardRecord {
+  const frozen = Object.freeze(r) as unknown as BoardRecord;
+  keptRaw.add(frozen);
+  return frozen;
 }
 
 function checkPage(id: string, r: Record<string, unknown>): BoardResult<BoardRecord> {
@@ -123,7 +144,7 @@ function checkBinding(id: string, r: Record<string, unknown>): BoardResult<Board
     if (!hasPrefix(r[f], 'shape:')) return recordInvalid(id, f, `"${f}" of "${id}" must be a shape id.`);
   }
   if (r['props'] === undefined) return recordInvalid(id, 'props', `The binding "${id}" is missing "props".`);
-  return ok(Object.freeze({ ...r }) as unknown as BoardRecord);
+  return ok(Object.freeze({ ...r, props: freezeCopy(r['props']) }) as unknown as BoardRecord);
 }
 
 function checkAsset(id: string, r: Record<string, unknown>): BoardResult<BoardRecord> {

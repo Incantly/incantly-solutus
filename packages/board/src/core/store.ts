@@ -6,7 +6,7 @@
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
-import { checkRecord } from './check';
+import { checkRecord, isKeptRaw, markKeptRaw } from './check';
 import { boardError, describeThrown, ok, recordInvalid } from './errors';
 import type { BoardError, BoardResult } from './errors';
 import { KindRegistry } from './kinds/def';
@@ -39,6 +39,11 @@ export interface ChangeOptions {
   readonly mergeKey?: string;
   /** Keep shapes of kinds that are not registered, as they are (load, undo of a delete). */
   readonly allowUnknownKinds?: boolean;
+  /**
+   * Do not test the limits (pages, shapes, ink points, asset bytes). Used only by load: a host that lowers a limit
+   * below what a board holds still opens it, and every later write tests the limits as usual.
+   */
+  readonly skipLimits?: boolean;
 }
 
 export interface Changed<T> {
@@ -128,7 +133,9 @@ class StagedTx implements Tx {
     const current = this.get(id);
     if (current === undefined) return this.#fail(boardError('bad_argument', `There is no record "${id}" to change.`, { detail: { record: id } }));
     if (!isPlain(patch)) return this.#fail(recordInvalid(id, 'record', 'A patch must be an object.'));
-    if ('id' in patch && patch['id'] !== id) return this.#fail(recordInvalid(id, 'id', 'The id of a record cannot change.'));
+    if ('id' in patch && patch['id'] !== id) {
+      return this.#fail(boardError('bad_argument', 'The id of a record cannot change.', { hint: 'Remove the record and add a new one.', detail: { record: id, field: 'id' } }));
+    }
     const base = current as unknown as Record<string, unknown>;
     const next: Record<string, unknown> = { ...base, ...patch };
     for (const field of ['props', 'meta']) {
@@ -136,6 +143,8 @@ class StagedTx implements Tx {
       const now = patch[field];
       if (field in patch && isPlain(was) && isPlain(now)) next[field] = { ...was, ...now };
     }
+    // a shape the load kept raw stays raw when it moves, unless the patch gives it new props to check
+    if (isKeptRaw(current) && !('props' in patch)) markKeptRaw(next);
     return this.put(next as unknown as BoardRecord);
   }
 
@@ -288,7 +297,7 @@ export class Store {
       return tx.failure;
     }
     const diff = this.#diffOf(origin, tx.staged, options);
-    const refused = this.#verify(diff, tx.staged);
+    const refused = this.#verify(diff, tx.staged, options.skipLimits === true);
     if (refused !== undefined) {
       this.#machine.send('abort');
       return refused;
@@ -326,7 +335,7 @@ export class Store {
   }
 
   /** Tests the links between records and the limits on the records as they would be. Returns the first problem. */
-  #verify(diff: Diff, staged: ReadonlyMap<string, BoardRecord | null>): BoardError | undefined {
+  #verify(diff: Diff, staged: ReadonlyMap<string, BoardRecord | null>, skipLimits: boolean): BoardError | undefined {
     const after = (id: string): BoardRecord | undefined => (staged.has(id) ? (staged.get(id) ?? undefined) : this.#records.get(id));
 
     // links: a shape and a camera need their page; a page that goes needs no shape or camera left
@@ -351,6 +360,8 @@ export class Store {
         }
       }
     }
+
+    if (skipLimits) return undefined;
 
     // limits: only what grows is tested, so a transaction that removes things is never refused
     let pages = 0;

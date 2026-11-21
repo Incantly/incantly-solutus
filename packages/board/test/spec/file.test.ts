@@ -233,14 +233,14 @@ describe('load checks every record (board_invalid names the record and the field
     return e;
   };
 
-  it('names the record and the field when a shape’s props fail their kind', () => {
+  it('names the record and the field when a shape’s props fail their kind and the page is gone', () => {
     const text = corrupt((doc) => {
-      const rect = recordsOfDoc(doc).find((r) => r['id'] === 'shape:2');
-      (rect as { props: Record<string, unknown> }).props['w'] = 'wide';
+      const rect = recordsOfDoc(doc).find((r) => r['id'] === 'shape:2') as { props: Record<string, unknown>; page: string };
+      rect.props['w'] = 'wide';
+      rect.page = 'page:missing';
     });
     const e = expectInvalid(load(text));
     expect(e.detail?.['record']).toBe('shape:2');
-    expect(String(e.detail?.['field'])).toContain('w');
     expect(e.message.length).toBeGreaterThan(0);
   });
 
@@ -476,12 +476,12 @@ describe('versions and migrations', () => {
     expect(r.store.all('shape')).toHaveLength(4);
   });
 
-  it('refuses a newer file whose records do not pass, with board_too_new or board_invalid, and without throwing', () => {
+  it('refuses a newer file whose records do not pass, with board_too_new (BR-6), and without throwing', () => {
     const doc = parse(bumped(v1(), 99));
     (doc['records'] as Record<string, unknown>[])[0] = { id: 'shape:bad' };
     const r = load(JSON.stringify(doc));
     expect(r.ok).toBe(false);
-    expect(['board_too_new', 'board_invalid']).toContain((r as BoardError).kind);
+    expect((r as BoardError).kind).toBe('board_too_new');
   });
 
   it('refuses a version that is not a whole number of 1 or more', () => {

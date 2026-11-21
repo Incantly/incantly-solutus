@@ -1,6 +1,7 @@
 /** @incantly/board/core: the board's data and logic. No DOM, no timers, no `Date`; runs in Node, a worker and on mobile. */
-export { boardError, DONE, isBoardError, ok, recordInvalid, withDetail } from './errors';
-export type { BoardError, BoardErrorKind, BoardOk, BoardResult } from './errors';
+export { boardError, DONE, isBoardError, ok, okWith, recordInvalid, withDetail } from './errors';
+export type { BoardError, BoardErrorKind, BoardNotice, BoardOk, BoardResult } from './errors';
+export { copyProps } from './copy';
 export { ASSET_BYTES_MAX, DEFAULT_LIMITS, ORIGINS, PAGE_BACKGROUNDS, RECORD_TYPES, isAsset, isBinding, isCamera, isPage, isShape, recordTypeOf } from './types';
 export type {
   AssetRecord, BindingRecord, BoardRecord, Bounds, CameraRecord, Diff, Limits, Origin, PageBackground, PageRecord, RecordType, ShapeRecord, Update,

@@ -34,18 +34,30 @@ export interface BoardError {
   readonly detail?: Readonly<Record<string, unknown>>;
 }
 
+/** A success that carries a fact the caller should know (errors.md): `record_kept_raw`. */
+export interface BoardNotice {
+  readonly severity: 'info' | 'warning';
+  readonly kind: 'record_kept_raw';
+  readonly message: string;
+  /** Facts a host may use: the records, each with its field and why. */
+  readonly detail: Readonly<Record<string, unknown>>;
+}
+
 export interface BoardOk<T> {
   readonly ok: true;
   readonly value: T;
-  readonly notices: readonly never[];
+  readonly notices: readonly BoardNotice[];
 }
 
 export type BoardResult<T> = BoardOk<T> | BoardError;
 
 export const ok = <T>(value: T): BoardOk<T> => ({ ok: true, value, notices: [] });
 
+/** A success with notices. */
+export const okWith = <T>(value: T, notices: readonly BoardNotice[]): BoardOk<T> => ({ ok: true, value, notices });
+
 /** The result of a call that has nothing to give back. */
-export const DONE: BoardOk<undefined> = Object.freeze({ ok: true, value: undefined, notices: Object.freeze([]) as readonly never[] });
+export const DONE: BoardOk<undefined> = Object.freeze({ ok: true, value: undefined, notices: Object.freeze([]) as readonly BoardNotice[] });
 
 export function boardError(
   kind: BoardErrorKind,

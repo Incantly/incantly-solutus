@@ -3,11 +3,14 @@
  * deterministically (sorted keys, sorted records, one number format) so the same board gives the same bytes. Ink points
  * are stored as base64 of delta-encoded 16-bit integers in hundredths of a unit, with pressure in 8 bits (about 5 bytes
  * a point). Load checks every record against its type and kind (`board_invalid` names the record and the field), runs
- * migrations, and keeps shapes of kinds that are not registered exactly as they were. No DOM, no timers.
+ * migrations, and keeps shapes of kinds that are not registered exactly as they were. A shape whose props fail its
+ * kind's check, on a page that exists, is kept raw with a `meta.invalid` note and a `record_kept_raw` notice, and is
+ * saved with its props as they were. No DOM, no timers.
  */
 import { fromBase64, toBase64 } from './base64';
-import { boardError, describeThrown, ok } from './errors';
-import type { BoardError, BoardResult } from './errors';
+import { isKeptRaw, markKeptRaw } from './check';
+import { boardError, describeThrown, ok, okWith } from './errors';
+import type { BoardError, BoardNotice, BoardResult } from './errors';
 import { KindRegistry } from './kinds/def';
 import { Store } from './store';
 import { isAsset, isPage, isShape, recordTypeOf } from './types';
@@ -208,8 +211,16 @@ function decodeInk(enc: Record<string, unknown>, record: string): BoardResult<Fl
   return ok(out);
 }
 
+/** A shape the load kept raw, without the `meta.invalid` note the load put on it, so the file keeps what it had. */
+function withoutNote(shape: ShapeRecord): ShapeRecord {
+  if (!isKeptRaw(shape) || !('invalid' in shape.meta)) return shape;
+  const { invalid: _note, ...meta } = shape.meta;
+  return { ...shape, meta };
+}
+
 /** The shape with its ink points in stored form, or the shape itself when it has none to encode. */
-function encodeShape(shape: ShapeRecord): BoardResult<ShapeRecord> {
+function encodeShape(saved: ShapeRecord): BoardResult<ShapeRecord> {
+  const shape = withoutNote(saved);
   if (shape.kind !== 'ink' || !isPlain(shape.props)) return ok(shape);
   const props = shape.props;
   const points = props['points'];
@@ -373,13 +384,22 @@ function load(text: string, options: LoadOptions): BoardResult<LoadedBoard> {
     }
   }
 
+  // a newer file that fails any check says "too new": the version is the reason the reader can act on
+  const fail = (error: BoardError): BoardError =>
+    newer
+      ? boardError('board_too_new', 'This board was made with a newer version of Incantly.', {
+          hint: 'Update the app to open it.',
+          detail: { version: fileVersion, supported: target, cause: error.detail },
+        })
+      : error;
+
   const meta = doc['meta'] ?? {};
-  if (!isPlain(meta)) return invalid('"meta" is not an object.', { field: 'meta' });
+  if (!isPlain(meta)) return fail(invalid('"meta" is not an object.', { field: 'meta' }));
   for (const section of ['pages', 'records', 'assets']) {
-    if (!Array.isArray(doc[section])) return invalid(`"${section}" is not a list.`, { field: section });
+    if (!Array.isArray(doc[section])) return fail(invalid(`"${section}" is not a list.`, { field: section }));
   }
   const shaped = decodeShapes(doc['records'] as unknown[]);
-  if (!shaped.ok) return shaped;
+  if (!shaped.ok) return fail(shaped);
 
   const kinds = options.kinds ?? new KindRegistry();
   const store = new Store({ kinds, ...(options.limits !== undefined ? { limits: options.limits } : {}) });
@@ -392,35 +412,77 @@ function load(text: string, options: LoadOptions): BoardResult<LoadedBoard> {
   for (const [name, list, belongs] of sections) {
     for (const r of list) {
       const id = isPlain(r) ? r['id'] : undefined;
-      if (typeof id !== 'string') return invalid(`a record in "${name}" has no id.`, { field: name });
-      if (!belongs(id)) return invalid(`"${id}" does not belong in "${name}".`, { record: id, field: 'id' });
-      if (seen.has(id)) return invalid(`the id "${id}" is used twice.`, { record: id, field: 'id' });
+      if (typeof id !== 'string') return fail(invalid(`a record in "${name}" has no id.`, { field: name }));
+      if (!belongs(id)) return fail(invalid(`"${id}" does not belong in "${name}".`, { record: id, field: 'id' }));
+      if (seen.has(id)) return fail(invalid(`the id "${id}" is used twice.`, { record: id, field: 'id' }));
       seen.add(id);
     }
   }
 
+  // bring each record to this version; a shape that fails its kind's check alone is kept raw (not for a newer file)
+  const kept: KeptRaw[] = [];
+  const prepared = sections.map(([, list]) =>
+    list.map((r) => {
+      const migrated = !newer && fileVersion < target && isPlain(r) && isPlain(r['props']) ? migrateProps(r, kinds, fileVersion) : r;
+      if (newer) return migrated;
+      const raw = keepRaw(migrated, kinds);
+      if (raw === undefined) return migrated;
+      kept.push(raw);
+      return raw.record;
+    }),
+  );
+
   const written = store.change(
     'host',
     (tx) => {
-      for (const [, list] of sections) {
-        for (const r of list) {
-          const migrated = !newer && fileVersion < target && isPlain(r) && isPlain(r['props']) ? migrateProps(r, kinds, fileVersion) : r;
-          tx.put(migrated as unknown as BoardRecord);
-        }
-      }
+      for (const list of prepared) for (const r of list) tx.put(r as unknown as BoardRecord);
     },
-    { history: false, allowUnknownKinds: true },
+    { history: false, allowUnknownKinds: true, skipLimits: true },
   );
-  if (!written.ok) {
-    if (newer && written.kind !== 'limit') {
-      return boardError('board_too_new', 'This board was made with a newer version of Incantly.', {
-        hint: 'Update the app to open it.',
-        detail: { version: fileVersion, supported: target, cause: written.detail },
-      });
-    }
-    return asBoardInvalid(written);
+  if (!written.ok) return fail(asBoardInvalid(written));
+  return okWith({ store, meta, version: fileVersion, readOnly: newer }, kept.length === 0 ? [] : [keptNotice(kept)]);
+}
+
+/** A shape kept raw: the record to store, and why its props fail. */
+interface KeptRaw {
+  readonly record: Record<string, unknown>;
+  readonly id: string;
+  readonly field: string;
+  readonly why: string;
+}
+
+/**
+ * The shape with a `meta.invalid` note and marked as kept raw, when its kind is registered and its props fail the
+ * kind's check; undefined for any other record (a record that fails for another reason fails the load).
+ */
+function keepRaw(r: unknown, kinds: KindRegistry): KeptRaw | undefined {
+  if (!isPlain(r) || typeof r['id'] !== 'string' || !r['id'].startsWith('shape:') || typeof r['kind'] !== 'string') return undefined;
+  const def = kinds.get(r['kind']);
+  if (def === undefined || r['props'] === undefined || !isPlain(r['meta'])) return undefined;
+  let field = 'props';
+  let why: string;
+  try {
+    const checked = def.check(r['props']);
+    if (checked.ok) return undefined;
+    const named = checked.detail?.['field'];
+    if (typeof named === 'string') field = named;
+    why = checked.message;
+  } catch (e) {
+    why = `the check threw: ${describeThrown(e)}`;
   }
-  return ok({ store, meta, version: fileVersion, readOnly: newer });
+  const record = { ...r, meta: { ...r['meta'], invalid: { field, why } } };
+  markKeptRaw(record);
+  return { record, id: r['id'], field, why };
+}
+
+function keptNotice(kept: readonly KeptRaw[]): BoardNotice {
+  const ids = kept.map((k) => k.id);
+  return {
+    severity: 'warning',
+    kind: 'record_kept_raw',
+    message: `${kept.length === 1 ? '1 shape' : `${kept.length} shapes`} did not pass the check of ${kept.length === 1 ? 'its' : 'their'} kind and ${kept.length === 1 ? 'was' : 'were'} kept as ${kept.length === 1 ? 'it was' : 'they were'}: ${ids.join(', ')}.`,
+    detail: { records: kept.map((k) => ({ record: k.id, field: k.field, why: k.why })) },
+  };
 }
 
 /** The record with its props brought to the current version by its kind's `migrate`, when it has one. */

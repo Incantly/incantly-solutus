@@ -217,10 +217,14 @@ describe('a transaction applies all of its writes together (design 4)', () => {
     expect(s.props).toEqual({ w: 30, h: 20 });
     expect(s.meta).toEqual({ a: 1, b: 3 });
     expect(s.x).toBe(4);
-    b.store.change('user', (tx) => {
-      const u = tx.update('shape:1', { id: 'shape:77' });
-      return u.ok ? u.value.id : 'refused';
+    let refused: unknown;
+    const r = b.store.change('user', (tx) => {
+      refused = tx.update('shape:1', { id: 'shape:77' });
     });
+    expect((refused as { ok: boolean }).ok).toBe(false);
+    expect((refused as { kind: string }).kind).toBe('bad_argument');
+    expect(r.ok).toBe(false);
+    expect((r as { kind: string }).kind).toBe('bad_argument');
     expect(b.store.has('shape:77')).toBe(false);
     expect(b.store.has('shape:1')).toBe(true);
   });
