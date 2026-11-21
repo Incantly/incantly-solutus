@@ -13,6 +13,7 @@ import type { GestureInput, InputSample, KeyInput, WheelInput } from '../input';
 import { deleteShapes } from '../edit';
 import type { ToolContext, ToolDef, ToolHandlers, ToolList } from './def';
 import { editKey } from './keys';
+import { defaultKeyTable, KeyMap } from '../keymap';
 
 type HostState = 'chosen' | 'eraserEnd' | 'handHeld';
 type HostEvent = 'eraserDown' | 'eraserUp' | 'handDown' | 'handUp';
@@ -26,26 +27,23 @@ export const TOOLS_MACHINE: MachineTable<HostState, HostEvent> = {
 /** One wheel notch is about this many pixels; the zoom is `2^(-dy / ZOOM_PX)`. */
 const ZOOM_PX = 240;
 
-/** True when the key string (`p`, `shift+p`, `mod+z`) names this key. */
-function matches(def: string, k: KeyInput): boolean {
-  const parts = def.toLowerCase().split('+');
-  const key = parts[parts.length - 1];
-  return key === k.key.toLowerCase() && parts.includes('shift') === k.shift && parts.includes('mod') === k.mod && !k.alt;
-}
-
 export class ToolHost {
   readonly #ctx: ToolContext;
   readonly #list: ToolList;
   readonly #machine = new StateMachine(TOOLS_MACHINE, 'chosen');
   readonly #instances = new Map<string, ToolHandlers>();
   readonly #listeners: ((id: string) => void)[] = [];
+  /** Actions the shell carries out (zoom, pages, a figure card): the key map names them, the shell registers them. */
+  readonly #actions = new Map<string, () => boolean>();
+  #keys: KeyMap;
   #current: string;
   /** What holds the hand: a key or a button. */
   #heldBy: 'none' | 'space' | 'middle' = 'none';
   /** The pointer that is down, or -1. */
   #down = -1;
 
-  constructor(ctx: ToolContext, list: ToolList, initial = 'pen') {
+  constructor(ctx: ToolContext, list: ToolList, initial = 'pen', keys?: KeyMap) {
+    this.#keys = keys ?? KeyMap.from(defaultKeyTable(list));
     // a tool may ask for another one (a shape tool hands back to the select tool); the host answers
     this.#ctx = ctx.setTool !== undefined ? ctx : { ...ctx, setTool: (id: string) => void this.setTool(id) };
     this.#list = list;
@@ -69,6 +67,24 @@ export class ToolHost {
 
   get tools(): readonly ToolDef[] {
     return this.#list.defs;
+  }
+
+  /** The key map the host reads (design 10, B30). */
+  get keys(): KeyMap {
+    return this.#keys;
+  }
+
+  /** Gives the host another key map (a host changed its `keys`). */
+  setKeys(keys: KeyMap): void {
+    this.#keys = keys;
+  }
+
+  /** Registers what a named action does when its key is pressed; returns the function that takes it away. */
+  setAction(action: string, run: () => boolean): () => void {
+    this.#actions.set(action, run);
+    return () => {
+      if (this.#actions.get(action) === run) this.#actions.delete(action);
+    };
   }
 
   /** Calls `listener` when the chosen tool changes. */
@@ -172,30 +188,27 @@ export class ToolHost {
       }
       return true;
     }
-    if (k.mod && k.key.toLowerCase() === 'z') {
-      if (k.shift) this.#ctx.core.history.redo();
+    const action = this.#keys.actionOf(k);
+    if (action === 'undo' || action === 'redo') {
+      if (action === 'redo') this.#ctx.core.history.redo();
       else this.#ctx.core.history.undo();
       this.#ctx.requestFrame();
       return true;
     }
-    if (k.mod && k.key.toLowerCase() === 'y') {
-      this.#ctx.core.history.redo();
-      this.#ctx.requestFrame();
-      return true;
-    }
     if (this.#instance(this.active)?.onKey?.(k) === true) return true;
-    if (editKey(this.#ctx, k)) return true;
-    if (k.key === 'Delete' || k.key === 'Backspace') return this.#deleteSelection();
+    if (editKey(this.#ctx, k, this.#keys)) return true;
+    if (action === 'delete') return this.#deleteSelection();
     if (k.key === 'Escape') {
       this.#ctx.core.selection.clear();
       this.cancel();
       this.#ctx.requestFrame();
       return true;
     }
-    if (k.mod || k.repeat || this.#down >= 0) return false;
-    const def = this.#list.defs.find((d) => d.key !== undefined && matches(d.key, k));
-    if (def === undefined) return false;
-    this.setTool(def.id);
+    if (action === undefined) return false;
+    const run = this.#actions.get(action);
+    if (run !== undefined) return (!k.repeat || action.startsWith('zoom')) && run();
+    if (k.repeat || this.#down >= 0 || this.#list.get(action) === undefined) return false;
+    this.setTool(action);
     return true;
   }
 

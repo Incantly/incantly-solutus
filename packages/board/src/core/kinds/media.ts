@@ -79,7 +79,7 @@ export const imageKind: KindDef<ImageProps> = {
 export interface FigureProps {
   /** The Incantly script: the only source of truth. */
   readonly script: string;
-  /** The figure's mode (`graph`, `geometry`, …). */
+  /** The figure's mode, one of the SDK's: `graphing`, `geometry`, `graphing3d`, … (`graph` and `3d` are read as `graphing` and `graphing3d`). */
   readonly mode: string;
   readonly w: number;
   readonly h: number;
@@ -87,7 +87,7 @@ export interface FigureProps {
   readonly picture: string | null;
 }
 
-export const FIGURE_DEFAULTS: FigureProps = Object.freeze({ script: '# incantly 1\n', mode: 'graph', w: 360, h: 260, picture: null });
+export const FIGURE_DEFAULTS: FigureProps = Object.freeze({ script: '# incantly 1\n', mode: 'graphing', w: 360, h: 260, picture: null });
 export const SCRIPT_MAX = 1_000_000;
 export const FIGURE_HEADER = '# incantly 1';
 

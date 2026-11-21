@@ -20,7 +20,7 @@ export { SELECT_MACHINE, selectTool } from './select';
 export {
   SHAPE_TOOLS, SHAPE_TOOL_MACHINE, arrowTool, diamondTool, ellipseTool, frameTool, lineTool, rectTool, starTool, stickyTool, styledDefaults, textTool, triangleTool,
 } from './shape';
-export { editKey } from './keys';
+export { EDIT_ACTIONS, editAction, editKey } from './keys';
 
 /** Every built-in tool; a host takes some away with `without` and adds its own with `with`. */
 export const defaultTools: ToolList = new ToolList([penTool, highlighterTool, eraserTool, laserTool, lassoTool, handTool]);

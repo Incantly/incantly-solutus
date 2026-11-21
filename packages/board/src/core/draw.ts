@@ -17,7 +17,7 @@ import { OutlineCache } from './ink/outline';
 import { parseColor } from './kinds/ink';
 import type { BoardResult } from './errors';
 import type { PageIndex } from './page-index';
-import type { Bounds, Diff, ShapeRecord } from './types';
+import type { Bounds, Diff, PageBackground, ShapeRecord } from './types';
 import { isShape } from './types';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -276,6 +276,8 @@ export interface TileContent {
   /** The page box of the tile: draw what meets it. */
   readonly box: Bounds;
   readonly items: readonly DrawItem[];
+  /** The page's paper, drawn under the items in each tile (BR-18); absent or `none` for plain. */
+  readonly background?: PageBackground;
 }
 
 /** Level of detail by the size a shape has on screen (design 9, item 6). */

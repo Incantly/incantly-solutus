@@ -25,7 +25,7 @@ The feature design is `docs/features/board/design.md`; this file says where each
 | `web/input.ts` | Pointer Events to `InputSample`, coalesced and predicted samples, keys |
 | `web/painter.ts` | `BoardPainter` on the view package's WebGL 2 back-end, Canvas 2D backup, the live layer |
 | `web/figures.ts` | Live figure cards over the canvas, under the scheduler |
-| `web/ui/` | Web Components: toolbar, style bar, page bar, zoom bar, menus, agent panel |
+| `web/ui/` | The shell: icons, menus, shell options, theme, styles (the toolbar, bars and pages are built in `board-view.ts` from them); the agent panel comes in round 5 |
 | `web/create-board.ts` | `createBoard(options)` |
 | `index.ts` | Public exports; `core` is also a subpath, `@incantly/board/core` |
 

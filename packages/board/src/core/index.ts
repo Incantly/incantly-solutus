@@ -83,11 +83,18 @@ export {
 export type {
   BoardPainter, DrawItem, GuideLine, InkItem, LiveStrokeView, Lod, OverlayHandle, OverlayItems, PredictedView, SelectionView, TileCacheOptions, TileContent, TrailView,
 } from './draw';
+export { ACTION_KEYS, KEYMAP_MACHINE, KeyMap, defaultKeyTable, describeKey, normaliseKey } from './keymap';
+export type { KeyOption, KeyOptions } from './keymap';
+export { ICON_MAX, checkIcon, iconProblem } from './icons';
+export { BOARD_STRINGS, Strings } from './strings';
+export type { Translate } from './strings';
+export { addFigure, figureOf, figuresOnPage, sdkMode, setFigureMode, setFigurePicture, setFigureScript, withHeader } from './figures';
+export type { NewFigure } from './figures';
 export { BoardCore, registerBuiltInKinds } from './board';
 export type { BoardCoreOptions } from './board';
 export {
   ERASER_MACHINE, HAND_MACHINE, LASER_FADE_MS, LASER_MACHINE, LASER_MAX_POINTS, LASSO_MACHINE, SELECT_MACHINE, SHAPE_TOOLS, SHAPE_TOOL_MACHINE, TOOLS_MACHINE, ToolHost, ToolList, arrowTool, boardTools,
-  createOverlayState, defaultStyles, defaultTools, diamondTool, editKey, ellipseTool, eraserTool, frameTool, handTool, highlighterTool, laserTool, lassoTool, lineTool, penTool, rectTool, selectTool,
+  createOverlayState, defaultStyles, defaultTools, diamondTool, EDIT_ACTIONS, editAction, editKey, ellipseTool, eraserTool, frameTool, handTool, highlighterTool, laserTool, lassoTool, lineTool, penTool, rectTool, selectTool,
   starTool, stickyTool, styledDefaults, textTool, triangleTool,
 } from './tools/index';
 export type { OverlayState, ShapeStyle, ToolContext, ToolDef, ToolHandlers, ToolStyles } from './tools/index';

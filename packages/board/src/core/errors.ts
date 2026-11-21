@@ -24,6 +24,12 @@ export type BoardErrorKind =
   | 'nothing_to_undo'
   /** The tool id is not registered. */
   | 'tool_unknown'
+  /** Two actions got the same key; the later one has no key. */
+  | 'shortcut_conflict'
+  /** A custom SVG icon has script, event attributes or outside links; the default icon is used. */
+  | 'icon_invalid'
+  /** A figure card's script fails or its mount fails; the card keeps its picture and shows a small error badge. */
+  | 'figure_failed'
   /** WebGL 2 is not available or its context cannot come back: the board draws with Canvas 2D. */
   | 'render_failed'
   /** A callback threw, or a bug in the board. */

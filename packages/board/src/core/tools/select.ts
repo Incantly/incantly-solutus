@@ -441,6 +441,9 @@ class SelectTool implements ToolHandlers {
       if (shape !== undefined && core.store.kinds.get(shape.kind)?.text !== undefined && !shape.locked) {
         core.selection.set([shape.id]);
         core.editor.open(shape.id);
+      } else if (shape !== undefined && core.store.kinds.get(shape.kind)?.text === undefined) {
+        core.selection.set([shape.id]);
+        this.#ctx.activate?.(shape.id);
       }
       return;
     }

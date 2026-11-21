@@ -112,8 +112,8 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 ### Later
 
-- **BR-18.** The page backgrounds (`grid`, `dots`, `lines`) are not drawn yet (round 6 or with the style bar in round 4).
-- **BR-19.** No key for the next or previous page (ui.md lists `mod+pagedown`, `mod+pageup`): round 4, with the custom keys.
+- **BR-18.** The page backgrounds (`grid`, `dots`, `lines`) are not drawn yet (round 6 or with the style bar in round 4). **Fixed in round 4:** drawn in each tile (`drawBackground2D`), chosen in the style bar and the page menu (`Pages.setBackground`, one undo step).
+- **BR-19.** No key for the next or previous page (ui.md lists `mod+pagedown`, `mod+pageup`): round 4, with the custom keys. **Fixed in round 4:** the actions `nextPage` and `prevPage` in the key map.
 - **BR-20.** The pen-only paths (tilt, a 0.5-only pen, the eraser end, palm rejection, pinch) have not been tried on a real stylus or touch screen.
 - **BR-21.** An ink shape's `rotation` is ignored until round 3.
 - **BR-22.** `incantly/state-no-shadow-null` knows a begin move by the event's name (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) and reads only `this.<machine>.send('literal')`. A machine whose first move has another name, or a send through a variable, is not checked. Reading the table's moves would make it exact.
@@ -176,3 +176,8 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 - **BR-34.** Image paste and the Image button's file picker were not tried in a browser; an input method (IME) was not tried in the text editor.
 - **BR-35.** Tiles holding shapes are painted with Canvas 2D and uploaded; a WebGL path for shapes would be faster on big boards (measure in round 6 first).
+- **BR-36.** The selection bar wraps to two rows (it is placed from `left: 50%` with a translate, so its width is half the view). **Fixed in round 4:** one row that never wraps, centred as the toolbar is, and it scrolls sideways on a phone (`.ib-actions`).
+- **BR-37.** A listener's own write during a gesture's transaction makes a separate diff the gesture does not keep, so a cancel will not undo it; nothing does this today.
+- **BR-38.** A live figure card in the Board app draws with the studio's frame style (axes and grid off in the Board app), because `frameStyle` in the SDK's `screen/paint.ts` is one module-wide object set by the app mode, while a card's picture (made in a headless app) draws axes and grid. A card and its picture can look different. Fix: let `createApp` take its frame style as an option, or have the picture use the same style.
+- **BR-39.** Not built in round 4: the long press that opens the context menu on touch, the main menu's New, Open and Export (the host adds them through `menus.main`; Save is there), the minimap part of `ui`, and a French or Arabic catalogue for the board's strings beyond the tool names (the rest fall back to English).
+- **BR-40.** The card toolbar is above the selected card only on the page the card is on and is not a real toolbar for the keyboard (Tab from the board does not reach it); the Edit lines panel and the toolbar buttons are reachable by Tab only after a click.

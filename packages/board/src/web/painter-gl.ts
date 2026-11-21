@@ -12,7 +12,7 @@ import { TILE_PX, tileBox } from '../core/draw';
 import type { Tile, TileContent } from '../core/draw';
 import { boardError, DONE, ok } from '../core/errors';
 import type { BoardResult } from '../core/errors';
-import { TILE_GUTTER, TILE_SIZE, drawItems2D } from './painter-2d';
+import { TILE_GUTTER, TILE_SIZE, drawBackground2D, drawItems2D } from './painter-2d';
 import type { ImageLookup, TileRaster } from './painter-2d';
 
 const INK_VERTEX = [
@@ -157,6 +157,7 @@ export class GlRaster implements TileRaster {
     const box = tileBox(tile.k, tile.tx, tile.ty);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+    if (content.background !== undefined) drawBackground2D(ctx, content.background, scale, box.minX - TILE_GUTTER / scale, box.minY - TILE_GUTTER / scale);
     drawItems2D(ctx, content.items, scale, box.minX - TILE_GUTTER / scale, box.minY - TILE_GUTTER / scale, this.#images);
     const gl = this.#gl;
     try {
@@ -174,7 +175,7 @@ export class GlRaster implements TileRaster {
   }
 
   render(tile: Tile, content: TileContent): BoardResult<undefined> {
-    if (content.items.some((i) => i.k === 'shape')) return this.#renderVia2D(tile, content);
+    if (content.items.some((i) => i.k === 'shape') || (content.background !== undefined && content.background !== 'none')) return this.#renderVia2D(tile, content);
     const own = this.#targetOf(tile);
     if (!own.ok) return own;
     const scale = Math.pow(2, tile.k);

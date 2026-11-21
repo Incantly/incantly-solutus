@@ -3,7 +3,7 @@
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
 import type { AppModeId, StorageLike } from '@incantly/modes';
-import { boardTools, mountBoardView } from '@incantly/board';
+import { createBoard } from '@incantly/board';
 import type { BoardView } from '@incantly/board';
 import { mountAppModes } from './modes/app';
 import { mountSoundUi } from './sound-ui';
@@ -11,6 +11,7 @@ import type { SoundUi } from './sound-ui';
 import type { SoundEngine } from '@incantly/audio';
 import { mountScientific } from './modes/scientific';
 import { mountKeyboard } from './modes/keyboard';
+import { customBoardOptions, studioBoardOptions } from './board-options';
 import { mountExamScreens } from './modes/exam-ui';
 import type { ScientificView } from './modes/scientific';
 import type { MathKeyboard } from './modes/keyboard';
@@ -65,6 +66,8 @@ export interface StudioOptions {
   readonly soundEngine?: () => Promise<SoundEngine>;
   /** Asks for full screen at the exam start; a test passes its own. */
   readonly requestFullscreen?: () => Promise<boolean>;
+  /** Show the Board app as the customised demo (renamed tool, another icon, toolbar on the left, a key removed). */
+  readonly boardDemo?: boolean;
 }
 
 export interface Mounted {
@@ -538,9 +541,15 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     open: (): void => {
       boardHost.hidden = false;
       if (boardRef.current === undefined) {
-        const made = mountBoardView({ container: boardHost, tools: boardTools, onError: (e) => say(e.message) });
-        if (made.ok) boardRef.current = made.value;
-        else say(made.message);
+        const made = createBoard({
+          container: boardHost,
+          onError: (e) => say(e.message),
+          ...studioBoardOptions(() => modeRef.current?.i18n),
+          // `?board=custom`: the customised board of the demo
+          ...(opts.boardDemo === true ? customBoardOptions : {}),
+        });
+        if (made.ok && made.value.view !== undefined) boardRef.current = made.value.view;
+        else say(made.ok ? 'The board could not be shown.' : made.message);
       } else {
         boardRef.current.resize();
       }

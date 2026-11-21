@@ -108,6 +108,11 @@ export class I18n {
     this.chain = localeChain(locale);
   }
 
+  /** True when a catalogue in the current language chain has the key (no missing-key report). */
+  has(key: string): boolean {
+    return this.chain.some((id) => this.loaded.get(id)?.[key] !== undefined);
+  }
+
   /** The text of `key`, with `{name}` filled in. `n` picks the plural form. Missing keys show English, then the key. */
   t(key: string, params: Readonly<Record<string, string | number>> = {}): string {
     let msg: Message | undefined;

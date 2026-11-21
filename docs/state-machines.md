@@ -1501,7 +1501,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 
 ## board
 
-Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); rounds 4 and 5 append theirs (figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends the agent job and circle to ask. Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
 
 Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
 
@@ -1948,6 +1948,104 @@ Written before the code of round 3 (`core/tools/select.ts`, `core/tools/shape.ts
 | `open` | `cancel` | | `cancelled` | every kept record written back; history sealed |
 
 - **Reachable invalid states or transitions:** every event in `committed` and `cancelled` has no row (a second `commit` or `cancel` and a late `write` do nothing). A listener that writes while the gesture's transaction notifies makes a diff of its own; the gesture does not keep it.
+
+### Round 4 (branch `feat/board-4`: figure cards and the customisable board)
+
+Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts`). A figure card follows tiptap's `FIGURE_MACHINE` (T1) with one more state, `moving`, for the time the camera is moving; the layer that owns the cards has its own two small machines (the camera's motion as the cards see it, and who has the input). Every table below refuses at least one move. Marks that do not depend on each other sit in one named `readonly` record (`FigureCard.facts`: `pictureAsked`, `inputAsked`, `pictureDue`); the id of the card that holds the input is never kept in a field, it is the card whose own input machine is in `input`.
+
+### B26. Figure card
+
+- **Where:** `web/figures.ts` `FigureCard`, `CARD_MACHINE`; one card for each figure shape of the current page, owned by `FigureLayer`. Every mount, save and unmount of one card runs on its own promise chain (`queue`).
+- **States:** `picture` (no app; the slot shows the shape's `picture`, or nothing and the canvas shows the placeholder); `mounting` (claimed, `createApp` in flight); `live` (an app is there and shown, counted against the cap of 3); `moving` (an app is there, hidden, and the card's picture shows because the camera is moving; still counted against the cap); `saving` (not claimed, the app is still there while its picture is made); `failed` (the mount or the script failed once: the picture and a small error badge; tried again by the next live order); `dead` (failed twice; a picture until the script or mode changes); `gone` (terminal: the shape is removed, the page is left or the board is disposed).
+- **Invariants:** at most 3 cards are `mounting`, `live` or `moving` (the scheduler's `maxLive` and `makeRoom` both keep it); a card holds at most one app; a card on another page has no card at all (the layer drops every card when the page changes); the script is the only source of truth: the card reads `props.script` and nothing else, and a script change from outside (undo, a paste, the lines panel) applies to the live card (added lines run alone, any other change loads again); the picture is a cache: it is written with `history: false`, and a script change writes `picture: null` in the same undo step; a card that is `gone` takes no order; `figure_failed` is reported once for each failure and the card keeps its picture.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `picture` | `claim` | the script and mode check | `mounting` | `makeRoom` saves the least recently used card that is not live |
+| `mounting` | `claim` | | `mounting` | |
+| `mounting` | `mounted` | still wanted, same mode | `live` | the script is loaded; the scheduler is told (`noteMounted`) |
+| `mounting` | `unmounted` | released before the app came | `picture` | app freed |
+| `mounting` | `fail` | first failure | `failed` | `figure_failed`, badge |
+| `mounting` | `giveUp` | second failure | `dead` | `figure_failed`; the card leaves the scheduler |
+| `failed` | `claim` | a live order after the failure | `mounting` | |
+| `live` | `claim` | | `live` | |
+| `live` | `move` | the camera moved (B28) | `moving` | the picture shows, the app hides |
+| `moving` | `claim` | | `moving` | |
+| `moving` | `settle` | the camera was still for 150 ms | `live` | the host is sized for the steady zoom and the app paints again |
+| `live`, `moving` | `unmounted` | the mode changed, or the app is lost | `picture` | app freed; the card is claimed again when the scheduler still wants it |
+| `live`, `moving` | `release` | | `saving` | the reader's lines are kept, the picture is made |
+| `saving` | `claim` | wanted again during the export | `live` | the kept lines are dropped |
+| `saving` | `unmounted` | picture made | `picture` | app freed; the picture is written without an undo step |
+| `failed` | `revive` | script or mode changed | `picture` | failure count cleared |
+| `dead` | `revive` | script or mode changed | `picture` | registered again |
+| any but `gone` | `remove` | | `gone` | app freed, scheduler key dropped |
+
+- **Reachable invalid states or transitions:** `move` and `settle` in `picture`, `mounting`, `saving`, `failed` and `dead` have no row (a card with no shown app has nothing to hide); `mounted` in `picture` or `saving` has no row, so an app that arrives after a release is freed and the card stays as it was; `release` in `picture`, `mounting` and `failed` has no row except `mounting` through `unmounted`; every event in `gone` has no row.
+
+### B27. Card input
+
+- **Where:** `web/figures.ts` `FigureCard.input`, `INPUT_MACHINE`; the layer keeps the rule that at most one card is in `input`.
+- **States:** `board` (pointer and keys go to the board; the card's host has `pointer-events: none`); `input` (the card has the pointer and the keys; the board ignores them).
+- **Invariants:** only a `live` card takes the input; a double click on a card or Enter with one card selected gives it (`give`), Esc inside the card, a press on the board outside the card, another page or the card leaving `live` takes it back (`release`); giving the input to one card first releases the one that had it; while a card is in `input` the board's tools see no pointer and no key from it; Esc inside the card does not clear the board's selection.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `board` | `give` | the card is `live` | `input` | the host takes `pointer-events`, the card takes the focus, the toolbar shows |
+| `input` | `release` | Esc, outside press, card not live | `board` | the host gives them back, the board takes the focus |
+
+- **Reachable invalid states or transitions:** `give` in `input` and `release` in `board` have no row.
+
+### B28. Camera motion (as the cards see it)
+
+- **Where:** `web/figures.ts` `FigureLayer.motion`, `MOTION_MACHINE`. Not the camera's own steady zoom (B4); it also counts a pan.
+- **States:** `still` (the camera is where it was at the last frame); `moving` (it changed at a recent frame).
+- **Invariants:** the layer compares the camera's `x`, `y` and `zoom` with the last frame's; a change sends `moved`; `settle` is sent when 150 ms of the frame clock pass with no change (`STEADY_DELAY_MS`); entering `moving` sends `move` to every card, leaving it sends `settle` to every card; while `moving` the layer asks for frames, so the settle comes with no other event; the scheduler is told of the motion (`noteScroll`) so a card builds only after the camera settled.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `still` | `moved` | camera changed | `moving` | cards `move` |
+| `moving` | `moved` | camera changed | `moving` | the settle time starts again |
+| `moving` | `settle` | 150 ms with no change | `still` | cards `settle` |
+
+- **Reachable invalid states or transitions:** `settle` in `still` has no row.
+
+### B29. Menus
+
+- **Where:** `web/ui/menus.ts` `MenuHost`, `MENU_MACHINE`. The page list (B13) and the More shapes menu keep their own state; this machine is for the menus whose items are a list the host can change.
+- **States:** `closed`; `main` (the main menu, from the top-left button); `page` (the menu of one page, from the page bar); `context` (right-click or a long press, at a point).
+- **Invariants:** one menu is open at a time; the items are built when the menu opens, by the host's function over the default list (`menus.main`, `menus.page`, `menus.context`: `(items, target) => MenuItem[]`), and a function that throws or returns a bad list gives the default list (`onError`); an item whose `enabled(target)` is false is shown disabled and its `run` is never called; a menu closes when an item runs, on Esc and on a press elsewhere; `run` is called after the menu closed and a throw from it is reported (`onError`) and goes no further.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `openMain` | | `main` | items built |
+| `closed` | `openPage` | the page exists | `page` | items built for the page |
+| `closed` | `openContext` | | `context` | items built for the target |
+| `main`, `page`, `context` | `close` | item, Esc, outside press | `closed` | element removed |
+| `main` | `openPage`, `openContext` | | `page`, `context` | the open menu closes first |
+| `page` | `openMain`, `openContext` | | `main`, `context` | the same |
+| `context` | `openMain`, `openPage` | | `main`, `page` | the same |
+
+- **Reachable invalid states or transitions:** `close` in `closed` has no row; opening the menu that is already open has no row, so a second press on the button does not rebuild it (it closes it, through `close`).
+
+### B30. Key map
+
+- **Where:** `core/keymap.ts` `KeyMap`, `KEYMAP_MACHINE`.
+- **States:** `building` (the map takes bindings); `sealed` (the map answers lookups).
+- **Invariants:** a map is made from the defaults and the host's `keys` option: the host's entries first, in the order the host wrote them, then the defaults the host did not name; `false` removes an action's keys; a string or a list replaces them; each key string is normalised (`mod`, `shift`, `alt`, the key in lower case, in that order); a key string already taken by an earlier action is `shortcut_conflict` (`detail.key`, `detail.actions`) and the later action goes without it (the earlier one keeps it); a key string that does not parse is `bad_argument` and is left out; a lookup reads the map only when it is `sealed`, so a half-built map never answers; `rebind` (a host changing `keys` while the board runs) opens it again and seals it when done.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `building` | `bind` | the key is free | `building` | action to key |
+| `building` | `bind` | the key is taken | `building` | `shortcut_conflict`; the later action has no key |
+| `building` | `seal` | | `sealed` | |
+| `sealed` | `rebind` | | `building` | the table is cleared |
+
+- **Reachable invalid states or transitions:** `bind` in `sealed` and `seal` in `sealed` have no row (the sealed map is read only).
 
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
