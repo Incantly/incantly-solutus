@@ -175,8 +175,47 @@ export class IndexGrid {
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
-    this.#collect(minX, minY, maxX, maxY, (e) => polygonMeetsBox(polygon, e.minX, e.minY, e.maxX, e.maxY), out);
+    this.#collect(minX, minY, maxX, maxY, (e) => (polygonMeetsBox(polygon, e.minX, e.minY, e.maxX, e.maxY) ? 1 : 0), out);
     return out;
+  }
+
+  /**
+   * Like `queryLasso`, and tells for each id (`whole[i]` for `out[i]`, both appended) whether the shape's bounds lie
+   * wholly inside the polygon, so the caller needs no point test for it (BR-15). The polygon's own box is tested
+   * first, then only the shapes whose bounds meet that box are tested against the polygon.
+   */
+  queryLassoSplit(polygon: readonly number[], out: string[], whole: boolean[]): void {
+    const n = polygon.length;
+    if (n < 6 || n % 2 !== 0) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i < n; i += 2) {
+      const x = polygon[i] as number;
+      const y = polygon[i + 1] as number;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    this.#collect(
+      minX,
+      minY,
+      maxX,
+      maxY,
+      (e) => {
+        // a box wholly inside the polygon: no edge touches it and a corner is inside
+        if (e.minX >= minX && e.maxX <= maxX && e.minY >= minY && e.maxY <= maxY && !polygonTouchesBoxEdge(polygon, e.minX, e.minY, e.maxX, e.maxY)) {
+          // nothing of the polygon is in or on the box, so every point of the box is on the same side
+          return pointInPolygon(e.minX, e.minY, polygon) ? 2 : 0;
+        }
+        return polygonMeetsBox(polygon, e.minX, e.minY, e.maxX, e.maxY) ? 1 : 0;
+      },
+      out,
+      whole,
+    );
   }
 
   #range(e: Entry): void {
@@ -216,13 +255,21 @@ export class IndexGrid {
     if (set.size === 0) this.#cells.delete(key);
   }
 
-  #collect(minX: number, minY: number, maxX: number, maxY: number, accept: ((e: Entry) => boolean) | undefined, out: string[]): void {
+  /**
+   * The ids of the entries whose box meets the region and that `classify` keeps: 0 leaves it out, 1 keeps it, 2 keeps
+   * it and tells `whole` (when given) that the entry lies wholly inside what the caller asked for.
+   */
+  #collect(minX: number, minY: number, maxX: number, maxY: number, classify: ((e: Entry) => 0 | 1 | 2) | undefined, out: string[], whole?: boolean[]): void {
     const stamp = ++this.#stamp;
     const visit = (id: string): void => {
       const e = this.#entries.get(id);
       if (e === undefined || e.stamp === stamp) return;
       e.stamp = stamp;
-      if (meets(e, minX, minY, maxX, maxY) && (accept === undefined || accept(e))) out.push(id);
+      if (!meets(e, minX, minY, maxX, maxY)) return;
+      const kind = classify === undefined ? 1 : classify(e);
+      if (kind === 0) return;
+      out.push(id);
+      whole?.push(kind === 2);
     };
     const cx0 = cellOf(minX);
     const cy0 = cellOf(minY);
@@ -268,6 +315,41 @@ function segmentsCross(ax: number, ay: number, bx: number, by: number, cx: numbe
   const d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
   const d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
   return d1 * d2 <= 0 && d3 * d4 <= 0 && !(d1 === 0 && d2 === 0);
+}
+
+/** Like `segmentsCross`, and true for collinear segments too: a wrong yes only sends a shape to the point test. */
+function segmentsTouch(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+  const d1 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  const d2 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+  const d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+  const d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+  return d1 * d2 <= 0 && d3 * d4 <= 0;
+}
+
+/**
+ * True when an edge of the polygon touches the outline of the box, or a vertex of the polygon is inside the box. When
+ * it is false the box is wholly inside the polygon or wholly outside it (all its corners agree), so one corner tells.
+ * An edge whose own box does not meet the box is skipped at once.
+ */
+function polygonTouchesBoxEdge(polygon: readonly number[], minX: number, minY: number, maxX: number, maxY: number): boolean {
+  const n = polygon.length;
+  for (let i = 0, j = n - 2; i < n; j = i, i += 2) {
+    const ax = polygon[j] as number;
+    const ay = polygon[j + 1] as number;
+    const bx = polygon[i] as number;
+    const by = polygon[i + 1] as number;
+    if ((ax < minX && bx < minX) || (ax > maxX && bx > maxX) || (ay < minY && by < minY) || (ay > maxY && by > maxY)) continue;
+    if (bx >= minX && bx <= maxX && by >= minY && by <= maxY) return true;
+    if (
+      segmentsTouch(ax, ay, bx, by, minX, minY, maxX, minY) ||
+      segmentsTouch(ax, ay, bx, by, maxX, minY, maxX, maxY) ||
+      segmentsTouch(ax, ay, bx, by, maxX, maxY, minX, maxY) ||
+      segmentsTouch(ax, ay, bx, by, minX, maxY, minX, minY)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** True when the polygon and the box share a point. */

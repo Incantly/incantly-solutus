@@ -6,7 +6,7 @@ Status: draft. Stage 1 builds the mode machinery and two modes (`figure`, `graph
 
 ### For a learner
 
-Opening the program in a mode gives a tidy tool for one job: a graphing calculator, a geometry board, a scientific calculator, a probability explorer, a notes board. Fewer buttons, the right defaults (degrees for geometry, a 1:1 window), and only the commands that make sense.
+Opening the program in a mode gives a tidy tool for one job: a graphing calculator, a geometry board, a scientific calculator, a probability explorer, a board. Fewer buttons, the right defaults (degrees for geometry, a 1:1 window), and only the commands that make sense.
 
 ### For a teacher
 
@@ -41,7 +41,7 @@ From the source (`main/settings/config/`, `main/AppConfig.java`, `exam/`, `kerne
   - *CAS:* algebra view with symbolic rows; no graphics view at start; symbolic output.
   - *Scientific:* single column of expression and result rows; no graphics; a specific keyboard; very small command set; no tools panel; an `Ans` mechanism; fraction and decimal toggles.
   - *Probability:* a distribution view with parameters, probability calculator and statistics tab.
-  - *Notes:* a board of pages: pen, shapes, text, images, media, with embedded maths widgets; no maths objects of its own.
+  - *Board* (id `notes`; "Tableau" in French): a board of pages: pen, shapes, text, images, media, with embedded maths widgets; no maths objects of its own.
   - *Classic:* everything: menu bar, input bar, all views, scripting, tools builder.
   - *A "suite"* that hosts several apps, switching with a menu.
 - **Filters.** Command, command-argument, expression (operators and functions), operation, syntax, tool, context-menu, property and output-format filters, composed into a bundle per app or per exam. An exam type is such a bundle plus rules about settings and an on/off switch for CAS and 3D.

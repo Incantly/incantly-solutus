@@ -22,6 +22,10 @@ export type BoardErrorKind =
   | 'bad_argument'
   /** Undo or redo with an empty stack. */
   | 'nothing_to_undo'
+  /** The tool id is not registered. */
+  | 'tool_unknown'
+  /** WebGL 2 is not available or its context cannot come back: the board draws with Canvas 2D. */
+  | 'render_failed'
   /** A callback threw, or a bug in the board. */
   | 'internal';
 

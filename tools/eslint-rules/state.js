@@ -224,6 +224,90 @@ export const tableRefuses = {
   },
 };
 
+/** An event name that starts something: the machine leaves its resting state for a state that holds data. */
+const BEGIN_LIKE = /^(begin|start|down|open|enter|press|grab|arm|activate|engage)/i;
+
+/** True for `null`, `undefined` and `void 0`: the value that clears a field. */
+const isNullish = (node) =>
+  (node.type === 'Literal' && node.value === null && node.raw === 'null') ||
+  (node.type === 'Identifier' && node.name === 'undefined') ||
+  (node.type === 'UnaryExpression' && node.operator === 'void');
+
+/** True when the type is a union of something with `null` or `undefined`. */
+function isNullableUnion(def) {
+  const t = def.typeAnnotation?.typeAnnotation;
+  if (t?.type !== 'TSUnionType') return false;
+  const isNil = (u) => u.type === 'TSNullKeyword' || u.type === 'TSUndefinedKeyword';
+  return t.types.some(isNil) && t.types.some((u) => !isNil(u));
+}
+
+const isMachineField = (def) =>
+  def.type === 'PropertyDefinition' && !def.static && def.value?.type === 'NewExpression' && def.value.callee.type === 'Identifier' && def.value.callee.name === 'StateMachine';
+
+export const noShadowNull = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A nullable field that is set when a machine begins must be cleared when the machine leaves the state, or live in the state data.' },
+    schema: [],
+    messages: {
+      shadow:
+        '`{{name}}` is set when `{{machine}}` begins and never set back to null or undefined: this field holds part of the state; clear it when the machine leaves the state, or keep it in the state\'s data.',
+    },
+  },
+  create(context) {
+    const classes = [];
+    const methods = [];
+    return {
+      ClassBody(node) {
+        const machines = new Set();
+        const nullable = new Map();
+        for (const def of node.body) {
+          if (def.type !== 'PropertyDefinition' || def.static) continue;
+          const name = keyName(def);
+          if (!name) continue;
+          if (isMachineField(def)) machines.add(name);
+          else if (isNullableUnion(def)) nullable.set(name, def);
+        }
+        // a class with no machine or no nullable field has nothing to check
+        classes.push(machines.size > 0 && nullable.size > 0 ? { machines, nullable, cleared: new Set(), begun: new Map() } : undefined);
+      },
+      'ClassBody:exit'() {
+        const info = classes.pop();
+        if (!info) return;
+        for (const [name, machine] of info.begun) {
+          if (info.cleared.has(name)) continue;
+          context.report({ node: info.nullable.get(name), messageId: 'shadow', data: { name: name.replace(/^#/, ''), machine: machine.replace(/^#/, '') } });
+        }
+      },
+      MethodDefinition(node) {
+        methods.push({ kind: node.kind, machine: undefined, assigns: [] });
+      },
+      'MethodDefinition:exit'() {
+        const method = methods.pop();
+        const info = classes[classes.length - 1];
+        if (!method || !info || method.kind === 'constructor' || method.machine === undefined) return;
+        for (const name of method.assigns) if (!info.begun.has(name)) info.begun.set(name, method.machine);
+      },
+      CallExpression(node) {
+        const info = classes[classes.length - 1];
+        const method = methods[methods.length - 1];
+        if (!info || !method || node.callee.type !== 'MemberExpression' || memberName(node.callee) !== 'send') return;
+        const machine = thisField(node.callee.object);
+        const event = node.arguments[0];
+        if (machine !== undefined && info.machines.has(machine) && event?.type === 'Literal' && typeof event.value === 'string' && BEGIN_LIKE.test(event.value)) method.machine = machine;
+      },
+      AssignmentExpression(node) {
+        const info = classes[classes.length - 1];
+        const method = methods[methods.length - 1];
+        const name = thisField(node.left);
+        if (!info || !method || method.kind === 'constructor' || name === undefined || !info.nullable.has(name)) return;
+        if (isNullish(node.right)) info.cleared.add(name);
+        else method.assigns.push(name);
+      },
+    };
+  },
+};
+
 export const noStaleAfterAwait = {
   meta: {
     type: 'problem',

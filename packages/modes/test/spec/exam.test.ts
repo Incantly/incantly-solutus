@@ -82,7 +82,7 @@ describe('switching modes (R4)', () => {
 
   it('a mode that is not built is refused', () => {
     const f = graphingFigure();
-    const r = switchMode(f, MODES.graphing, MODES.notes, { catalogue: CAT });
+    const r = switchMode(f, MODES.graphing, { ...MODES.notes, available: false, unavailableReason: 'This mode is not part of this app yet.' }, { catalogue: CAT });
     expect(r.ok).toBe(false);
     expect(r.error?.kind).toBe('mode_unavailable');
   });

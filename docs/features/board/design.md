@@ -135,8 +135,9 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 
 1. Smooth the points with a short moving window weighted by distance (streamline), so a shaky hand gives a steady line.
 2. Width at each point: `size * (1 - thinning + thinning * pressure)`, eased, with the speed taper for simulated pressure.
-3. Offset each point left and right of the direction by half its width; round caps at both ends; a sharp turn (over 120°) adds the corner's arc so the line does not pinch.
-4. The outline is one polygon, tessellated once into triangles and cached until the stroke changes. Moving or zooming never re-tessellates.
+3. Offset each point left and right of the direction by half its width, on the bisector of the two segments; round caps at both ends; a turn of more than 30° gets its own offsets on each segment and a round arc on the outer side, so the line does not pinch (a turn over 120° always needs it).
+4. The outline is written as indexed triangles of one winding: a quad for each segment, a fan for each cap and each arc. Their union is the stroke, so no general polygon tessellator is needed and a sharp turn cannot make the outline cross itself. The triangles are cached by what they are made of: the stroke's points array (a stored record keeps its array while the points are the same), its stride, size and nib, and the zoom step's tolerance. A move writes a new record with the same points array, so moving or panning never rebuilds them; a change of points is a new array and a new outline; a zoom step rebuilds the arcs only.
+5. The live stroke does not rebuild its outline each frame: a point is final once the point eight after it exists (the streamlining, the width and the tilt read a few neighbours), so each frame keeps the triangles of the settled points and makes the last few segments again, and writes into arrays it keeps and doubles when they are full, so drawing makes no garbage. The result equals a full build of the same points.
 
 ### 6.3 Drawing it with no lag
 
@@ -153,7 +154,7 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 | Highlighter | Wide, see-through, drawn under ink and shapes |
 | Eraser | Whole-stroke mode removes any stroke it touches; partial mode cuts strokes where it passes. The pen's eraser end picks the eraser for as long as it is used |
 | Laser | A fading trail for pointing; never stored, shown to others in a shared session |
-| Lasso | Selects the items it encloses (more than half of a stroke's points, or a shape's centre) |
+| Lasso | Selects the items it encloses (more than half of a stroke's points, or a shape's centre). The index grid gives the strokes whose boxes meet the loop; a stroke whose box is wholly inside is in with no point test, and only the others count points, stopping as soon as the answer is known |
 
 ### 6.5 Palm and finger
 

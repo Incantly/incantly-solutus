@@ -81,7 +81,10 @@ export interface Batch {
   /** Depth comparison; `greater` drives the hidden-line pass (space-3d 9.3). */
   readonly depthFunc: 'less' | 'greater';
   readonly depthWrite: boolean;
-  readonly blend: 'none' | 'alpha' | 'add';
+  /** `premult`: the fragment holds premultiplied colour (the 2D board's tiles); `alpha`: straight colour. */
+  readonly blend: 'none' | 'alpha' | 'add' | 'premult';
+  /** Targets sampled by the program, by sampler name, bound to texture units 0, 1, … (the 2D board's tiles). */
+  readonly textures?: Readonly<Record<string, Target>>;
   readonly cullBack: boolean;
 }
 
