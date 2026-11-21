@@ -17,7 +17,7 @@ import type { LiveStrokeView, PredictedView } from '../draw';
 import type { Store } from '../store';
 import type { ShapeRecord } from '../types';
 import { Outliner } from './outline';
-import type { Nib } from './outline';
+import type { Nib, OutlineOptions } from './outline';
 import { InkSampler } from './samples';
 import type { Stride } from './samples';
 
@@ -46,6 +46,9 @@ function lastIndexOn(store: Store, page: string): string | null {
 
 const PREDICTED_MAX = 32;
 
+/** The numbers the painter reads, written in place each frame so a frame makes no garbage (BR-16). */
+type Writable<T> = { -readonly [K in keyof T]: T[K] };
+
 export class LiveStroke {
   /** The triangles of the stroke so far, rebuilt by `rebuild`; the painter reads them. */
   readonly outliner = new Outliner();
@@ -55,9 +58,15 @@ export class LiveStroke {
   #predictedCount = 0;
   #sampler: InkSampler = this.#samplers[3];
   #style: PenStyle = { nib: 'pen', size: 3, color: '#000000', opacity: 1 };
+  /** Data of the `drawing` state: the page the stroke is on. It is cleared when the stroke ends or is cancelled. */
   #page: string | null = null;
   #serial = 0;
-  #tolerance = 0.25;
+  readonly #options: Writable<OutlineOptions> = { size: 3, nib: 'pen', tolerance: 0.25 };
+  readonly #colour = { r: 0, g: 0, b: 0 };
+  readonly #predictedView: Writable<PredictedView> = { xy: this.#predicted, count: 0 };
+  readonly #strokeView: Writable<LiveStrokeView> = {
+    serial: 0, originX: 0, originY: 0, r: 0, g: 0, b: 0, size: 3, opacity: 1, multiply: false, outliner: this.outliner, predicted: null,
+  };
 
   get state(): LiveState {
     return this.#machine.state;
@@ -79,6 +88,11 @@ export class LiveStroke {
     this.#serial++;
     this.#style = style;
     this.#page = page;
+    const [r, g, b] = parseColor(style.color);
+    this.#colour.r = r;
+    this.#colour.g = g;
+    this.#colour.b = b;
+    this.outliner.reset();
     this.#predictedCount = 0;
     this.#sampler = this.#samplers[tilt && s.device === 'pen' ? 5 : 3];
     this.#sampler.reset();
@@ -101,30 +115,39 @@ export class LiveStroke {
     this.#predictedCount++;
   }
 
-  /** Builds the outline of the points so far; `scale` is device pixels per page unit. */
+  /**
+   * Brings the outline up to the points so far; `scale` is device pixels per page unit. The points before the last few
+   * segments are kept from the last call, so a frame costs the same however long the stroke is. A change of zoom
+   * (another tolerance) builds the whole outline again.
+   */
   rebuild(scale: number): void {
     const buf = this.#sampler.buffer;
-    this.#tolerance = 0.25 / (scale > 0 ? scale : 1);
-    this.outliner.build(buf.array, buf.count, buf.stride, { size: this.#style.size, nib: this.#style.nib, tolerance: this.#tolerance });
+    const o = this.#options;
+    o.size = this.#style.size;
+    o.nib = this.#style.nib;
+    o.tolerance = 0.25 / (scale > 0 ? scale : 1);
+    this.outliner.extend(buf.array, buf.count, buf.stride, o);
   }
 
-  /** What the painter draws. Call `rebuild` first. */
+  /** What the painter draws. Call `rebuild` first. The same object every time: read it during the frame. */
   view(): LiveStrokeView {
-    const [r, g, b] = parseColor(this.#style.color);
-    const predicted: PredictedView | null = this.#predictedCount > 0 ? { xy: this.#predicted, count: this.#predictedCount } : null;
-    return {
-      serial: this.#serial,
-      originX: this.#sampler.originX,
-      originY: this.#sampler.originY,
-      r,
-      g,
-      b,
-      size: this.#style.size,
-      opacity: this.#style.opacity,
-      multiply: this.#style.nib === 'highlighter',
-      outliner: this.outliner,
-      predicted,
-    };
+    const v = this.#strokeView;
+    v.serial = this.#serial;
+    v.originX = this.#sampler.originX;
+    v.originY = this.#sampler.originY;
+    v.r = this.#colour.r;
+    v.g = this.#colour.g;
+    v.b = this.#colour.b;
+    v.size = this.#style.size;
+    v.opacity = this.#style.opacity;
+    v.multiply = this.#style.nib === 'highlighter';
+    if (this.#predictedCount > 0) {
+      this.#predictedView.count = this.#predictedCount;
+      v.predicted = this.#predictedView;
+    } else {
+      v.predicted = null;
+    }
+    return v;
   }
 
   /**

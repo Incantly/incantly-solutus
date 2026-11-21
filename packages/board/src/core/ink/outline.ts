@@ -12,8 +12,10 @@
  *
  * The pieces (one quad per segment, a fan per cap and per corner) are written as indexed triangles, all with the same
  * winding, so their union is the stroke. A stroke is drawn from these triangles by the GPU painter and by the Canvas 2D
- * backup; the outline of a stored stroke is cached until its record changes (`OutlineCache`). `Outliner` reuses its
- * arrays, so a live stroke rebuilds its outline every frame without making garbage.
+ * backup; the outline of a stored stroke is cached by its points (`OutlineCache`). `Outliner` keeps and grows its
+ * arrays, and a live stroke calls `extend` each frame: the points that cannot change any more (the streamlining and
+ * the width reach three points each way) are kept from the last call, and only the last few segments are made again,
+ * so a frame costs the same however long the stroke is and makes no garbage (BR-16).
  *
  * The triangles are grouped: group 0 is the start cap and the first segment, group g the segment g, the last group the
  * end cap. `marks[g]` is the index where group g starts, so the live layer draws only the groups it has not drawn yet.
@@ -64,6 +66,21 @@ const SAME_POINT = 1e-3;
 /** The widest the tilt makes a nib: 1 plus this at a full tilt across the stroke. */
 const TILT_WIDEN = 0.6;
 const TAU = Math.PI * 2;
+/**
+ * Point `i` is final once point `i + SETTLED` exists: the streamlining reads two points each way, the width reads its
+ * neighbours' smoothed values (three each way) and the tilt width reads the next direction (four). Eight leaves a margin.
+ */
+const SETTLED = 8;
+
+/** The distance of `(dx, dy)`: `Math.hypot` makes a number on the heap each call, this does not. */
+const dist = (dx: number, dy: number): number => Math.sqrt(dx * dx + dy * dy);
+
+/** A bigger array with the numbers of the old one. */
+function grown64(old: Float64Array, size: number): Float64Array<ArrayBuffer> {
+  const next = new Float64Array(size);
+  next.set(old);
+  return next;
+}
 
 const ease = (p: number): number => {
   const c = p < 0 ? 0 : p > 1 ? 1 : p;
@@ -103,6 +120,24 @@ export class Outliner {
   #w2 = new Float64Array(128);
   #ux = new Float64Array(128);
   #uy = new Float64Array(128);
+  // what the last build or extend left, so `extend` can go on from it
+  #rawDone = 0;
+  #pointsDone = 0;
+  #made = false;
+  #stride: Stride = 3;
+  #size = 0;
+  #nib: Nib = 'pen';
+  #tolerance = 0;
+  /** The first iteration of `#strokeOf` that is not final; everything before it is kept. */
+  #settled = 0;
+  #cpVertices = 0;
+  #cpIndices = 0;
+  #cpLeft = 0;
+  #cpRight = 0;
+  #cpMinX = 0;
+  #cpMinY = 0;
+  #cpMaxX = 0;
+  #cpMaxY = 0;
 
   /** `x, y` pairs of the last build; only the first `vertexCount * 2` numbers count. */
   get vertices(): Float32Array {
@@ -140,30 +175,67 @@ export class Outliner {
     return { vertices: this.#vx.slice(0, this.#vcount * 2), indices: this.#ix.slice(0, this.#icount), bounds: this.bounds };
   }
 
-  /** Builds the outline of `count` points of `stride` numbers each. A stroke with no point gives no triangles. */
+  /** Builds the outline of `count` points of `stride` numbers each, from nothing. A stroke with no point gives no triangles. */
   build(points: Float32Array, count: number, stride: Stride, opts: OutlineOptions): void {
+    this.#run(points, count, stride, opts, false);
+  }
+
+  /** Forgets what was built, so the next `extend` starts a new stroke. */
+  reset(): void {
+    this.#made = false;
+  }
+
+  /**
+   * The same result as `build`, for a stroke that only grew since the last `build` or `extend` of this outliner: the
+   * points it had are unchanged and `opts` are the same. It keeps what cannot change any more and makes the last few
+   * segments again. A call that does not fit (other style, fewer points, nothing built yet) builds from nothing.
+   */
+  extend(points: Float32Array, count: number, stride: Stride, opts: OutlineOptions): void {
+    this.#run(points, count, stride, opts, true);
+  }
+
+  #run(points: Float32Array, count: number, stride: Stride, opts: OutlineOptions, grow: boolean): void {
+    const size = Number.isFinite(opts.size) && opts.size > 0 ? opts.size : 1;
+    const spec = NIB_SPECS[opts.nib];
+    const n = Math.min(count, Math.floor(points.length / stride));
+    const resume =
+      grow && this.#made && stride === this.#stride && size === this.#size && opts.nib === this.#nib && opts.tolerance === this.#tolerance && n >= this.#rawDone;
+    const keepFrom = resume ? this.#settled : 0;
+    const rawFrom = resume ? this.#rawDone : 0;
+    const pointsFrom = resume ? this.#pointsDone : 0;
+    // the numbers of the points before `from` were made by an earlier call and do not change
+    const from = keepFrom > 3 ? keepFrom - 3 : 0;
     this.#vcount = 0;
     this.#icount = 0;
     this.#groups = 0;
     this.#minX = this.#minY = Infinity;
     this.#maxX = this.#maxY = -Infinity;
-    const size = Number.isFinite(opts.size) && opts.size > 0 ? opts.size : 1;
-    const spec = NIB_SPECS[opts.nib];
-    const m = this.#dedupe(points, count, stride, spec.tilt);
+    this.#made = false;
+    const m = this.#dedupe(points, n, stride, spec.tilt, rawFrom, pointsFrom);
+    this.#rawDone = n;
+    this.#pointsDone = m;
+    this.#stride = stride;
+    this.#size = size;
+    this.#nib = opts.nib;
+    this.#tolerance = opts.tolerance;
+    this.#settled = 0;
     if (m === 0) {
       this.#minX = this.#minY = this.#maxX = this.#maxY = 0;
+      this.#made = true;
       return;
     }
-    this.#smooth(m, spec.streamline, size);
-    this.#widths(m, size, spec, stride);
+    this.#smooth(m, spec.streamline, size, from);
+    this.#widths(m, size, spec, stride, from);
     if (m === 1) {
       this.#dot(opts.tolerance);
       this.#markGroup(0, 0);
       this.#markGroup(1, this.#icount);
       this.#groups = 1;
+      this.#made = true;
       return;
     }
-    this.#strokeOf(m, opts.tolerance);
+    this.#strokeOf(m, opts.tolerance, keepFrom);
+    this.#made = true;
   }
 
   // ------------------------------------------------------------------------------------------------ preparation
@@ -172,31 +244,37 @@ export class Outliner {
     if (this.#px.length >= n) return;
     let size = this.#px.length;
     while (size < n) size *= 2;
-    this.#px = new Float64Array(size);
-    this.#py = new Float64Array(size);
-    this.#pp = new Float64Array(size);
-    this.#tx = new Float64Array(size);
-    this.#ty = new Float64Array(size);
-    this.#sx = new Float64Array(size);
-    this.#sy = new Float64Array(size);
-    this.#sp = new Float64Array(size);
-    this.#w = new Float64Array(size);
-    this.#w2 = new Float64Array(size);
-    this.#ux = new Float64Array(size);
-    this.#uy = new Float64Array(size);
-    if (this.#marks.length < size + 1) this.#marks = new Uint32Array(size + 1);
+    this.#px = grown64(this.#px, size);
+    this.#py = grown64(this.#py, size);
+    this.#pp = grown64(this.#pp, size);
+    this.#tx = grown64(this.#tx, size);
+    this.#ty = grown64(this.#ty, size);
+    this.#sx = grown64(this.#sx, size);
+    this.#sy = grown64(this.#sy, size);
+    this.#sp = grown64(this.#sp, size);
+    this.#w = grown64(this.#w, size);
+    this.#w2 = grown64(this.#w2, size);
+    this.#ux = grown64(this.#ux, size);
+    this.#uy = grown64(this.#uy, size);
+    if (this.#marks.length < size + 1) {
+      const marks = new Uint32Array(size + 1);
+      marks.set(this.#marks);
+      this.#marks = marks;
+    }
   }
 
-  /** Copies the points that are not the same place as the one before, and returns how many there are. */
-  #dedupe(points: Float32Array, count: number, stride: Stride, tilt: boolean): number {
-    const n = Math.min(count, Math.floor(points.length / stride));
+  /**
+   * Copies the points from raw point `rawFrom` on that are not the same place as the one before, after the `kept`
+   * that are already there, and returns how many there are in all.
+   */
+  #dedupe(points: Float32Array, n: number, stride: Stride, tilt: boolean, rawFrom: number, kept: number): number {
     this.#ensureScratch(n + 1);
-    let m = 0;
-    for (let i = 0; i < n; i++) {
+    let m = kept;
+    for (let i = rawFrom; i < n; i++) {
       const x = points[i * stride] as number;
       const y = points[i * stride + 1] as number;
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      if (m > 0 && Math.hypot(x - (this.#px[m - 1] as number), y - (this.#py[m - 1] as number)) < SAME_POINT) continue;
+      if (m > 0 && dist(x - (this.#px[m - 1] as number), y - (this.#py[m - 1] as number)) < SAME_POINT) continue;
       this.#px[m] = x;
       this.#py[m] = y;
       const p = points[i * stride + 2] as number;
@@ -209,8 +287,8 @@ export class Outliner {
   }
 
   /** Streamline: blend each inner point with its neighbours, weighted by distance; the ends stay. */
-  #smooth(m: number, amount: number, size: number): void {
-    for (let i = 0; i < m; i++) {
+  #smooth(m: number, amount: number, size: number, from: number): void {
+    for (let i = from; i < m; i++) {
       const x = this.#px[i] as number;
       const y = this.#py[i] as number;
       const p = this.#pp[i] as number;
@@ -230,7 +308,7 @@ export class Outliner {
           if (j < 0 || j >= m) continue;
           const jx = this.#px[j] as number;
           const jy = this.#py[j] as number;
-          const w = (amount * (d === 1 ? 1 : 0.5)) / (1 + Math.hypot(jx - x, jy - y) / size);
+          const w = (amount * (d === 1 ? 1 : 0.5)) / (1 + dist(jx - x, jy - y) / size);
           sx += jx * w;
           sy += jy * w;
           sp += (this.#pp[j] as number) * w;
@@ -244,20 +322,20 @@ export class Outliner {
   }
 
   /** Segment directions, then the width at each point (pressure, tilt, three-point smoothing). */
-  #widths(m: number, size: number, spec: NibSpec, stride: Stride): void {
-    for (let k = 0; k + 1 < m; k++) {
+  #widths(m: number, size: number, spec: NibSpec, stride: Stride, from: number): void {
+    for (let k = from > 0 ? from - 1 : 0; k + 1 < m; k++) {
       const dx = (this.#sx[k + 1] as number) - (this.#sx[k] as number);
       const dy = (this.#sy[k + 1] as number) - (this.#sy[k] as number);
-      const len = Math.hypot(dx, dy);
+      const len = dist(dx, dy);
       this.#ux[k] = len > 0 ? dx / len : 1;
       this.#uy[k] = len > 0 ? dy / len : 0;
     }
-    for (let i = 0; i < m; i++) {
+    for (let i = from > 0 ? from - 1 : 0; i < m; i++) {
       let w = size * (1 - spec.thinning + spec.thinning * ease(this.#sp[i] as number));
       if (spec.tilt && stride === 5 && m > 1) {
         const tx = this.#tx[i] as number;
         const ty = this.#ty[i] as number;
-        const mag = Math.hypot(tx, ty);
+        const mag = dist(tx, ty);
         if (mag > 0) {
           const k = i < m - 1 ? i : m - 2;
           const across = Math.abs((this.#ux[k] as number) * ty - (this.#uy[k] as number) * tx) / mag;
@@ -266,7 +344,7 @@ export class Outliner {
       }
       this.#w2[i] = w;
     }
-    for (let i = 0; i < m; i++) {
+    for (let i = from; i < m; i++) {
       const a = this.#w2[i === 0 ? 0 : i - 1] as number;
       const b = this.#w2[i] as number;
       const c = this.#w2[i === m - 1 ? m - 1 : i + 1] as number;
@@ -348,16 +426,35 @@ export class Outliner {
     this.#triangle(centre, prev, first);
   }
 
-  #strokeOf(m: number, tolerance: number): void {
+  /**
+   * Writes the triangles of the `m` smoothed points. The iterations before `resume` were written by an earlier call and
+   * are kept (their vertices, triangles and bounds come back from the checkpoint); the rest are written again. The
+   * iterations before `m - SETTLED` are final, so the checkpoint is taken after the last of them.
+   */
+  #strokeOf(m: number, tolerance: number, resume: number): void {
     const sx = this.#sx;
     const sy = this.#sy;
     const ux = this.#ux;
     const uy = this.#uy;
-    this.#markGroup(0, 0);
-    // the start pair: the vertices the first segment starts from
+    // iteration 0 is only the start cap and has no checkpoint of its own, so the first one kept is the second
+    const settled = m > SETTLED + 1 ? m - SETTLED : 0;
     let startL = 0;
     let startR = 0;
-    for (let i = 0; i < m; i++) {
+    let first = 0;
+    if (resume > 0) {
+      this.#vcount = this.#cpVertices;
+      this.#icount = this.#cpIndices;
+      this.#minX = this.#cpMinX;
+      this.#minY = this.#cpMinY;
+      this.#maxX = this.#cpMaxX;
+      this.#maxY = this.#cpMaxY;
+      startL = this.#cpLeft;
+      startR = this.#cpRight;
+      first = resume;
+    } else {
+      this.#markGroup(0, 0);
+    }
+    for (let i = first; i < m; i++) {
       const x = sx[i] as number;
       const y = sy[i] as number;
       const r = (this.#w[i] as number) / 2;
@@ -390,7 +487,7 @@ export class Outliner {
         if (cos >= COS_ARC) {
           let bx = pnx + nnx;
           let by = pny + nny;
-          const bl = Math.hypot(bx, by);
+          const bl = dist(bx, by);
           bx /= bl;
           by /= bl;
           const k = 1 / Math.max(0.5, bx * nnx + by * nny);
@@ -420,6 +517,16 @@ export class Outliner {
       startL = nextL;
       startR = nextR;
       this.#markGroup(i, this.#icount);
+      if (i + 1 === settled && settled > resume) {
+        this.#cpVertices = this.#vcount;
+        this.#cpIndices = this.#icount;
+        this.#cpMinX = this.#minX;
+        this.#cpMinY = this.#minY;
+        this.#cpMaxX = this.#maxX;
+        this.#cpMaxY = this.#maxY;
+        this.#cpLeft = startL;
+        this.#cpRight = startR;
+      }
       if (i === m - 1) {
         // the end cap: from the right vertex round the front to the left vertex
         const centre = this.#vertex(x, y);
@@ -428,6 +535,7 @@ export class Outliner {
     }
     this.#markGroup(m, this.#icount);
     this.#groups = m;
+    this.#settled = settled;
   }
 }
 
@@ -439,21 +547,23 @@ export function outlineOf(points: Float32Array, stride: Stride, opts: OutlineOpt
 }
 
 /**
- * Outlines of stored strokes, cached until the stroke changes. A stored record is never written in place (design 4), so
- * the record object is the key: a changed stroke is a new object and gets a new outline. The cache holds the outline
- * for one tolerance; a different one (another zoom step) builds it again.
+ * Outlines of stored strokes, cached by what they are made of: the owner (the stroke's points array, which a stored
+ * record keeps while the points are the same), the stride, the size, the nib and the tolerance. A move writes a new
+ * record with the same points array and changes only its transform, so it never builds an outline again (design 6.2
+ * item 4). A change of the points is a new array and gets a new outline. The cache holds the outline for one
+ * tolerance; a different one (another zoom step) builds it again.
  */
 export class OutlineCache {
-  readonly #built = new WeakMap<object, { readonly tolerance: number; readonly outline: Outline }>();
+  readonly #built = new WeakMap<object, { readonly stride: Stride; readonly size: number; readonly nib: Nib; readonly tolerance: number; readonly outline: Outline }>();
   readonly #outliner = new Outliner();
 
-  /** The outline of the stroke held by `owner` (the shape record), built once per tolerance. */
+  /** The outline of the stroke held by `owner` (its points array), built once per stride, size, nib and tolerance. */
   get(owner: object, points: Float32Array, stride: Stride, opts: OutlineOptions): Outline {
     const known = this.#built.get(owner);
-    if (known !== undefined && known.tolerance === opts.tolerance) return known.outline;
+    if (known !== undefined && known.stride === stride && known.size === opts.size && known.nib === opts.nib && known.tolerance === opts.tolerance) return known.outline;
     this.#outliner.build(points, Math.floor(points.length / stride), stride, opts);
     const outline = this.#outliner.snapshot();
-    this.#built.set(owner, { tolerance: opts.tolerance, outline });
+    this.#built.set(owner, { stride, size: opts.size, nib: opts.nib, tolerance: opts.tolerance, outline });
     return outline;
   }
 

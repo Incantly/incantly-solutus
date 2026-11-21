@@ -137,3 +137,26 @@ export function pointsInside(shape: ShapeRecord<string, InkProps>, polygon: read
   }
   return inside;
 }
+
+/**
+ * True when more than half of the stroke's points are inside the polygon: the same answer as
+ * `pointsInside(shape, polygon) * 2 > count`, and it stops as soon as that is settled, either way.
+ */
+export function mostlyInside(shape: ShapeRecord<string, InkProps>, polygon: readonly number[]): boolean {
+  const { points, stride } = shape.props;
+  const n = Math.floor(points.length / stride);
+  if (n === 0) return false;
+  let inside = 0;
+  let outside = 0;
+  for (let i = 0; i < n; i++) {
+    if (pointInPolygon(shape.x + (points[i * stride] as number), shape.y + (points[i * stride + 1] as number), polygon)) {
+      inside++;
+      if (inside * 2 > n) return true;
+    } else {
+      outside++;
+      // inside can no longer pass half
+      if (outside * 2 >= n) return false;
+    }
+  }
+  return inside * 2 > n;
+}

@@ -324,7 +324,7 @@ export class DrawList {
     // the arcs' tolerance is a quarter of a device pixel (a whole one when the stroke is small), so a zoom step
     // keeps one outline per stroke
     const tolerance = (lod === 'coarse' ? 1 : 0.25) / scale;
-    const outline = this.outlines.get(shape, props.points, props.stride, { size: props.size, nib: props.nib, tolerance });
+    const outline = this.outlines.get(props.points, props.points, props.stride, { size: props.size, nib: props.nib, tolerance });
     const [r, g, b, alpha] = parseColor(props.color);
     return {
       k: 'ink',

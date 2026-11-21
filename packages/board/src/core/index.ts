@@ -22,7 +22,7 @@ export type { CameraView, Point } from './camera';
 export { CELL_SIZE, IndexGrid, pointInPolygon, polygonMeetsBox } from './index-grid';
 export { FILE_FORMAT, FILE_VERSION, loadBoard, saveBoard, snapshot, writeDocument } from './file';
 export type { BoardDocument, LoadOptions, LoadedBoard, Migration } from './file';
-export { BUTTON_BARREL, BUTTON_ERASER, BUTTON_MIDDLE, BUTTON_TIP, GATE_MACHINE, PALM_GRACE_MS, PROBE_FLAT_SAMPLES, PROBE_MACHINE, PointerGate, PressureProbe } from './input';
+export { BUTTON_BARREL, BUTTON_ERASER, BUTTON_MIDDLE, BUTTON_TIP, GATE_ALWAYS_MACHINE, GATE_MACHINE, PALM_GRACE_MS, PROBE_FLAT_SAMPLES, PROBE_MACHINE, PointerGate, PressureProbe } from './input';
 export type { Device, GateOptions, GestureInput, InputSample, InputSink, KeyInput, Phase, TouchDraws, Verdict, WheelInput } from './input';
 export { MIN_DISTANCE_PX, MIN_PRESSURE_STEP, InkSampler, PointBuffer } from './ink/samples';
 export type { Stride } from './ink/samples';
@@ -30,7 +30,7 @@ export { NIBS, NIB_SPECS, OutlineCache, Outliner, outlineOf } from './ink/outlin
 export type { Nib, NibSpec, Outline, OutlineOptions } from './ink/outline';
 export { LIVE_MACHINE, LiveStroke } from './ink/live';
 export type { PenStyle } from './ink/live';
-export { cutInk, inkBounds, inkTouches, pointSegmentDistSq, pointsInside, segmentDistSq } from './ink/geometry';
+export { cutInk, inkBounds, inkTouches, mostlyInside, pointSegmentDistSq, pointsInside, segmentDistSq } from './ink/geometry';
 export { INK_COLOR_DEFAULT, INK_DEFAULTS, INK_SIZE_MAX, inkKind, parseColor } from './kinds/ink';
 export type { InkProps } from './kinds/ink';
 export { isInk, shapeBounds, unionBounds } from './geometry';

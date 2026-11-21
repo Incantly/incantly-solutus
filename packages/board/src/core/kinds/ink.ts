@@ -35,6 +35,13 @@ export const INK_DEFAULTS: InkProps = Object.freeze({
   opacity: 1,
 });
 
+/**
+ * The arrays this kind made. A record that comes back through `check` (a move, a patch to another field) keeps its
+ * array, so the array is the same object while the points are the same points (BR-12: the outline is cached by it).
+ * Any other array a caller hands in is copied.
+ */
+const stored = new WeakSet<Float32Array>();
+
 const COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 /** A `#rgb`, `#rrggbb` or `#rrggbbaa` colour as `[r, g, b, a]`, each 0 to 1; black when it does not parse. */
@@ -74,7 +81,12 @@ export const inkKind: KindDef<InkProps> = {
     const opacity = p['opacity'] ?? 1;
     if (typeof opacity !== 'number' || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) return bad('props.opacity', 'opacity must be a number from 0 to 1.');
     // the stored array is our own copy: nothing the caller keeps can change it
-    return ok({ points: points.slice(), stride, nib: nib as Nib, size, color, opacity });
+    let own = points;
+    if (!stored.has(points)) {
+      own = points.slice();
+      stored.add(own);
+    }
+    return ok({ points: own, stride, nib: nib as Nib, size, color, opacity });
   },
   points: (props) => props.points.length / props.stride,
 };

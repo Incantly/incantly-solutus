@@ -104,6 +104,15 @@ export const GATE_MACHINE: MachineTable<GateState, GateEvent> = {
   gesture: { secondTouch: 'gesture', gestureEnd: 'idle' },
 };
 
+/**
+ * The same table for `touchDraws: 'always'` (BR-13): a finger lands and draws while a pen hovers (`penNear`). While the
+ * pen is writing (`penDown`) a finger still has no row, so it stays a second pointer that is only counted.
+ */
+export const GATE_ALWAYS_MACHINE: MachineTable<GateState, GateEvent> = {
+  ...GATE_MACHINE,
+  penNear: { ...GATE_MACHINE.penNear, touchDown: 'touchDown' },
+};
+
 /** What the adapter does with a sample. */
 export type Verdict =
   /** Give it to the tool. */
@@ -130,7 +139,7 @@ export interface GateOptions {
 }
 
 export class PointerGate {
-  readonly #machine = new StateMachine(GATE_MACHINE, 'idle');
+  readonly #machine: StateMachine<GateState, GateEvent>;
   readonly #touchDraws: TouchDraws;
   /** Data next to the machine: the fingers down, the pointer that draws, the last pen sample's time. */
   #touches = 0;
@@ -139,6 +148,9 @@ export class PointerGate {
 
   constructor(options: GateOptions = {}) {
     this.#touchDraws = options.touchDraws ?? 'auto';
+    // the table is chosen once, from the option
+    const CHOSEN_MACHINE = this.#touchDraws === 'always' ? GATE_ALWAYS_MACHINE : GATE_MACHINE;
+    this.#machine = new StateMachine(CHOSEN_MACHINE, 'idle');
   }
 
   get state(): GateState {

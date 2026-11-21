@@ -1580,9 +1580,9 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 
 ### B5. Pointer gate and palm rule
 
-- **Where:** `core/input.ts` `PointerGate`, `GATE_MACHINE`; used by `web/input.ts`.
+- **Where:** `core/input.ts` `PointerGate`, `GATE_MACHINE` and, for `touchDraws: 'always'`, `GATE_ALWAYS_MACHINE`; used by `web/input.ts`. The gate takes one of the two tables when it is made, from the option (BR-13); they differ in one row, `penNear` `touchDown`.
 - **States:** `idle` (nothing happening), `penNear` (a pen hovers), `penDown` (a pen is writing), `mouseDown` (a mouse button is down), `touchDown` (one finger is drawing), `gesture` (two or more fingers pan and zoom).
-- **Invariants:** a touch never draws while the state is `penNear` or `penDown`, nor within 600 ms (the grace, from the input clock) of the last pen sample, unless the host sets `touchDraws: 'always'`; `touchDraws: 'never'` ignores every single touch; two touches always give `gesture` except while a pen is writing; a pen that goes down while a finger draws cancels that finger's stroke (`cancelThenDraw`) and wins; the number of touches down (`touches`) and the pointer that draws (`drawing`) are data next to the machine, and `touches` never goes below 0; a sample the machine refuses is `ignore`.
+- **Invariants:** a touch never draws while the state is `penNear` or `penDown`, nor within 600 ms (the grace, from the input clock) of the last pen sample, unless the host sets `touchDraws: 'always'`; then a touch draws in `penNear` and within the grace (the `penNear` `touchDown` row of `GATE_ALWAYS_MACHINE`), and while the pen is down (`penDown`, which has no `touchDown` row in either table) the touch stays a second pointer that is only counted; `touchDraws: 'never'` ignores every single touch; two touches always give `gesture` except while a pen is writing; a pen that goes down while a finger draws cancels that finger's stroke (`cancelThenDraw`) and wins; the number of touches down (`touches`) and the pointer that draws (`drawing`) are data next to the machine, and `touches` never goes below 0; a sample the machine refuses is `ignore`.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -1597,6 +1597,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 | `penNear` | `penAway` | the pen left | `idle` | |
 | `penNear` | `mouseDown` | | `mouseDown` | `draw` |
 | `penNear` | `secondTouch` | touches reach 2 | `gesture` | `gesture` |
+| `penNear` | `touchDown` | `touchDraws: 'always'` only (`GATE_ALWAYS_MACHINE`) | `touchDown` | `draw` |
 | `penDown` | `penUp` | | `penNear` | `draw` (the `up` sample) |
 | `penDown` | `penCancel` | | `idle` | `draw` (the `cancel` sample) |
 | `mouseDown` | `mouseUp` | | `idle` | `draw` |
@@ -1606,7 +1607,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 | `gesture` | `secondTouch` | a third finger | `gesture` | |
 | `gesture` | `gestureEnd` | touches fall below 2 | `idle` | |
 
-- **Reachable invalid states or transitions:** a touch in `penDown` has no row, so it is ignored and only counted. `penAway` is the pen's `pointerleave`; a browser that never sends it leaves `penNear` until the next pen or mouse event, and the grace then runs from the last pen sample.
+- **Reachable invalid states or transitions:** a touch in `penDown` has no row (in both tables), so it is ignored and only counted. In `penNear` a touch has no row unless `touchDraws` is `'always'`, and the default gate ignores it through the same refusal. `penAway` is the pen's `pointerleave`; a browser that never sends it leaves `penNear` until the next pen or mouse event, and the grace then runs from the last pen sample.
 
 ### B6. Pen pressure probe
 
@@ -1627,7 +1628,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 
 - **Where:** `core/ink/live.ts` `LiveStroke`, `LIVE_MACHINE`. The pen and the highlighter are one tool over two presets, so their tool state is the live stroke's state.
 - **States:** `idle` (no stroke), `drawing` (samples are being added to the stroke's own buffer, outside the store).
-- **Invariants:** BR-10: the buffer is never a stored record's array; the store gets a fresh record at `end` (`board.change('user', put)`, one undo step, merge key none) and the live buffer is cleared at once; nothing is written to the store while `drawing`; a sample closer than 0.5 screen pixels to the last kept one is dropped unless pressure changed by more than 0.05; a stroke with no kept sample is not stored; a refused commit (`limit`) keeps the board as it was and leaves the machine `idle`; predicted samples are never added.
+- **Invariants:** the page the stroke is drawn on (`page`, a nullable field) is data of the `drawing` state: it is set by `begin` and cleared by `end` (also when the store refuses the write) and by `cancel`, so `page` is `null` whenever the state is `idle` (BR-17, checked by `incantly/state-no-shadow-null`); the outline is extended each frame from the last settled point and equals a full build of the points (BR-16); BR-10: the buffer is never a stored record's array; the store gets a fresh record at `end` (`board.change('user', put)`, one undo step, merge key none) and the live buffer is cleared at once; nothing is written to the store while `drawing`; a sample closer than 0.5 screen pixels to the last kept one is dropped unless pressure changed by more than 0.05; a stroke with no kept sample is not stored; a refused commit (`limit`) keeps the board as it was and leaves the machine `idle`; predicted samples are never added.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |

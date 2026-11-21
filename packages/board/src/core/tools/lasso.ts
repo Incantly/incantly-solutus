@@ -5,7 +5,7 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { isInk } from '../geometry';
-import { pointsInside } from '../ink/geometry';
+import { mostlyInside } from '../ink/geometry';
 import type { InputSample } from '../input';
 import type { ToolContext, ToolDef, ToolHandlers } from './def';
 
@@ -88,13 +88,17 @@ class LassoTool implements ToolHandlers {
       return;
     }
     const polygon = Array.from(this.#xy.subarray(0, this.#count * 2));
-    const ids = index.grid.queryLasso(polygon);
+    // the grid gives the strokes whose boxes meet the loop; one whose box is wholly inside is in without a point test
+    // (BR-15), and only the others count points, stopping as soon as the answer is known
+    const ids: string[] = [];
+    const whole: boolean[] = [];
+    index.grid.queryLassoSplit(polygon, ids, whole);
     const picked: string[] = [];
-    for (const id of ids) {
-      const shape = index.shape(id);
+    for (let i = 0; i < ids.length; i++) {
+      const shape = index.shape(ids[i] as string);
       if (shape === undefined || shape.locked || !isInk(shape)) continue;
-      const n = shape.props.points.length / shape.props.stride;
-      if (n > 0 && pointsInside(shape, polygon) * 2 > n) picked.push(id);
+      if (shape.props.points.length === 0) continue;
+      if (whole[i] === true || mostlyInside(shape, polygon)) picked.push(shape.id);
     }
     selection.set(picked);
   }
