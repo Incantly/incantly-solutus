@@ -44,6 +44,7 @@ Every folder has four files:
 | Motion | [physics](physics/) | Rigid bodies, friction, joints, vehicles, liquids, water, smoke and cloth, in 2D and 3D |
 | Media | [sound](sound/) | Tones, noise, notes, melodies and sonified functions, played with Tone.js |
 | Documents | [tiptap](tiptap/) | Live figures and formulas inside Tiptap documents |
+| Board | [board](board/) | The endless, paged board: pen ink, shapes, figure cards, agents, customisable tools; web now, React Native later |
 
 Performance rules for every area, and our own renderer, are in `docs/design/performance.md`.
 
