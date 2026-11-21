@@ -415,7 +415,14 @@ try {
       for (const [k, v] of top) out(`  ${(v / 1024).toFixed(1).padStart(8)} KB  ${k}`);
     }
     const count = (o) => (o.MinorGC ?? 0) + (o.MajorGC ?? 0);
-    record('gc', count(drawn), `drawing: ${JSON.stringify(drawn)}; idle page for the same time: ${JSON.stringify(idle)}`, { drawn, idle });
+    // the same stroke on a page where the browser's coalesced events are hidden: what the board's own code makes (the
+    // browser makes garbage of its own for each coalesced event it hands over, see the notes of this script)
+    await openStudio('plain-nocoalesced');
+    await throttle(rate);
+    await tool('pen');
+    await stroke(2, box.x + 120, box.y + 300);
+    const own = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    record('gc', count(drawn), `drawing: ${JSON.stringify(drawn)}; the same with the browser's coalesced events hidden: ${JSON.stringify(own)}; idle page for the same time: ${JSON.stringify(idle)}`, { drawn, own, idle });
   }
 
   // ---- 10,000 shapes: pan at 1:1, pan with everything in view, zoom
