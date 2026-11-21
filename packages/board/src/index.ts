@@ -8,6 +8,13 @@ export { LOOP_MACHINE, PAGEBAR_MACHINE, mountBoardView } from './web/board-view'
 export type { BoardView, BoardViewOptions } from './web/board-view';
 export { IMAGE_MACHINE } from './web/images';
 export { createBoard } from './web/create-board';
+export { createAgentKit, pictureOf } from './web/agent';
+export type { AgentKit, AgentOption, KitEnv } from './web/agent';
+export { httpAgentTransport, parseAgentEvent } from './web/agent-http';
+export { sdkFigureHost } from './web/agent-lines';
+export { WebHand } from './web/agent-hand';
+export { AgentPanel, PANEL_MACHINE } from './web/ui/agent-panel';
+export { CircleMenu } from './web/ui/circle-menu';
 export type { Board, BoardOptions } from './web/create-board';
 export { CARD_MACHINE, FigureCard, FigureLayer, INPUT_MACHINE, LIVE_CARDS, MOTION_MACHINE } from './web/figures';
 export type { FigureLayerOptions } from './web/figures';

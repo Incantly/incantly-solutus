@@ -195,7 +195,7 @@ describe('the Board app shows the board (app-modes ui 2 Board; board design 15)'
     // (Image, Figure and Ask come in later rounds). Triangle, Diamond and Star are in the "More shapes" menu of the rectangle's group (round 3, BR-30).
     const toolbar = board.querySelector('[role="toolbar"]') as HTMLElement;
     const inBar = [...toolbar.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool']);
-    const documented = ['select', 'hand', 'pen', 'highlighter', 'eraser', 'laser', 'lasso', 'rect', 'ellipse', 'arrow', 'line', 'text', 'sticky', 'frame'];
+    const documented = ['select', 'hand', 'pen', 'highlighter', 'eraser', 'laser', 'lasso', 'rect', 'ellipse', 'arrow', 'line', 'text', 'sticky', 'frame', 'ask'];
     expect(inBar).toEqual(documented);
     const more = board.querySelector('button[aria-label="More shapes"]') as HTMLButtonElement;
     const menu = board.querySelector('[role="menu"][aria-label="More shapes"]') as HTMLElement;

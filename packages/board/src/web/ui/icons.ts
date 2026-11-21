@@ -26,6 +26,7 @@ const PATHS: Readonly<Record<string, string>> = {
   frame: '<path d="M7 3v18M17 3v18M3 7h18M3 17h18"/>',
   image: '<rect x="4" y="5" width="16" height="14" rx="1.5"/><circle cx="9" cy="10" r="1.5"/><path d="M5 17l5-4 3 3 3-2 3 3"/>',
   figure: '<path d="M4 20V4M4 20h16"/><path d="M6 16c3 0 3-9 6-9s3 9 6 9"/>',
+  ask: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 014.9.6c0 1.7-2.4 2-2.4 3.7M12 17.2h.01"/>',
   fix: '<path d="M5 15c0-5 4-9 9-9M14 6l3-1M14 6l1 3"/><rect x="11" y="13" width="8" height="6" rx="1"/>',
   undo: '<path d="M9 7L4 12l5 5"/><path d="M4 12h9a5 5 0 010 10h-3"/>',
   redo: '<path d="M15 7l5 5-5 5"/><path d="M20 12h-9a5 5 0 000 10h3"/>',

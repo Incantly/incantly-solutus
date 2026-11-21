@@ -296,7 +296,11 @@ The live teacher (core design section 10) gets two more tools, `board` and `boar
 
 ### 11.3 The client
 
-`packages/board` defines the protocol and the client, as `packages/tiptap` does, because `packages/server` is not built yet. `BoardAgentTransport = (request, signal) => AsyncIterable<BoardAgentEvent>`; the default is an HTTP client for `POST {server}/v1/board/ask`, NDJSON answers. Without a transport, the Ask tool says the agent is unavailable (`agent_unavailable`).
+`packages/board` defines the protocol and the client, as `packages/tiptap` does, because `packages/server` is not built yet. `BoardAgentTransport = (request, signal) => AsyncIterable<BoardAgentEvent>`; the default is an HTTP client for `POST {server}/v1/board/ask`, NDJSON answers. Without a transport, the Ask tool says the agent is unavailable (`agent_unavailable`). `createBoard({ agent: { transport | server, vision?, reducedMotion?, label? } })` sets it; `board.agent` holds the runner of the two tools (`board_read`, `board`), the service (the conversation, `ask`, `talk`, `stop`) and the circle. The answer streams in as NDJSON events (`agent.md` 3); a newer request aborts the older one; a stop partway gives `agent_partial` and what was made stays.
+
+### 11.4 Hand animation and the panel
+
+A hand-style `write` and a `stroke` are drawn on the live layer as items that are in no tile (`BoardPainter.drawItems`), about 400 characters a second (a stroke counts one for every 4 page units), never longer than 3 seconds; with reduced motion they appear at once. The board's frame loop is the clock. The agent panel (ui.md) shows the conversation, the Stop button and a hand icon that moves to where the agent draws.
 
 ## 12. Saving
 

@@ -13,7 +13,7 @@ What a user sees and does. Every part below can be changed or removed by the hos
 | Main menu | Top left button | Round 4: Undo, Redo, Image, Figure, Fix, Zoom to fit, Save. New, Open and Export are the host's, added through `menus.main`; Settings is the host's too |
 | Page menu | The ⋯ button of the page bar | Rename, Duplicate, Delete (not the last page), the paper |
 | Context menu | Right-click (long press later) | The selection's commands when something is selected; always Select all, Add a figure card here, Zoom to fit |
-| Agent panel | Right, when an agent is set | The conversation with the talking agent |
+| Agent panel | Right, when an agent is set | The conversation with the talking agent: what you said, what the agent did, a box to talk, a Stop button and a box that lets it change your work (off by default). A stand-in agent says what it is under the title |
 
 With no `tools` option the toolbar shows every built-in tool (`defaultTools`: Select, Hand, the ink tools, the shapes); a board that only draws uses `inkTools`. The canvas fills the rest. The toolbar is icons only (the name and key are in the tooltip and the spoken name) unless the host turns on labels; it can also be at the top, on the left or the right (a column), or hidden. The selection bar, over the top, is one row that never wraps and scrolls on a phone. The toolbar is one row that never wraps: it fits a laptop, and on a phone it scrolls sideways and the style bar opens from it. The More shapes menu is the small arrow after the Rect button; it opens above the toolbar, closes when a shape is chosen, on Esc or on a press elsewhere, and its arrow shows as pressed while one of its shapes is the tool.
 

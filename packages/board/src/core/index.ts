@@ -90,11 +90,29 @@ export { BOARD_STRINGS, Strings } from './strings';
 export type { Translate } from './strings';
 export { addFigure, figureOf, figuresOnPage, sdkMode, setFigureMode, setFigurePicture, setFigureScript, withHeader } from './figures';
 export type { NewFigure } from './figures';
+export { BOARD_READ_TOOL, BOARD_TOOL, BoardAgent, RUNNER_MACHINE, boardTools } from './agent';
+export type { AgentOptions, AgentToolDef, RunOptions } from './agent';
+export { MODEL_META, applyAction } from './agent-actions';
+export type { ActionEnv, CallState } from './agent-actions';
+export { ANIMATION_MACHINE, HAND_CPS, HAND_MAX_MS, HAND_MIN_MS, HandAnimation, STROKE_UNITS_PER_CHAR, partOf, planLength, planMs, revealText } from './agent-hand';
+export type { HandFrame, HandPlan, HandPlayer } from './agent-hand';
+export { LAST, PLACE_GAP, occupiedBoxes, resolvePlace, targetBounds } from './agent-place';
+export type { PlaceEnv } from './agent-place';
+export { ITEM_TEXT_MAX, boundsOfBox, boxOf, describeShape, itemsOf, readBoard, readingOrder, strokeShape } from './agent-read';
+export type { FigureHost, ReadEnv } from './agent-read';
+export { ACTIONS_MAX, ITEMS_MAX, MARK_HOWS, OPS, SHAPE_KINDS, SIDES, readAction, readActions } from './agent-types';
+export type { ActionOk, ActionResult, AgentItem, AgentShapeKind, BoardAction, BoardOp, Box, MarkHow, Place, ReadResult, Side, Target } from './agent-types';
+export { AgentJob, AgentService, CIRCLE_CHOICES, ENTRIES_MAX, JOB_MACHINE, describeResult } from './agent-service';
+export type {
+  AgentEntry, AgentOutcome, AgentServiceOptions, BoardAgentEvent, BoardAgentRequest, BoardAgentTransport, CircleChoice, CircleRequest, TalkRequest,
+} from './agent-service';
+export { CIRCLE_LABELS, CIRCLE_MACHINE, CircleAsk, suggestionsFor } from './circle';
+export type { CircleOptions, Found, Suggestion } from './circle';
 export { BoardCore, registerBuiltInKinds } from './board';
 export type { BoardCoreOptions } from './board';
 export {
   ERASER_MACHINE, HAND_MACHINE, LASER_FADE_MS, LASER_MACHINE, LASER_MAX_POINTS, LASSO_MACHINE, SELECT_MACHINE, SHAPE_TOOLS, SHAPE_TOOL_MACHINE, TOOLS_MACHINE, ToolHost, ToolList, arrowTool, inkTools,
   createOverlayState, defaultStyles, defaultTools, diamondTool, EDIT_ACTIONS, editAction, editKey, ellipseTool, eraserTool, frameTool, handTool, highlighterTool, laserTool, lassoTool, lineTool, penTool, rectTool, selectTool,
-  starTool, stickyTool, styledDefaults, textTool, triangleTool,
+  starTool, stickyTool, styledDefaults, textTool, triangleTool, NO_AGENT, askTool,
 } from './tools/index';
 export type { OverlayState, ShapeStyle, ToolContext, ToolDef, ToolHandlers, ToolStyles } from './tools/index';

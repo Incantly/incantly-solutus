@@ -9,20 +9,21 @@ import { sendIfAble } from '../machine';
 import type { MachineTable } from '@incantly/kernel';
 import { boardError, DONE, refusedMove } from '../errors';
 import type { BoardResult } from '../errors';
-import { BUTTON_ERASER, BUTTON_MIDDLE } from '../input';
+import { BUTTON_BARREL, BUTTON_ERASER, BUTTON_MIDDLE } from '../input';
 import type { GestureInput, InputSample, KeyInput, WheelInput } from '../input';
 import { deleteShapes } from '../edit';
 import type { ToolContext, ToolDef, ToolHandlers, ToolList } from './def';
 import { editKey } from './keys';
 import { defaultKeyTable, KeyMap } from '../keymap';
 
-type HostState = 'chosen' | 'eraserEnd' | 'handHeld';
-type HostEvent = 'eraserDown' | 'eraserUp' | 'handDown' | 'handUp';
+type HostState = 'chosen' | 'eraserEnd' | 'handHeld' | 'askHeld';
+type HostEvent = 'eraserDown' | 'eraserUp' | 'handDown' | 'handUp' | 'askDown' | 'askUp';
 
 export const TOOLS_MACHINE: MachineTable<HostState, HostEvent> = {
-  chosen: { eraserDown: 'eraserEnd', handDown: 'handHeld' },
+  chosen: { eraserDown: 'eraserEnd', handDown: 'handHeld', askDown: 'askHeld' },
   eraserEnd: { eraserUp: 'chosen' },
   handHeld: { handUp: 'chosen' },
+  askHeld: { askUp: 'chosen' },
 };
 
 /** One wheel notch is about this many pixels; the zoom is `2^(-dy / ZOOM_PX)`. */
@@ -56,14 +57,14 @@ export class ToolHost {
     return this.#current;
   }
 
-  /** `chosen`, `eraserEnd` or `handHeld`. */
+  /** `chosen`, `eraserEnd`, `handHeld` or `askHeld`. */
   get state(): HostState {
     return this.#machine.state;
   }
 
   /** The id of the tool that answers input now. */
   get active(): string {
-    return this.#machine.is('eraserEnd') ? 'eraser' : this.#machine.is('handHeld') ? 'hand' : this.#current;
+    return this.#machine.is('eraserEnd') ? 'eraser' : this.#machine.is('handHeld') ? 'hand' : this.#machine.is('askHeld') ? 'ask' : this.#current;
   }
 
   get tools(): readonly ToolDef[] {
@@ -120,6 +121,10 @@ export class ToolHost {
           this.#instance(this.#current)?.onCancel();
           this.#machine.send('handDown');
           this.#heldBy = 'middle';
+        } else if (s.device === 'pen' && (s.buttons & BUTTON_BARREL) !== 0 && this.#list.get('ask') !== undefined) {
+          // the pen's barrel button held gives the Ask tool for this stroke
+          this.#instance(this.#current)?.onCancel();
+          this.#machine.send('askDown');
         }
       }
     }
@@ -153,6 +158,7 @@ export class ToolHost {
     this.#down = -1;
     if (this.#heldBy === 'middle') this.#endHand();
     sendIfAble(this.#machine, 'eraserUp');
+    sendIfAble(this.#machine, 'askUp');
   }
 
   /** Moves the camera by a wheel step: a pan, or a zoom about the pointer for Ctrl or a trackpad pinch. */
@@ -233,6 +239,7 @@ export class ToolHost {
   #release(pointer: number): void {
     if (pointer === this.#down) this.#down = -1;
     if (this.#machine.is('eraserEnd')) this.#machine.send('eraserUp');
+    else if (this.#machine.is('askHeld')) this.#machine.send('askUp');
     else if (this.#heldBy === 'middle') this.#endHand();
   }
 

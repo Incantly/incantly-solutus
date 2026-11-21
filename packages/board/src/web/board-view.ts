@@ -8,6 +8,7 @@ import { StateMachine } from '@incantly/kernel';
 import { sendIfAble } from '../core/machine';
 import type { MachineTable } from '@incantly/kernel';
 import { BoardCore } from '../core/board';
+import { Camera } from '../core/camera';
 import type { BoardCoreOptions } from '../core/board';
 import { addImage } from '../core/assets';
 import { clipboardText, copySelection, pasteAny, readClipboardText, isBoardClipboard, pasteData } from '../core/clipboard';
@@ -34,6 +35,10 @@ import { WebInput } from './input';
 import { WebPainter } from './painter';
 import { TILE_GUTTER } from './painter-2d';
 import { FigureLayer } from './figures';
+import { createAgentKit, pictureOf } from './agent';
+import type { AgentKit, AgentOption } from './agent';
+import { AgentPanel } from './ui/agent-panel';
+import { CircleMenu } from './ui/circle-menu';
 import { defaultIcon } from './ui/icons';
 import { MenuHost } from './ui/menus';
 import type { MenuItem, MenuTarget } from './ui/menus';
@@ -140,6 +145,8 @@ export interface BoardViewOptions {
   readonly shellOptions?: ShellOptions;
   /** Draw with Canvas 2D only. */
   readonly canvas2dOnly?: boolean;
+  /** The agent (design 11): a transport or a server, vision, the label of the panel. Without it the Ask tool says there is none. */
+  readonly agent?: AgentOption;
   /** Called with errors the view can only report (`render_failed`). */
   readonly onError?: (error: BoardError) => void;
 }
@@ -168,6 +175,8 @@ export interface BoardView {
   readonly figures: FigureLayer;
   /** The menus of the board (main, page, context). */
   readonly menus: MenuHost;
+  /** The agent of the board: the runner of the board tools, the service, the circle to ask and the hand. */
+  readonly agent: AgentKit;
   /** Adds a figure card with its middle at the middle of the view and gives it the input. */
   addFigure(mode?: string): BoardResult<string>;
   /** Sets the paper of the current page (BR-18): plain, grid, dots or lines. */
@@ -238,10 +247,47 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const styles = defaultStyles();
   const list: Tile[] = [];
 
+  // the agent (design 11): the closures below are called only after the view is built
+  let panel: AgentPanel | undefined;
+  let pointTimer = 0;
+  const viewBounds = (): Bounds => {
+    const { w, h: height } = sizeOf();
+    return (core.camera ?? new Camera()).visibleBounds(Math.max(1, w), Math.max(1, height));
+  };
+  const kit = createAgentKit(core, options.agent, {
+    view: viewBounds,
+    viewSize: () => {
+      const { w, h: height } = sizeOf();
+      return { w: Math.max(1, w), h: Math.max(1, height) };
+    },
+    clock: () => (typeof performance !== 'undefined' ? performance.now() : 0),
+    requestFrame: () => loop.request(),
+    onTip: (at) => panel?.handAt(at.x, at.y),
+    onHand: (at) => {
+      panel?.handAt(at.x, at.y);
+      loop.request();
+    },
+    onPoint: (box) => {
+      // the laser, not stored: the box is ringed on the overlay for a moment
+      const pad = 12;
+      overlay.hint = [box.minX - pad, box.minY - pad, box.maxX + pad, box.minY - pad, box.maxX + pad, box.maxY + pad, box.minX - pad, box.maxY + pad];
+      window.clearTimeout(pointTimer);
+      pointTimer = window.setTimeout(() => {
+        overlay.hint = null;
+        loop.request();
+      }, 1600);
+      loop.request();
+    },
+    picture: (area) => pictureOf(core, doc, images.lookup, area),
+    onError: report,
+  });
+
   const ctx: ToolContext = {
     core,
     styles,
     overlay,
+    circle: kit.circle,
+    say: (text) => say(text),
     camera: () => core.camera,
     requestFrame: () => loop.request(),
     strokeEnded: () => painter.releaseLive(),
@@ -284,6 +330,15 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     focusBoard: () => surface.focus({ preventScroll: true }),
   });
   painter.element.insertBefore(figures.element, painter.element.lastElementChild);
+  const circleMenu = new CircleMenu({ doc, root, circle: kit.circle, strings, focusBoard: () => surface.focus({ preventScroll: true }) });
+  if (kit.enabled && !readOnly) {
+    panel = new AgentPanel({ doc, root, service: kit.service, strings, onError: report, ...(options.agent?.label !== undefined ? { label: options.agent.label } : {}) });
+  }
+  // without an agent, what the service says (no agent, no transport) shows on the board's status line
+  const stopSay = kit.service.on(() => {
+    const last = kit.service.entries[kit.service.entries.length - 1];
+    if (panel === undefined && last?.who === 'notice') say(last.text);
+  });
   const menus = new MenuHost({ root, fns: shell.menus, label: (k) => strings.t(k), onError: report, requestFrame: () => loop.request(), mac: shell.mac });
 
   // ---- the frame
@@ -344,6 +399,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     };
     placeField();
     if (figures.sync(camera, w, height, now)) more = true;
+    const handFrame = kit.hand?.frame(now, camera.zoom * dpr);
+    if (handFrame !== undefined) {
+      if (handFrame.item !== undefined) painter.drawItems([handFrame.item]);
+      if (handFrame.more) more = true;
+    }
+    panel?.place(camera);
+    circleMenu.place(camera);
     painter.drawOverlay(items);
     painter.endFrame();
     zoomOut.value = `${Math.round(camera.zoom * 100)}%`;
@@ -394,6 +456,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     saveCamera(lastPage);
     lastPage = page;
     host.cancel();
+    kit.circle.dismiss();
     painter.abortLive();
     painter.tiles.clear();
     core.selection.clear();
@@ -1165,6 +1228,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     shell,
     figures,
     menus,
+    agent: kit,
     addFigure: (mode) => (readOnly ? boardError('bad_argument', 'This board is read only.') : addFigureHere(mode)),
     setBackground: (background) => {
       const page = core.pages.current;
@@ -1215,6 +1279,11 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       stopHistory();
       stopEditor();
       images.dispose();
+      kit.service.stop();
+      stopSay();
+      circleMenu.dispose();
+      panel?.dispose();
+      window.clearTimeout(pointTimer);
       window.clearTimeout(noteTimer);
       root.removeEventListener('copy', onCopy);
       root.removeEventListener('cut', onCut);

@@ -12,6 +12,7 @@ import type { SoundEngine } from '@incantly/audio';
 import { mountScientific } from './modes/scientific';
 import { mountKeyboard } from './modes/keyboard';
 import { customBoardOptions, studioBoardOptions } from './board-options';
+import { DEMO_LABEL, demoAgentTransport } from './board-demo-agent';
 import { mountExamScreens } from './modes/exam-ui';
 import type { ScientificView } from './modes/scientific';
 import type { MathKeyboard } from './modes/keyboard';
@@ -545,6 +546,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
         const made = createBoard({
           container: boardHost,
           onError: (e) => say(e.message),
+          // a scripted stand-in for the agent, labelled as such: the flow shows with no server and no model
+          agent: { transport: demoAgentTransport, label: DEMO_LABEL },
           ...studioBoardOptions(() => modeRef.current?.i18n),
           // `?board=custom`: the customised board of the demo
           ...(opts.boardDemo === true ? customBoardOptions : {}),

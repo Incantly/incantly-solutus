@@ -5,11 +5,13 @@ import { handTool } from './hand';
 import { highlighterTool, penTool } from './pen';
 import { laserTool } from './laser';
 import { lassoTool } from './lasso';
+import { askTool } from './ask';
 import { arrowTool, diamondTool, ellipseTool, frameTool, lineTool, rectTool, starTool, stickyTool, textTool, triangleTool } from './shape';
 import { selectTool } from './select';
 
 export { ToolList, createOverlayState, defaultStyles } from './def';
 export type { OverlayState, ShapeStyle, ToolContext, ToolDef, ToolHandlers, ToolStyles } from './def';
+export { NO_AGENT, askTool } from './ask';
 export { ERASER_MACHINE, eraserTool } from './eraser';
 export { HAND_MACHINE, handTool } from './hand';
 export { LASER_FADE_MS, LASER_MACHINE, LASER_MAX_POINTS, laserTool } from './laser';
@@ -27,10 +29,10 @@ export const inkTools: ToolList = new ToolList([penTool, highlighterTool, eraser
 
 /**
  * Every built-in tool, in ui.md's order (Select, Hand, the ink tools, then Rect, Ellipse, Arrow, Line, Text, Sticky,
- * Frame; the board view puts Triangle, Diamond and Star in the More shapes menu). A host takes some away with `without`
+ * Frame, Ask; the board view puts Triangle, Diamond and Star in the More shapes menu). A host takes some away with `without`
  * and adds its own with `with`. The same tools as `SHAPE_TOOLS`, which is in the order of the shapes' own table.
  */
 export const defaultTools: ToolList = new ToolList([
   selectTool, handTool, penTool, highlighterTool, eraserTool, laserTool, lassoTool,
-  rectTool, ellipseTool, arrowTool, lineTool, textTool, stickyTool, frameTool, triangleTool, diamondTool, starTool,
+  rectTool, ellipseTool, arrowTool, lineTool, textTool, stickyTool, frameTool, askTool, triangleTool, diamondTool, starTool,
 ]);

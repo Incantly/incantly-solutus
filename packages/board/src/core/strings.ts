@@ -24,6 +24,7 @@ export const BOARD_STRINGS: Readonly<Record<string, string>> = Object.freeze({
   'tool.text': 'Text',
   'tool.sticky': 'Sticky note',
   'tool.frame': 'Frame',
+  'tool.ask': 'Ask',
   'action.image': 'Image',
   'action.fix': 'Fix',
   'action.figure': 'Figure',
@@ -86,6 +87,18 @@ export const BOARD_STRINGS: Readonly<Record<string, string>> = Object.freeze({
   'card.label': 'Figure card, {mode}',
   'board.label': 'Board',
   'note.noFix': 'No clean shape fits that stroke.',
+  'agent.label': 'Agent',
+  'agent.open': 'Open the agent panel',
+  'agent.close': 'Close the agent panel',
+  'agent.placeholder': 'Tell the agent what to do…',
+  'agent.send': 'Send',
+  'agent.stop': 'Stop',
+  'agent.allow': 'Let the agent change my work',
+  'agent.unavailable': 'There is no agent: no server or transport was set.',
+  'agent.empty': 'Ask the agent to draw, write or explain on the board, or circle something with Ask.',
+  'ask.label': 'Ask about this',
+  'ask.placeholder': 'Ask something…',
+  'ask.go': 'Ask',
 });
 
 /** A function that gives a catalogue's text for a key, or undefined when it has none. */

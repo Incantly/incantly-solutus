@@ -78,14 +78,15 @@ export function defaultGroups(tools: ToolList): readonly (readonly string[])[] {
   const ids = tools.ids();
   const shapeIds = new Set(SHAPE_TOOLS.map((t) => t.id));
   const hasMore = ids.includes('rect') && ids.some((id) => MORE_SHAPES.includes(id));
-  const plain = ids.filter((id) => !shapeIds.has(id));
+  const plain = ids.filter((id) => !shapeIds.has(id) && id !== 'ask');
   const shapes: string[] = [];
   for (const id of ids) {
     if (!shapeIds.has(id) || (hasMore && MORE_SHAPES.includes(id))) continue;
     shapes.push(id);
     if (hasMore && id === 'rect') shapes.push('more-shapes');
   }
-  return [plain, shapes, ['image', 'figure', 'fix'], ['undo', 'redo']].filter((g) => g.length > 0);
+  // Ask comes after Figure (ui.md, Layout)
+  return [plain, shapes, ['image', 'figure', 'fix', ...(ids.includes('ask') ? ['ask'] : [])], ['undo', 'redo']].filter((g) => g.length > 0);
 }
 
 const closeNames = (id: string, known: readonly string[]): string[] => known.filter((k) => k.startsWith(id.slice(0, 1))).slice(0, 4);
