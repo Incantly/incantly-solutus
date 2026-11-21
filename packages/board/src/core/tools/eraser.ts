@@ -111,7 +111,7 @@ class EraserTool implements ToolHandlers {
           tx.remove(hit.id);
           if (hit.pieces === null || shape === undefined || !isInk(shape)) continue;
           for (const points of hit.pieces) {
-            tx.put({ ...shape, id: tx.newId('shape'), props: { ...shape.props, points }, meta: { ...shape.meta } });
+            tx.put({ ...shape, id: tx.newId('shape'), rotation: 0, props: { ...shape.props, points }, meta: { ...shape.meta } });
           }
         }
       },

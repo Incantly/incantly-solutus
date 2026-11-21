@@ -1,4 +1,15 @@
 export { KindRegistry } from './def';
-export type { KindDef } from './def';
+export type { DrawLod, Handle, KindDef, KindGeometry, StylePatch, TextAccess } from './def';
 export { INK_COLOR_DEFAULT, INK_DEFAULTS, INK_SIZE_MAX, inkKind, parseColor } from './ink';
 export type { InkProps } from './ink';
+export { BOX_DEFAULTS, LABEL_PAD, LABEL_PX, diamondKind, ellipseKind, rectKind, starKind, triangleKind } from './boxes';
+export type { BoxKind, BoxProps } from './boxes';
+export { ARROW_DEFAULTS, ARROW_HEADS, BEND_MAX, LINE_DEFAULTS, LINE_POINTS_MAX, arrowControl, arrowCurve, arrowKind, headLength, lineKind, mapPoints } from './lines';
+export type { ArrowHead, ArrowProps, LineProps } from './lines';
+export { STICKY_COLOR, STICKY_DEFAULTS, STICKY_PAD, STICKY_W, TEXT_DEFAULTS, TEXT_MIN_W, stickyKind, textKind, textSizeFor } from './texts';
+export type { StickyProps, TextProps } from './texts';
+export { FRAME_DEFAULTS, frameKind, groupKind } from './containers';
+export type { FrameProps, GroupProps } from './containers';
+export { FIGURE_DEFAULTS, FIGURE_HEADER, IMAGE_DEFAULTS, SCRIPT_MAX, figureKind, imageKind } from './media';
+export type { Crop, FigureProps, ImageProps } from './media';
+export { BUILT_IN_KINDS, builtInKind, registerBuiltIns } from './builtin';

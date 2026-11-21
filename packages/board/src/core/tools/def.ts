@@ -5,15 +5,32 @@
  */
 import type { Camera } from '../camera';
 import type { BoardCore } from '../board';
-import type { OverlayItems, TrailView } from '../draw';
+import type { GuideLine, OverlayItems, TrailView } from '../draw';
+import type { Bounds } from '../types';
 import type { InputSample, KeyInput } from '../input';
 import type { PenStyle } from '../ink/live';
+import type { Dash, FontFamily } from '../paint';
 
 /** What the pen, the highlighter and the eraser draw with. The host or the style bar changes them. */
 export interface ToolStyles {
   pen: PenStyle;
   highlighter: PenStyle;
   eraser: { mode: 'whole' | 'partial'; /** Screen pixels. */ radius: number };
+  /** What new shapes are made with, and what the style bar shows (round 3). */
+  shape: ShapeStyle;
+  /** False turns off the pen's hold that fixes a rough shape (design 7.3); default on. */
+  fixHold: boolean;
+}
+
+/** The style bar's choices for a new shape and for the selection: colour, fill, dash, size and font. */
+export interface ShapeStyle {
+  color: string;
+  /** A colour, or `none`. */
+  fill: string;
+  dash: Dash;
+  /** A line width in page units; text takes a size from it. */
+  size: number;
+  font: FontFamily;
 }
 
 export function defaultStyles(): ToolStyles {
@@ -21,6 +38,8 @@ export function defaultStyles(): ToolStyles {
     pen: { nib: 'pen', size: 3, color: '#1f2430', opacity: 1 },
     highlighter: { nib: 'highlighter', size: 18, color: '#ffd400', opacity: 0.4 },
     eraser: { mode: 'whole', radius: 10 },
+    shape: { color: '#1f2430', fill: 'none', dash: 'solid', size: 4, font: 'sans' },
+    fixHold: true,
   };
 }
 
@@ -29,9 +48,13 @@ export interface OverlayState {
   laser: TrailView | null;
   loop: OverlayItems['loop'];
   cursor: OverlayItems['cursor'];
+  /** Snap guides, the selection box and the arrow target hint (round 3); the select tool writes them. */
+  guides: readonly GuideLine[];
+  marquee: Bounds | null;
+  hint: readonly number[] | null;
 }
 
-export const createOverlayState = (): OverlayState => ({ laser: null, loop: null, cursor: null });
+export const createOverlayState = (): OverlayState => ({ laser: null, loop: null, cursor: null, guides: [], marquee: null, hint: null });
 
 /** What a tool may use. */
 export interface ToolContext {
@@ -46,6 +69,8 @@ export interface ToolContext {
   strokeEnded(): void;
   /** A stroke was dropped. */
   strokeDropped(): void;
+  /** Chooses another tool (a shape tool hands back to the select tool when its shape is made). */
+  setTool?(id: string): void;
 }
 
 export interface ToolHandlers {

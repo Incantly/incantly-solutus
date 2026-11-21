@@ -7,7 +7,11 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import type { CameraView } from './camera';
-import { isInk, shapeBounds, unionBounds } from './geometry';
+import { isInk, shapeBounds, shapeGeometry, unionBounds } from './geometry';
+import { inkPivot } from './ink/geometry';
+import type { DrawLod, KindRegistry } from './kinds/def';
+import type { ClipBox, Part, ShapeItem } from './paint';
+import { measureGeneration } from './text';
 import type { Outline, Outliner } from './ink/outline';
 import { OutlineCache } from './ink/outline';
 import { parseColor } from './kinds/ink';
@@ -253,6 +257,10 @@ export interface InkItem {
   readonly layer: 0 | 1;
   readonly ox: number;
   readonly oy: number;
+  /** The stroke's turn (BR-21) about the point `px, py` of its own coordinates. */
+  readonly rot: number;
+  readonly px: number;
+  readonly py: number;
   readonly outline: Outline;
   /** Straight (not premultiplied) colour, each 0 to 1; `a` already holds the stroke's opacity. */
   readonly r: number;
@@ -261,8 +269,8 @@ export interface InkItem {
   readonly a: number;
 }
 
-/** What a painter draws; round 3 adds the kinds of shapes. */
-export type DrawItem = InkItem;
+/** What a painter draws: a stroke as triangles, or any other shape as vector parts. */
+export type DrawItem = InkItem | ShapeItem;
 
 export interface TileContent {
   /** The page box of the tile: draw what meets it. */
@@ -271,7 +279,7 @@ export interface TileContent {
 }
 
 /** Level of detail by the size a shape has on screen (design 9, item 6). */
-export type Lod = 'skip' | 'coarse' | 'full';
+export type Lod = DrawLod;
 
 /** A stroke under half a pixel is not drawn; one under 24 pixels gets coarser arcs. */
 export function lodOf(bounds: Bounds, scale: number): Lod {
@@ -284,6 +292,7 @@ export class DrawList {
   readonly #index: PageIndex;
   readonly outlines: OutlineCache;
   readonly #ids: string[] = [];
+  readonly #parts = new WeakMap<object, { generation: number; byLod: Partial<Record<Lod, readonly Part[]>> }>();
 
   constructor(index: PageIndex, outlines: OutlineCache = new OutlineCache()) {
     this.#index = index;
@@ -315,23 +324,44 @@ export class DrawList {
 
   /** One shape as a draw item, or undefined when it is not drawn (unknown kind, too small to see). */
   itemOf(shape: ShapeRecord, scale: number): DrawItem | undefined {
-    if (!isInk(shape)) return undefined;
-    const bounds = shapeBounds(shape);
-    if (bounds === undefined) return undefined;
-    const lod = lodOf(bounds, scale);
+    const kinds = this.#index.kinds;
+    const geometry = shapeGeometry(shape, kinds);
+    if (geometry === undefined) return undefined;
+    const lod = kinds.get(shape.kind)?.lod?.(shape, scale) ?? lodOf(geometry.bounds, scale);
     if (lod === 'skip') return undefined;
+    if (!isInk(shape)) {
+      const parts = this.#partsOf(shape, lod);
+      if (parts === undefined) return undefined;
+      return {
+        k: 'shape',
+        id: shape.id,
+        layer: 1,
+        x: shape.x,
+        y: shape.y,
+        rotation: shape.rotation,
+        px: geometry.cx,
+        py: geometry.cy,
+        parts,
+        a: shape.opacity,
+        clip: this.#clipOf(shape),
+      };
+    }
     const { props } = shape;
     // the arcs' tolerance is a quarter of a device pixel (a whole one when the stroke is small), so a zoom step
     // keeps one outline per stroke
     const tolerance = (lod === 'coarse' ? 1 : 0.25) / scale;
     const outline = this.outlines.get(props.points, props.points, props.stride, { size: props.size, nib: props.nib, tolerance });
     const [r, g, b, alpha] = parseColor(props.color);
+    const pivot = shape.rotation === 0 ? NO_PIVOT : inkPivot(shape);
     return {
       k: 'ink',
       id: shape.id,
       layer: layerOf(shape),
       ox: shape.x,
       oy: shape.y,
+      rot: shape.rotation,
+      px: pivot.x,
+      py: pivot.y,
       outline,
       r,
       g,
@@ -339,18 +369,58 @@ export class DrawList {
       a: alpha * props.opacity * shape.opacity,
     };
   }
+
+  /** The parts of a shape at a level of detail, kept on the record (a record never changes) until the text measure changes. */
+  #partsOf(shape: ShapeRecord, lod: Lod): readonly Part[] | undefined {
+    const generation = measureGeneration();
+    let entry = this.#parts.get(shape);
+    if (entry === undefined || entry.generation !== generation) {
+      entry = { generation, byLod: {} };
+      this.#parts.set(shape, entry);
+    }
+    const known = entry.byLod[lod];
+    if (known !== undefined) return known;
+    const def = this.#index.kinds.get(shape.kind);
+    if (def?.draw === undefined) return undefined;
+    let made: readonly Part[];
+    try {
+      made = def.draw(shape, lod);
+    } catch {
+      return undefined;
+    }
+    entry.byLod[lod] = made;
+    return made;
+  }
+
+  /** The rectangle of the frame that holds the shape (itself or through groups), or null. */
+  #clipOf(shape: ShapeRecord): ClipBox | null {
+    let id = shape.parent;
+    for (let depth = 0; id !== null && depth < 32; depth++) {
+      const parent = this.#index.shape(id);
+      if (parent === undefined) return null;
+      if (parent.kind === 'frame') {
+        const g = shapeGeometry(parent, this.#index.kinds);
+        if (g === undefined) return null;
+        return { x: parent.x, y: parent.y, rotation: parent.rotation, px: g.cx, py: g.cy, w: g.box.maxX - g.box.minX, h: g.box.maxY - g.box.minY };
+      }
+      id = parent.parent;
+    }
+    return null;
+  }
 }
+
+const NO_PIVOT = { x: 0, y: 0 } as const;
 
 function layerOf(shape: ShapeRecord): 0 | 1 {
   return isInk(shape) && shape.props.nib === 'highlighter' ? 0 : 1;
 }
 
 /** The page boxes a diff changed on `page`: before and after of every shape that moved, was added or removed. */
-export function diffRegions(diff: Diff, page: string): Bounds[] {
+export function diffRegions(diff: Diff, page: string, kinds?: KindRegistry): Bounds[] {
   const out: Bounds[] = [];
   const add = (s: ShapeRecord): void => {
     if (s.page !== page) return;
-    const b = shapeBounds(s);
+    const b = shapeBounds(s, kinds);
     if (b !== undefined) out.push(b);
   };
   for (const r of diff.added) if (isShape(r)) add(r);
@@ -406,6 +476,32 @@ export interface TrailView {
   readonly count: number;
 }
 
+/** A snap guide to draw: a line from `x0, y0` to `x1, y1` in page units. */
+export interface GuideLine {
+  readonly kind: 'edge' | 'centre' | 'gap' | 'grid';
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/** A handle on the selection, at a page point; the painter draws it the same size at every zoom. */
+export interface OverlayHandle {
+  readonly id: string;
+  readonly kind: 'resize' | 'rotate' | 'kind';
+  readonly x: number;
+  readonly y: number;
+}
+
+/** The selection as the painter shows it: each shape's outline, the frame round them, and the handles. */
+export interface SelectionView {
+  /** One closed polygon `[x0, y0, …]` of page units for each selected shape. */
+  readonly outlines: readonly (readonly number[])[];
+  /** The corners of the frame round the selection, 8 numbers (top-left, top-right, bottom-right, bottom-left), or null. */
+  readonly frame: readonly number[] | null;
+  readonly handles: readonly OverlayHandle[];
+}
+
 /** Everything drawn above the board: laser, lasso loop, selection, the eraser's ring, the pen's hover dot. */
 export interface OverlayItems {
   readonly laser: TrailView | null;
@@ -414,6 +510,14 @@ export interface OverlayItems {
   readonly selection: readonly Bounds[];
   /** A ring or dot at a screen position: the eraser's size, the pen's nib. */
   readonly cursor: { readonly x: number; readonly y: number; readonly radius: number; readonly color: string } | null;
+  /** The selection with its frame and handles (round 3); `selection` stays for a painter that draws boxes only. */
+  readonly selected?: SelectionView | null;
+  /** Snap guides while a shape moves or is resized. */
+  readonly guides?: readonly GuideLine[];
+  /** The box being dragged to select, in page units. */
+  readonly marquee?: Bounds | null;
+  /** The outline `[x0, y0, …]` of the shape an arrow end would stick to. */
+  readonly hint?: readonly number[] | null;
 }
 
 /** Layer 1 to layer 4 (design 3). Every call returns a `Result` and never throws. */

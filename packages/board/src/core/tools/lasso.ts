@@ -4,7 +4,9 @@
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
-import { isInk } from '../geometry';
+import { isInk, shapeGeometry } from '../geometry';
+import { pointInPolygon } from '../index-grid';
+import { expandGroups } from '../shapes';
 import { mostlyInside } from '../ink/geometry';
 import type { InputSample } from '../input';
 import type { ToolContext, ToolDef, ToolHandlers } from './def';
@@ -96,11 +98,18 @@ class LassoTool implements ToolHandlers {
     const picked: string[] = [];
     for (let i = 0; i < ids.length; i++) {
       const shape = index.shape(ids[i] as string);
-      if (shape === undefined || shape.locked || !isInk(shape)) continue;
+      if (shape === undefined || shape.locked || shape.kind === 'group') continue;
+      if (!isInk(shape)) {
+        // any other shape is in when the middle of its box is inside the loop (B10)
+        const g = shapeGeometry(shape, index.kinds);
+        if (g !== undefined && pointInPolygon(g.pageCx, g.pageCy, polygon)) picked.push(shape.id);
+        continue;
+      }
       if (shape.props.points.length === 0) continue;
       if (whole[i] === true || mostlyInside(shape, polygon)) picked.push(shape.id);
     }
-    selection.set(picked);
+    // a shape of a group brings the whole group
+    selection.set(expandGroups(this.#ctx.core.store, picked));
   }
 }
 

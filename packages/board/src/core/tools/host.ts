@@ -10,7 +10,9 @@ import { boardError, DONE } from '../errors';
 import type { BoardResult } from '../errors';
 import { BUTTON_ERASER, BUTTON_MIDDLE } from '../input';
 import type { GestureInput, InputSample, KeyInput, WheelInput } from '../input';
+import { deleteShapes } from '../edit';
 import type { ToolContext, ToolDef, ToolHandlers, ToolList } from './def';
+import { editKey } from './keys';
 
 type HostState = 'chosen' | 'eraserEnd' | 'handHeld';
 type HostEvent = 'eraserDown' | 'eraserUp' | 'handDown' | 'handUp';
@@ -44,7 +46,8 @@ export class ToolHost {
   #down = -1;
 
   constructor(ctx: ToolContext, list: ToolList, initial = 'pen') {
-    this.#ctx = ctx;
+    // a tool may ask for another one (a shape tool hands back to the select tool); the host answers
+    this.#ctx = ctx.setTool !== undefined ? ctx : { ...ctx, setTool: (id: string) => void this.setTool(id) };
     this.#list = list;
     this.#current = list.get(initial) !== undefined ? initial : (list.ids()[0] ?? initial);
   }
@@ -181,6 +184,7 @@ export class ToolHost {
       return true;
     }
     if (this.#instance(this.active)?.onKey?.(k) === true) return true;
+    if (editKey(this.#ctx, k)) return true;
     if (k.key === 'Delete' || k.key === 'Backspace') return this.#deleteSelection();
     if (k.key === 'Escape') {
       this.#ctx.core.selection.clear();
@@ -225,16 +229,12 @@ export class ToolHost {
   }
 
   #deleteSelection(): boolean {
-    const { selection, store } = this.#ctx.core;
+    const { selection } = this.#ctx.core;
     if (selection.size === 0) return false;
+    if (this.#ctx.core.editor.state !== 'closed') return false;
     const ids = [...selection.ids];
     selection.clear();
-    store.change('user', (tx) => {
-      for (const id of ids) {
-        const r = tx.get(id);
-        if (r !== undefined && !(r as { locked?: boolean }).locked) tx.remove(id);
-      }
-    });
+    deleteShapes(this.#ctx.core, ids);
     this.#ctx.requestFrame();
     return true;
   }

@@ -5,7 +5,7 @@
  * `PointerGate` and `PressureProbe`. Wheel, trackpad pinch and two-finger gestures go to the sink as `WheelInput` and
  * `GestureInput`; keys as `KeyInput`.
  */
-import { PointerGate, PressureProbe } from '../core/input';
+import { MOD_ALT, MOD_MOD, MOD_SHIFT, PointerGate, PressureProbe } from '../core/input';
 import type { Device, GestureInput, InputSample, InputSink, KeyInput, Phase, TouchDraws, WheelInput } from '../core/input';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -23,6 +23,7 @@ class ReusedSample implements InputSample {
   buttons = 0;
   time = 0;
   predicted = false;
+  modifiers = 0;
   #step: Phase = 'hover';
 
   get phase(): Phase {
@@ -121,6 +122,7 @@ export class WebInput {
     s.buttons = e.buttons;
     s.time = e.timeStamp;
     s.predicted = predicted;
+    s.modifiers = (e.shiftKey ? MOD_SHIFT : 0) | (e.altKey ? MOD_ALT : 0) | (e.ctrlKey || e.metaKey ? MOD_MOD : 0);
     return s;
   }
 

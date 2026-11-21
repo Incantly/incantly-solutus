@@ -5,6 +5,7 @@
  */
 import { shapeBounds } from './geometry';
 import { IndexGrid } from './index-grid';
+import type { KindRegistry } from './kinds/def';
 import type { Pages } from './pages';
 import type { Store } from './store';
 import { isShape } from './types';
@@ -20,6 +21,11 @@ export class PageIndex {
     this.#store = store;
     this.#stops = [store.on((diff) => this.#follow(diff)), pages.onCurrent((page) => this.#switch(page))];
     this.#switch(pages.current);
+  }
+
+  /** The kinds of the store the index follows. */
+  get kinds(): KindRegistry {
+    return this.#store.kinds;
   }
 
   /** The page the index holds, or null. */
@@ -38,6 +44,11 @@ export class PageIndex {
     return r !== undefined && isShape(r) && r.page === this.#page ? r : undefined;
   }
 
+  /** Reads the page's shapes again: their boxes changed without a diff (the text measuring function was replaced). */
+  refresh(): void {
+    this.#switch(this.#page);
+  }
+
   #switch(page: string | null): void {
     this.#page = page;
     this.grid.clear();
@@ -46,7 +57,7 @@ export class PageIndex {
   }
 
   #put(s: ShapeRecord): void {
-    const b = shapeBounds(s);
+    const b = shapeBounds(s, this.#store.kinds);
     if (b === undefined) this.grid.remove(s.id);
     else this.grid.insert(s.id, b);
   }
