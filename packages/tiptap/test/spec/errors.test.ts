@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MountedApp } from '@incantly/sdk';
 import type { Editor } from '@tiptap/core';
+import { FULL_WIDTH_PX } from '../../src/index';
 import { Viewport, boxOf, destroyAll, docOf, figureAttrs, figureJson, makeEditor, para, posOf, undoSteps, lastError } from './helpers';
 
 const probe = vi.hoisted(() => ({
@@ -345,5 +346,52 @@ describe('a remount under the live cap (TT-R5)', () => {
     expect(app.destroyed).toBe(true);
     expect(mounted().filter((a) => a.element.closest('[data-id="fig_a"]') !== null)).toHaveLength(0);
     expect(mounted()).toHaveLength(2);
+  });
+});
+
+describe('the picture after a mode change that a save wins (TT-R10)', () => {
+  /** The picture of a script in a mode, made the way a placeholder picture is (SVG data URL). */
+  const pictureIn = async (mode: 'graphing' | 'scientific', script: string, height: number): Promise<string> => {
+    const sdk = await vi.importActual<typeof import('@incantly/sdk')>('@incantly/sdk');
+    const app = sdk.createHeadlessApp({ mode, script, readOnly: true });
+    try {
+      const r = await app.export({ format: 'svg', width: FULL_WIDTH_PX, height });
+      if (!r.ok) throw new Error(r.message);
+      const text = r.text ?? (await r.blob.text());
+      let s = '';
+      for (const b of new TextEncoder().encode(text)) s += String.fromCharCode(b);
+      return `data:image/svg+xml;base64,${btoa(s)}`;
+    } finally {
+      app.destroy();
+    }
+  };
+
+  it('shows the figure in its new mode, not the old one', async () => {
+    // the scientific mode leaves out the function, so its picture differs from the graphing one
+    const script = 'a = 1\nf(x) = x^2';
+    const { editor } = makeEditor(docOf(...['fig_a', 'fig_b', 'fig_c'].map((id) => figureJson({ id, script, mode: 'graphing', height: 200 })), para('x')));
+    await tick(2500);
+    const box = boxOf(editor, 'fig_a') as HTMLElement;
+    const app = mounted().find((a) => a.element.closest('[data-id="fig_a"]') !== null) as MountedApp;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const exportNow = app.export.bind(app);
+    app.export = (async (...args: Parameters<typeof app.export>) => {
+      await gate;
+      return exportNow(...args);
+    }) as typeof app.export;
+    app.setMode = (() => ({ ok: false, message: 'no' })) as unknown as typeof app.setMode;
+    Viewport.set(box, false);
+    await tick(10_000);
+    setAttrs(editor, 'fig_a', { mode: 'scientific' });
+    release();
+    for (let i = 0; i < 20; i++) await tick(100);
+    expect(box.dataset['state']).toBe('saved');
+    const want = await pictureIn('scientific', script, 200);
+    const old = await pictureIn('graphing', script, 200);
+    expect(want).not.toBe(old);
+    expect(figureAttrs(editor, 'fig_a')?.picture).toBe(want);
   });
 });

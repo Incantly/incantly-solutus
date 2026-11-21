@@ -1411,7 +1411,7 @@ Checked at commit `3266a74` on `feat/symbolic` (pass 1, pipeline step 4). Paths 
 
 ## tiptap
 
-Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). Paths are under `packages/tiptap/src/`; line numbers refer to `20d5770`. Findings are in `handoff/tiptap/findings.md` (TT-R1 to TT-R10; TT-R1 to TT-R5 are fixed). JavaScript is single-threaded, so "concurrency" below means work interleaved across `await`s: a mount, a picture export or an AI stream, with scheduler orders, editor updates and other requests in between.
+Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). Paths are under `packages/tiptap/src/`; line numbers refer to `20d5770`. Findings are in `handoff/tiptap/findings.md` (TT-R1 to TT-R10; TT-R1 to TT-R5 and TT-R10 are fixed). JavaScript is single-threaded, so "concurrency" below means work interleaved across `await`s: a mount, a picture export or an AI stream, with scheduler orders, editor updates and other requests in between.
 
 ### T1. Figure node view lifecycle
 
@@ -1453,7 +1453,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 | `dead` | script or mode change | | `placeholder` | registered again |
 | any | `destroy` | | `destroyed` | |
 
-- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight leaves the figure unmounted with `wantsMount` true (TT-R9, later). A remount that yields to a save keeps the old picture (TT-R10, later).
+- **Reachable invalid states or transitions:** none known for TT-R4 and TT-R5 after the fixes (commit `21e9362`): a figure fixed after being `bad` mounts again in view, and a remount holds its slot under `liveLimit` and yields to a `save` order. A mode change that arrives while `createApp` is in flight leaves the figure unmounted with `wantsMount` true (TT-R9, later). A remount that yields to a save, or a save during a mode change, made the old mode's picture (TT-R10, fixed: the picture is made from the script in the new mode).
 
 ### T2. Script sync between the node, the live figure and the code panel
 
