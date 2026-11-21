@@ -73,7 +73,7 @@ describe('the mesh of a shape', () => {
     const r = add(rig, 'rect', 20, 20, { w: 100, h: 60, fill: '#ffe08a', stroke: '#1f2430', size: 3 });
     const before = meshOf((shapeItems(rig)[0] as ShapeItem).parts, 1);
     const changed = rig.core.store.change('user', (tx) => {
-      tx.update(r.id, { props: { ...r.props, w: 160 } } as Record<string, unknown>);
+      tx.update(r.id, { props: { ...(r.props as Record<string, unknown>), w: 160 } } as Record<string, unknown>);
     });
     expect(changed.ok).toBe(true);
     const after = meshOf((shapeItems(rig)[0] as ShapeItem).parts, 1);

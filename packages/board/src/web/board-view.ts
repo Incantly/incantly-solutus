@@ -73,6 +73,8 @@ class FrameLoop {
   readonly #cancel: (id: number) => void;
   readonly #body: (now: number) => boolean;
   #handle = 0;
+  /** The callback handed to every animation frame request: made once, so a frame makes no closure. */
+  readonly #tick = (now: number): void => this.#run(now);
 
   constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean, report?: (error: BoardError) => void) {
     this.#machine = new StateMachine(LOOP_MACHINE, 'idle', refusedMove('frame loop', () => report));
@@ -88,7 +90,7 @@ class FrameLoop {
   request(): void {
     const was = this.#machine.state;
     this.#machine.send('request');
-    if (was === 'idle') this.#handle = this.#schedule((now) => this.#run(now));
+    if (was === 'idle') this.#handle = this.#schedule(this.#tick);
   }
 
   /** Runs the body now (a test, or the first frame). */

@@ -17,6 +17,7 @@ import { boardError, DONE, refusedMove } from '../core/errors';
 import type { BoardError, BoardResult } from '../core/errors';
 import { GlRaster } from './painter-gl';
 import { CanvasRaster, drawItems2D, fillTriangles, rgbCss } from './painter-2d';
+import { LiveGl } from './painter-live';
 import type { ImageLookup, TileRaster } from './painter-2d';
 
 type BackendState = 'gl' | 'lost' | 'canvas2d';
@@ -95,6 +96,10 @@ export class WebPainter implements BoardPainter {
   readonly #liveCanvas: HTMLCanvasElement;
   readonly #overlayCanvas: HTMLCanvasElement;
   readonly #topCanvas: HTMLCanvasElement;
+  /** The live layer's drawing: WebGL 2 where the browser has it (the stroke and its tail from typed arrays), else a 2D context. */
+  #liveGl: LiveGl | null = null;
+  /** The numbers a live frame hands to the GL layer, written again each frame. */
+  readonly #liveParams = new Float64Array(7);
   readonly #live: CanvasRenderingContext2D | null;
   readonly #overlay: CanvasRenderingContext2D | null;
   readonly #top: CanvasRenderingContext2D | null;
@@ -121,6 +126,7 @@ export class WebPainter implements BoardPainter {
   readonly #screen = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN, dpr: Number.NaN, devW: 0, devH: 0, drawn: -1 };
   readonly #composed: Tile[] = [];
   readonly #stops: (() => void)[] = [];
+  readonly #liveStops: (() => void)[] = [];
 
   constructor(options: WebPainterOptions = {}) {
     this.#options = options;
@@ -141,7 +147,9 @@ export class WebPainter implements BoardPainter {
     this.#topCanvas.style.pointerEvents = 'none';
     this.#overlayCanvas.style.pointerEvents = 'none';
     this.element.append(this.#tileCanvas, this.#liveCanvas, this.#topCanvas, this.#overlayCanvas);
-    this.#live = this.#context(this.#liveCanvas, { alpha: true, desynchronized: true });
+    if (options.canvas2dOnly !== true) this.#liveGl = LiveGl.open(this.#liveCanvas);
+    this.#live = this.#liveGl === null ? this.#context(this.#liveCanvas, { alpha: true, desynchronized: true }) : null;
+    if (this.#liveGl !== null) this.#watchLive();
     this.#top = this.#context(this.#topCanvas, { alpha: true });
     this.#overlay = this.#context(this.#overlayCanvas, { alpha: true });
     this.#openRaster();
@@ -153,6 +161,25 @@ export class WebPainter implements BoardPainter {
     } catch {
       return null;
     }
+  }
+
+  /** The live layer's GL context may be lost and come back: the layer is opened again on the same canvas and the stroke drawn again. */
+  #watchLive(): void {
+    const canvas = this.#liveCanvas;
+    const lost = (e: Event): void => e.preventDefault();
+    const restored = (): void => {
+      this.#liveGl = LiveGl.open(canvas);
+      this.#liveGl?.resize(this.size.devW, this.size.devH);
+      this.ink.serial = -1;
+      this.ink.drawn = 0;
+      this.#options.requestFrame?.();
+    };
+    canvas.addEventListener('webglcontextlost', lost);
+    canvas.addEventListener('webglcontextrestored', restored);
+    this.#liveStops.push(() => {
+      canvas.removeEventListener('webglcontextlost', lost);
+      canvas.removeEventListener('webglcontextrestored', restored);
+    });
   }
 
   /**
@@ -286,6 +313,7 @@ export class WebPainter implements BoardPainter {
     this.ink.drawn = 0;
     this.ink.serial = -1;
     this.#topDrawn = false;
+    this.#liveGl?.resize(devW, devH);
     const raster = this.#raster?.resize(devW, devH);
     if (raster !== undefined && !raster.ok) this.#fallBack(raster);
   }
@@ -379,6 +407,8 @@ export class WebPainter implements BoardPainter {
       if (this.#layer.state === 'inking') this.abortLive();
       return DONE;
     }
+    const gl = this.#liveGl;
+    if (gl !== null) return this.#drawLiveGl(gl, view);
     if (ctx === null || this.#layer.state === 'holding') return DONE;
     this.#layer.send('ink');
     const f = this.frame;
@@ -411,6 +441,52 @@ export class WebPainter implements BoardPainter {
     return DONE;
   }
 
+  /**
+   * The live layer on WebGL 2: the whole stroke so far, tail groups and predicted samples included, drawn again from the
+   * outliner's typed arrays each frame. (The Canvas 2D layer cannot take things back, so it draws only what is final and
+   * leaves the rest to the overlay; a canvas cleared and drawn again can.)
+   */
+  #drawLiveGl(gl: LiveGl, view: LiveStrokeView): BoardResult<undefined> {
+    if (this.#layer.state === 'holding') return DONE;
+    this.#layer.send('ink');
+    const f = this.frame;
+    const ink = this.ink;
+    if (view.serial !== ink.serial) {
+      ink.serial = view.serial;
+      this.#liveCanvas.style.opacity = String(view.opacity);
+      this.#liveCanvas.style.mixBlendMode = view.multiply ? 'multiply' : 'normal';
+    }
+    ink.x = f.x;
+    ink.y = f.y;
+    ink.zoom = f.zoom;
+    ink.dpr = f.dpr;
+    const o = view.outliner;
+    const { devW, devH, w, h } = this.size;
+    const k = f.zoom * f.dpr;
+    gl.clear();
+    const q = this.#liveParams;
+    q[0] = (2 * k) / devW;
+    q[1] = (-2 * k) / devH;
+    q[2] = (2 * (view.originX - f.x) * k) / devW - 1;
+    q[3] = 1 - (2 * (view.originY - f.y) * k) / devH;
+    q[4] = view.r;
+    q[5] = view.g;
+    q[6] = view.b;
+    gl.drawStroke(o.vertices, o.vertexCount, o.indices, o.indexCount, q);
+    const p = view.predicted;
+    if (p !== null && p.count > 1) {
+      q[0] = Math.max(1, view.size * f.zoom * 0.7);
+      q[1] = w;
+      q[2] = h;
+      q[3] = view.r;
+      q[4] = view.g;
+      q[5] = view.b;
+      q[6] = 0.5;
+      gl.drawTail(p.xy, p.count, q);
+    }
+    return DONE;
+  }
+
   /** The stroke ended and was stored: the live layer keeps showing it until the tile that holds it is drawn. */
   releaseLive(): void {
     sendIfAble(this.#layer, 'release');
@@ -427,6 +503,7 @@ export class WebPainter implements BoardPainter {
   }
 
   #clearLive(): void {
+    this.#liveGl?.clear();
     const ctx = this.#live;
     if (ctx !== null) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -662,6 +739,9 @@ export class WebPainter implements BoardPainter {
 
   dispose(): void {
     for (const stop of this.#stops.splice(0)) stop();
+    for (const stop of this.#liveStops.splice(0)) stop();
+    this.#liveGl?.dispose();
+    this.#liveGl = null;
     this.tiles.clear();
     this.#raster?.dispose();
     this.#raster = null;

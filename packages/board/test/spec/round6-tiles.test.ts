@@ -288,6 +288,47 @@ describe('a frame with no change composes nothing (design 9 item 4, bench.md ite
     }
     expect(painter.liveState).toBe('inking');
   });
+
+  it('BR-74: the stroke being drawn is drawn with WebGL from the outliner\'s arrays: one draw call a frame on the live layer\'s own context, no Canvas 2D call', () => {
+    const rig = shapeRig('pen');
+    const tiles = tilesOf(new TileCache(), 1100, 300);
+    shown(tiles, camera(), tiles);
+    rig.host.sample(sample({ x: 0, y: 0, phase: 'down' }));
+    let frames = 0;
+    probe.clear();
+    for (let i = 1; i < 20; i++) {
+      rig.host.sample(sample({ x: i * 6, y: Math.sin(i / 4) * 30 + 100, phase: 'move', time: i * 8 }));
+      rig.core.live.rebuild(1);
+      painter.beginFrame(camera(), 1);
+      for (const t of tiles) painter.drawTile(t, null);
+      painter.drawLiveStroke(rig.core.live.view());
+      painter.endFrame();
+      frames++;
+    }
+    // the live layer has a context of its own: the canvas's framebuffer, where the tiles' targets are never drawn
+    const live = probe.log.filter((e) => e.what === 'gl:draw' && e.into === 'screen');
+    expect(live.length).toBeGreaterThanOrEqual(frames - 1);
+    expect(live.every((e) => (e.count ?? 0) >= 3 && (e.count ?? 0) % 3 === 0)).toBe(true);
+    expect(probe.log.filter((e) => e.what.startsWith('2d:'))).toEqual([]);
+    expect(probe.contexts.webgl2).toBeGreaterThanOrEqual(2);
+  });
+
+  it('BR-74: a painter that is asked for Canvas 2D only keeps drawing the live layer with it', () => {
+    const only = new WebPainter({ canvas2dOnly: true });
+    only.resize(400, 300, 1);
+    const before = probe.contexts.webgl2;
+    const rig = shapeRig('pen');
+    rig.host.sample(sample({ x: 0, y: 0, phase: 'down' }));
+    for (let i = 1; i < 12; i++) rig.host.sample(sample({ x: i * 6, y: Math.sin(i / 4) * 30 + 100, phase: 'move', time: i * 8 }));
+    rig.core.live.rebuild(1);
+    probe.clear();
+    only.beginFrame(camera(), 1);
+    only.drawLiveStroke(rig.core.live.view());
+    only.endFrame();
+    expect(probe.contexts.webgl2).toBe(before);
+    expect(probe.log.some((e) => e.what === '2d:fill')).toBe(true);
+    only.dispose();
+  });
 });
 
 describe('the board view composes only when something changed (design 9 item 4)', () => {

@@ -166,14 +166,21 @@ export class TileCache {
   /** Starts a frame: tiles used in it are the newest. */
   beginFrame(): void {
     this.#frame++;
-    // a tile that was never drawn and is out of sight is only a place holder: forget it
-    for (const tile of this.#tiles.values()) {
-      if (tile.state === 'blank' && tile.lastUsed < this.#frame - 1) {
-        this.#tiles.delete(tile.id);
-        tile.evict();
-      }
-    }
+    // a tile that was never drawn and is out of sight is only a place holder: forget it (a method kept on the cache, so a
+    // frame makes no iterator and no closure for it)
+    this.#tiles.forEach(this.#sweep);
   }
+
+  readonly #sweep = (tile: Tile): void => {
+    if (tile.state === 'blank' && tile.lastUsed < this.#frame - 1) {
+      this.#tiles.delete(tile.id);
+      tile.evict();
+    }
+  };
+
+  /** The view the last call of `visible` answered, and its tiles: the same view again is answered from them. */
+  readonly #seen = { valid: false, k: 0, tx0: 0, ty0: 0, tx1: 0, ty1: 0 };
+  readonly #seenTiles: Tile[] = [];
 
   /**
    * Fills `out` with the tiles that cover the screen `width × height` CSS pixels at the camera's steady zoom (made
@@ -199,6 +206,19 @@ export class TileCache {
       tx1 = Math.floor((camera.x + width / camera.zoom) / span);
       ty1 = Math.floor((camera.y + height / camera.zoom) / span);
     }
+    const seen = this.#seen;
+    const kept = this.#seenTiles;
+    let again = seen.valid && seen.k === k && seen.tx0 === tx0 && seen.ty0 === ty0 && seen.tx1 === tx1 && seen.ty1 === ty1;
+    for (let i = 0; again && i < kept.length; i++) if ((kept[i] as Tile).state === 'gone') again = false;
+    if (again) {
+      // the same tiles as the last frame (a stroke being drawn, a still page): their ids are not worked out again
+      for (let i = 0; i < kept.length; i++) {
+        const tile = kept[i] as Tile;
+        tile.lastUsed = this.#frame;
+        out.push(tile);
+      }
+      return out.length;
+    }
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const id = tileId(k, tx, ty);
@@ -208,6 +228,14 @@ export class TileCache {
         out.push(tile);
       }
     }
+    seen.valid = true;
+    seen.k = k;
+    seen.tx0 = tx0;
+    seen.ty0 = ty0;
+    seen.tx1 = tx1;
+    seen.ty1 = ty1;
+    this.#seenTiles.length = 0;
+    for (let i = 0; i < out.length; i++) this.#seenTiles.push(out[i] as Tile);
     return out.length;
   }
 
@@ -242,6 +270,7 @@ export class TileCache {
 
   /** Drops every tile (a page change, or the painter went away). */
   clear(): void {
+    this.#seen.valid = false;
     for (const tile of this.#tiles.values()) this.#drop(tile);
     this.#tiles.clear();
     this.#bytes = 0;

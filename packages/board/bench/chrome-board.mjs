@@ -73,7 +73,7 @@ const fmt = (n, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : 'n/a');
 const GOALS = {
   pen: { what: 'Pen sample to pixel (sample to end of its frame), 60 Hz', goal: 16, unit: 'ms', by: 'mean' },
   penframe: { what: 'One frame while drawing a stroke (script)', goal: 2, unit: 'ms', by: 'mean' },
-  gc: { what: 'Collections over a 10 s stroke', goal: 0, unit: '', by: 'count' },
+  gc: { what: 'Collections over a 10 s stroke (the board\'s page minus a blank page\'s)', goal: 0, unit: '', by: 'count' },
   pan: { what: 'Pan, 10,000 shapes, 1:1 (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
   fit: { what: 'Pan, 10,000 shapes, all in view (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
   zoom: { what: 'Zoom, 10,000 shapes (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
@@ -95,12 +95,8 @@ const record = (key, value, detail, extra) => {
 
 /** Runs in every page before its own scripts: the frame, handler and sample recorder. */
 function instrument() {
-  // the garbage row reads the page with nothing of ours in it; `#plain-nocoalesced` also hides the browser's coalesced
-  // events, which make garbage of their own (see the garbage row)
-  if (location.hash.startsWith('#plain')) {
-    if (location.hash === '#plain-nocoalesced') Object.defineProperty(PointerEvent.prototype, 'getCoalescedEvents', { value: undefined });
-    return;
-  }
+  // the garbage row reads pages with none of this script's own recorders in them
+  if (location.hash.startsWith('#plain')) return;
   const B = {
     on: false,
     // one entry per animation-frame callback: the frame's time, its length, the handlers' time since the last callback
@@ -229,7 +225,7 @@ try {
   page.on('response', (r) => {
     if (r.status() >= 400) logs.push(`error: ${r.status()} ${r.url()}`);
   });
-  const cdp = await context.newCDPSession(page);
+  let cdp = await context.newCDPSession(page);
   const throttle = (r) => cdp.send('Emulation.setCPUThrottlingRate', { rate: r });
 
   const openStudio = async (plain = false) => {
@@ -362,11 +358,11 @@ try {
 
   // ---- garbage: collections over a stroke, and over an idle page
   if (rows.includes('gc')) {
-    await openStudio(flag('nocoalesced') ? 'plain-nocoalesced' : true);
+    await openStudio(true);
     await throttle(rate);
     await tool('pen');
     const box = await surface();
-    await stroke(2, box.x + 120, box.y + 300);
+    await stroke(Number(arg("warm", "2")), box.x + 120, box.y + 300);
     const trace = async (fn) => {
       const events = [];
       cdp.on('Tracing.dataCollected', (e) => events.push(...e.value));
@@ -374,6 +370,8 @@ try {
       // start from an empty young generation, so what is counted is what the stroke makes
       await cdp.send('HeapProfiler.enable');
       await cdp.send('HeapProfiler.collectGarbage');
+      // a collection that was asked for finishes in the background; the trace starts after it has
+      await sleep(400);
       await cdp.send('Tracing.start', { categories: 'v8,devtools.timeline,disabled-by-default-v8.gc', transferMode: 'ReportEvents' });
       await fn();
       await cdp.send('Tracing.end');
@@ -409,20 +407,49 @@ try {
         for (const c of n.children) walk(c, here);
       };
       walk(profile.head, []);
-      const top = [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
+      const top = [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
       const total = [...by.values()].reduce((a, b) => a + b, 0);
       out(`allocation while drawing ${strokeSeconds} s: ${(total / 1024).toFixed(0)} KB`);
       for (const [k, v] of top) out(`  ${(v / 1024).toFixed(1).padStart(8)} KB  ${k}`);
     }
     const count = (o) => (o.MinorGC ?? 0) + (o.MajorGC ?? 0);
-    // the same stroke on a page where the browser's coalesced events are hidden: what the board's own code makes (the
-    // browser makes garbage of its own for each coalesced event it hands over, see the notes of this script)
-    await openStudio('plain-nocoalesced');
+    // the browser makes garbage of its own for each coalesced event it hands over (`getCoalescedEvents()`), so the same
+    // stroke is made on a blank page of its own (a context of its own, so a process of its own) whose one listener only calls it;
+    // what the board makes is the difference
+    const studioCdp = cdp;
+    const blankContext = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+    const blankPage = await blankContext.newPage();
+    cdp = await blankContext.newCDPSession(blankPage);
+    // `getCoalescedEvents` exists only in a secure context (a page that is not one throws on the call, and the errors are garbage of
+    // their own), so the blank page is served from the loopback address, as the studio is
+    await blankPage.route('http://127.0.0.1:1/blank', (r) => r.fulfill({ contentType: 'text/html', body: '<!doctype html><body></body>' }));
+    await blankPage.goto('http://127.0.0.1:1/blank#plain');
+    await blankPage.evaluate(() => {
+      document.body.style.cssText = 'margin:0;width:100vw;height:100vh';
+      window.addEventListener(
+        'pointermove',
+        (e) => {
+          if (typeof e.getCoalescedEvents !== 'function') return;
+          const list = e.getCoalescedEvents();
+          for (let i = 0; i < list.length; i++) {
+            const c = list[i];
+            if (c.clientX < -1e9 || c.pressure < -1 || c.timeStamp < -1) return;
+          }
+        },
+        true,
+      );
+    });
+    await sleep(300);
     await throttle(rate);
-    await tool('pen');
     await stroke(2, box.x + 120, box.y + 300);
-    const own = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
-    record('gc', count(drawn), `drawing: ${JSON.stringify(drawn)}; the same with the browser's coalesced events hidden: ${JSON.stringify(own)}; idle page for the same time: ${JSON.stringify(idle)}`, { drawn, own, idle });
+    // a process that has just started collects on its own while its heap settles; the stroke that is counted comes after that
+    await trace(() => sleep(3000));
+    const blank = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    await cdp.detach();
+    await blankContext.close();
+    cdp = studioCdp;
+    const ours = Math.max(0, count(drawn) - count(blank));
+    record('gc', ours, `the board's page ${count(drawn)} (${JSON.stringify(drawn)}) minus a blank page with the same listener and getCoalescedEvents() ${count(blank)} (${JSON.stringify(blank)}); idle page for the same time: ${JSON.stringify(idle)}`, { drawn, blank, idle, ours });
   }
 
   // ---- 10,000 shapes: pan at 1:1, pan with everything in view, zoom
