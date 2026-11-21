@@ -44,6 +44,11 @@ export interface WebInputOptions {
   readonly touchDraws?: TouchDraws;
   /** Where a refused move of the input's machines is told (the board's `onError`). */
   readonly report?: ErrorSink;
+  /**
+   * Whether an event aimed at this target is board input (BR-58). Events from the shell's buttons, menus, panels and
+   * bars are not; a pointer pressed on one is not the board's until it is released. Every target by default.
+   */
+  readonly accepts?: (target: EventTarget | null) => boolean;
 }
 
 const deviceOf = (type: string): Device => (type === 'pen' ? 'pen' : type === 'touch' ? 'touch' : 'mouse');
@@ -60,6 +65,9 @@ export class WebInput {
   readonly #gesture: Mutable<GestureInput> = { x: 0, y: 0, dx: 0, dy: 0, scale: 1, time: 0 };
   /** Fingers down: their positions, for the two-finger gesture. */
   readonly #touches = new Map<number, { x: number; y: number }>();
+  /** Pointers pressed on something that is not board input: the board hears nothing of them until they are released. */
+  readonly #refused = new Set<number>();
+  readonly #accepts: (target: EventTarget | null) => boolean;
   #left = 0;
   #top = 0;
   /** The gesture's last centre and spread. */
@@ -71,6 +79,7 @@ export class WebInput {
   constructor(options: WebInputOptions) {
     this.#el = options.element;
     this.#sink = options.sink;
+    this.#accepts = options.accepts ?? (() => true);
     this.#probe = new PressureProbe(options.report);
     this.#gate = new PointerGate({ ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}), ...(options.report !== undefined ? { report: options.report } : {}) });
     const el = this.#el;
@@ -98,6 +107,7 @@ export class WebInput {
   dispose(): void {
     for (const [t, type, fn, opts] of this.#listeners) t.removeEventListener(type, fn, opts);
     this.#touches.clear();
+    this.#refused.clear();
   }
 
   /** Reads the element's place again (it moved or was resized). */
@@ -131,6 +141,10 @@ export class WebInput {
   }
 
   #down(e: PointerEvent): void {
+    if (!this.#accepts(e.target)) {
+      this.#refused.add(e.pointerId);
+      return;
+    }
     this.#measure();
     this.#el.focus({ preventScroll: true });
     try {
@@ -144,6 +158,7 @@ export class WebInput {
   }
 
   #move(e: PointerEvent): void {
+    if (this.#refused.has(e.pointerId)) return;
     const device = deviceOf(e.pointerType);
     const phase: Phase = e.buttons === 0 && device !== 'touch' ? 'hover' : 'move';
     if (device === 'touch') {
@@ -168,6 +183,7 @@ export class WebInput {
   }
 
   #up(e: PointerEvent, phase: 'up' | 'cancel'): void {
+    if (this.#refused.delete(e.pointerId)) return;
     this.#route(this.#fill(e, phase, false), e);
     this.#touches.delete(e.pointerId);
     try {
@@ -248,6 +264,7 @@ export class WebInput {
   }
 
   #onWheel(e: WheelEvent): void {
+    if (!this.#accepts(e.target)) return;
     e.preventDefault();
     const w = this.#wheel;
     w.x = e.clientX - this.#left;

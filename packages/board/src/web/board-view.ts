@@ -438,7 +438,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     wheel: (w) => host.wheel(w),
     gesture: (g) => host.gesture(g),
   };
-  const input = new WebInput({ element: surface, sink, report, ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
+  const input = new WebInput({ element: surface, sink, report, accepts: (t) => t === surface || (t instanceof Node && painter.element.contains(t)), ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
 
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
