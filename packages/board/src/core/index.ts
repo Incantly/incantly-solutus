@@ -27,7 +27,9 @@ export { EDITOR_MACHINE, TextEditor } from './text-editor';
 export type { EditorListener } from './text-editor';
 export { GRID_UNITS, SNAP_MACHINE, SNAP_PX, Snapper } from './snap';
 export type { MovingSides } from './snap';
-export { bindEnd, bindTargetAt, bindingProps, bindingsOfArrow, bindingsOnTarget, boundTarget, dropBindingsOf, followArrow, followBindings, unbindEnd } from './bindings';
+export { shapesOverCards } from './card-over';
+export type { OverCard } from './card-over';
+export { ARROW_GAP, bindEnd, bindTargetAt, bindingProps, bindingsOfArrow, bindingsOnTarget, boundTarget, dropBindingsOf, followArrow, followBindings, unbindEnd } from './bindings';
 export type { ArrowEnd, BindingProps } from './bindings';
 export {
   GESTURE_MACHINE, Gesture, alignShapes, beginGesture, deleteShapes, distributeShapes, flipShapes, groupShapes, layoutBox, orderShapes, patchShapes, setLocked, settleParents, styleShapes, translateShapes, turnShapes,

@@ -1,9 +1,10 @@
 /**
  * Arrow bindings (design 4 and 7.1): an arrow's end sticks to a shape through a `binding` record
  * `{ kind: 'arrow', from: <arrow>, to: <shape>, props: { end, anchor } }`. `anchor` is where on the target's box the
- * arrow aims (0 to 1 of each side); the arrow's end sits where the line from the other end to that point first meets
- * the target's outline. `followBindings` runs inside the transaction that moves, resizes, turns or removes a shape, so
- * the arrow and the shape change together and undo restores both. No DOM, no timers.
+ * arrow aims (0 to 1 of each side); the arrow's end sits on the line from the other end to that point, `ARROW_GAP` (8
+ * units) short of where that line first meets the target's outline. `followBindings` runs inside the transaction that
+ * moves, resizes, turns or removes a shape, so the arrow and the shape change together and undo restores both. No DOM,
+ * no timers.
  */
 import type { BoardResult } from './errors';
 import { boardError, DONE } from './errors';
@@ -56,6 +57,9 @@ export function boundTarget(store: Store, arrow: string, end: ArrowEnd): string 
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+/** How far an arrow's end stops short of its target's outline, in page units, so the head shows beside the target. */
+export const ARROW_GAP = 8;
+
 /** The page point a binding aims at on its target. */
 function anchorPoint(target: Geometry, anchor: readonly [number, number]): { x: number; y: number } {
   const { box } = target;
@@ -65,9 +69,10 @@ function anchorPoint(target: Geometry, anchor: readonly [number, number]): { x: 
 /**
  * Puts an arrow's bound ends where their targets are now. The arrow is written only when an end moved. An end whose
  * target is gone loses its binding and stays where it was. The arrow is left turned by 0: its ends are written as page
- * points relative to its origin.
+ * points relative to its origin. `added` are bindings this transaction put that the store does not list yet; bindings the
+ * transaction removed do not count.
  */
-export function followArrow(tx: Tx, store: Store, arrowId: string): void {
+export function followArrow(tx: Tx, store: Store, arrowId: string, added: readonly BindingRecord[] = []): void {
   const arrow = txShape(tx, arrowId);
   if (arrow === undefined || arrow.kind !== 'arrow') return;
   const geometry = shapeGeometry(arrow, store.kinds);
@@ -79,7 +84,8 @@ export function followArrow(tx: Tx, store: Store, arrowId: string): void {
   };
   const aimed: Partial<Record<ArrowEnd, { x: number; y: number }>> = {};
   const targets: Partial<Record<ArrowEnd, Geometry>> = {};
-  for (const b of allBindings(store).filter((x) => x.from === arrowId)) {
+  const listed = allBindings(store).filter((x) => x.from === arrowId && tx.get(x.id) !== undefined);
+  for (const b of [...listed, ...added]) {
     const bp = bindingProps(b);
     if (bp === undefined) continue;
     const target = txShape(tx, b.to);
@@ -103,7 +109,13 @@ export function followArrow(tx: Tx, store: Store, arrowId: string): void {
     const aim = aimed[end];
     if (target === undefined || aim === undefined) return own(end);
     const origin = from(end);
-    return firstCrossing(target.outline, origin.x, origin.y, aim.x, aim.y) ?? aim;
+    const cross = firstCrossing(target.outline, origin.x, origin.y, aim.x, aim.y);
+    if (cross === null) return aim;
+    // stop ARROW_GAP short of the outline on the way in (at most half the way, so a short arrow keeps its direction)
+    const length = Math.hypot(cross.x - origin.x, cross.y - origin.y);
+    if (length === 0) return cross;
+    const back = Math.min(ARROW_GAP, length / 2) / length;
+    return { x: cross.x + (origin.x - cross.x) * back, y: cross.y + (origin.y - cross.y) * back };
   };
   const start = place('start');
   const end = place('end');
@@ -145,7 +157,7 @@ export function bindEnd(tx: Tx, store: Store, arrowId: string, end: ArrowEnd, ta
   if (!failed.ok) return failed;
   const put = tx.put({ id: tx.newId('binding'), kind: 'arrow', from: arrowId, to: targetId, props: { end, anchor } });
   if (!put.ok) return put;
-  followArrow(tx, store, arrowId);
+  followArrow(tx, store, arrowId, isBinding(put.value) ? [put.value] : []);
   return DONE;
 }
 

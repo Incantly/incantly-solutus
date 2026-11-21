@@ -17,6 +17,7 @@ import type { SchedulerAction } from '@incantly/view';
 import type { BoardCore } from '../core/board';
 import type { CameraView } from '../core/camera';
 import { STEADY_DELAY_MS } from '../core/camera';
+import { shapesOverCards } from '../core/card-over';
 import { deleteShapes } from '../core/edit';
 import { boardError, refusedMove } from '../core/errors';
 import type { BoardError } from '../core/errors';
@@ -25,6 +26,7 @@ import type { FigureProps } from '../core/kinds/media';
 import type { Strings } from '../core/strings';
 import type { AppModeId } from '@incantly/modes';
 import type { ShapeRecord } from '../core/types';
+import type { OverCardItem } from './painter';
 
 // ---------------------------------------------------------------------------------------------------------------
 // B26: one card
@@ -617,6 +619,20 @@ export class FigureCard {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// what is drawn over the cards (BR-55)
+
+/** The draw items of the shapes above the shown `cards`, each with the card outlines it shows inside, at `scale` device pixels per page unit. */
+export function overCardItems(core: BoardCore, cards: readonly ShapeRecord[], scale: number): OverCardItem[] {
+  if (cards.length === 0) return [];
+  const out: OverCardItem[] = [];
+  for (const over of shapesOverCards(core, cards)) {
+    const item = core.drawList.itemOf(over.shape, scale);
+    if (item !== undefined) out.push({ item, clip: over.clip });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // the layer
 
 export interface FigureLayerOptions {
@@ -651,6 +667,8 @@ export class FigureLayer {
   readonly #last = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN, at: 0 };
   #visible = new Set<string>();
   #near = new Set<string>();
+  /** The shapes of the cards whose slot is on show this frame: each one hides what the tiles draw under it. */
+  #covering: Shape[] = [];
   /** A headless picture job for cards that have never been live, one at a time. */
   #jobs: Promise<void> = Promise.resolve();
 
@@ -688,6 +706,11 @@ export class FigureLayer {
   /** Cards that hold an app now, and the ones the scheduler has promoted. */
   get liveCount(): number {
     return this.#mountedCount();
+  }
+
+  /** The shapes of the cards that cover the board this frame (their slot is shown: live or picture), in the store's order. */
+  get covering(): readonly Shape[] {
+    return this.#covering;
   }
 
   /** The id of the card that has the input, or undefined: it is the card whose own machine says so. */
@@ -735,6 +758,7 @@ export class FigureLayer {
     if (this.#marks.disposed) return false;
     if (this.#core.pages.current !== this.#page) this.#changePage();
     if (this.#marks.stale) this.#reconcile();
+    this.#covering = [];
     if (this.cards.size === 0) {
       this.#bar.sync(undefined, camera, width, height);
       return false;
@@ -754,7 +778,10 @@ export class FigureLayer {
       if (inView) visible.add(card.id);
       if (isNear || inView) nearSet.add(card.id);
       card.slot.style.display = isNear || inView ? '' : 'none';
-      if (isNear || inView) this.#place(card, camera, x, y);
+      if (isNear || inView) {
+        this.#place(card, camera, x, y);
+        this.#covering.push(s);
+      }
     }
     this.#publish(visible, nearSet);
     this.#bar.sync(this.#activeCard(), camera, width, height);

@@ -34,7 +34,7 @@ import { ImageCache } from './images';
 import { WebInput } from './input';
 import { WebPainter } from './painter';
 import { TILE_GUTTER } from './painter-2d';
-import { FigureLayer } from './figures';
+import { FigureLayer, overCardItems } from './figures';
 import { createAgentKit, pictureOf } from './agent';
 import type { AgentKit, AgentOption } from './agent';
 import { AgentPanel } from './ui/agent-panel';
@@ -318,7 +318,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   if (shell.ui.pages) root.append(pageBar);
   if (shell.ui.zoom) root.append(zoomBar);
   options.container.append(root);
-  // the figure cards sit between the tiles and the overlay, so handles and guides draw over a card
+  // the figure cards sit between the tiles and the live layer; what is above a card in the board's order is drawn over it (BR-55), and handles and guides over both
   const figures = new FigureLayer({
     core,
     doc,
@@ -329,7 +329,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     requestFrame: () => loop.request(),
     focusBoard: () => surface.focus({ preventScroll: true }),
   });
-  painter.element.insertBefore(figures.element, painter.element.lastElementChild);
+  painter.mountCards(figures.element);
   const circleMenu = new CircleMenu({ doc, root, circle: kit.circle, strings, focusBoard: () => surface.focus({ preventScroll: true }) });
   if (kit.enabled && !readOnly) {
     panel = new AgentPanel({ doc, root, service: kit.service, strings, onError: report, ...(options.agent?.label !== undefined ? { label: options.agent.label } : {}) });
@@ -399,6 +399,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     };
     placeField();
     if (figures.sync(camera, w, height, now)) more = true;
+    painter.drawOverCards(overCardItems(core, figures.covering, camera.zoom * dpr));
     const handFrame = kit.hand?.frame(now, camera.zoom * dpr);
     if (handFrame !== undefined) {
       if (handFrame.item !== undefined) painter.drawItems([handFrame.item]);
