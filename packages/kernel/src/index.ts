@@ -1,6 +1,8 @@
 /** @incantly/kernel: language, types, commands, rules, graph, clock, solver and errors. No DOM. */
 export type * from './contracts/errors';
 export type * from './contracts/values';
+export { StateMachine, canTransition, transition } from './contracts/state-machine';
+export type { MachineTable } from './contracts/state-machine';
 
 // language
 export * from './language/index';

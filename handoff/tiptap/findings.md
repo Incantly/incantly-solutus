@@ -63,6 +63,7 @@ Status: **Fix now** means the fixer of this round fixes it with a spec test; **L
 - **Where:** `node-view.ts` `doMount`, the branch after `createApp` where `attrs.mode !== first.mode`.
 - **What:** the app is destroyed and the function returns, with `wantsMount` still true and no new order. The comment says "start again in the new one", and the state table of T1 lists "mount again", but nothing calls `doMount` again. The figure stays a placeholder while it counts against `liveLimit`. Found by reading; no test was run for it.
 - **Fix idea:** call `doMount` again from that branch (the mode check then holds), or queue a remount.
+- **Status:** Not a bug. The branch does queue `doMount` again (`this.queue(() => this.doMount(seq))`), and the claim is kept while it waits. The test "a mode change while the app is being made (TT-R9)" in `errors.test.ts` holds `createApp` open, changes the mode, and sees one live app in the new mode; it passes before and after the lifecycle became `FIGURE_MACHINE` (branch `feat/lint-rules`).
 
 ### TT-R10. A figure that yields to a save during a remount keeps the picture of its old mode
 

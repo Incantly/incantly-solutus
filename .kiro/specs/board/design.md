@@ -14,7 +14,7 @@ The feature design is `docs/features/board/design.md`; this file says where each
 | `core/kinds/` | `KindDef` and one file per built-in kind |
 | `core/geometry.ts` | Bounds, hit tests, outlines, cached per record |
 | `core/ink/` | `samples.ts` (filter, simulated pressure), `outline.ts`, `recognise.ts` (shape fixing) |
-| `core/tools/` | `ToolDef`, the tool state machines, `defaultTools` |
+| `core/tools/` | `ToolDef`, the tool state machines (each a `*_MACHINE` table), `defaultTools` |
 | `core/bindings.ts` | Arrow bindings |
 | `core/snap.ts` | Snap guides |
 | `core/clipboard.ts` | Copy and paste formats |
@@ -34,6 +34,7 @@ The feature design is `docs/features/board/design.md`; this file says where each
 - `core` imports only `@incantly/kernel` types, `@incantly/sdk` headless parts and `@incantly/view/core`.
 - No new library: ink outline and shape fixing are our own code.
 - Every write is a transaction; nothing throws out of a public call.
+- Every state is one field over a `*_MACHINE` table; the machines (store transaction, history, tools, figure cards, agent job, circle to ask) are written in `docs/state-machines.md` (section "board") before the code. Every lint rule is an error in `packages/board`.
 - Tests are written by the tester from the docs, in `packages/board/test/spec/`.
 
 ## Studio

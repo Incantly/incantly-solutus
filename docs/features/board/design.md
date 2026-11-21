@@ -2,6 +2,10 @@
 
 Status: accepted for building, web first. Package `packages/board`, published as `@incantly/board`. Builds on `@incantly/view` (renderer, back-ends, scheduler) and `@incantly/sdk` (live figures), and follows `docs/design/performance.md`. The React Native side is designed here and built later; this document is the contract it must meet.
 
+The board is a separate product from the Tiptap extension (`docs/features/tiptap/`). Tiptap puts live figures inside a document; the board is where a teacher or learner writes and works out solutions by hand. The board does not use Tiptap or ProseMirror; the two share only the engine (kernel, SDK, view).
+
+Every state in the board is explicit: one field per part, changed only through a `*_MACHINE` table (`StateMachine` from `@incantly/kernel`), written in `docs/state-machines.md` before the code. `packages/board` has every lint rule of `AGENTS.md` ("Rules are checked by code") as an error.
+
 ## 1. What it does
 
 An endless, paged board for teaching. A teacher or learner writes with a pen that feels like ink, draws shapes, drops live Incantly figures, and talks to an agent that writes and draws on the same board. The board is the surface the live teacher uses (core design section 10).

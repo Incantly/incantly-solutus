@@ -13,6 +13,7 @@ const probe = vi.hoisted(() => ({
   apps: [] as MountedApp[],
   calls: 0,
   failWhen: undefined as undefined | ((call: number) => boolean),
+  gate: undefined as undefined | Promise<void>,
 }));
 
 vi.mock('@incantly/sdk', async (original) => {
@@ -22,6 +23,7 @@ vi.mock('@incantly/sdk', async (original) => {
     createApp: async (o: Parameters<typeof sdk.createApp>[0]) => {
       probe.calls++;
       if (probe.failWhen?.(probe.calls)) throw new Error('no GPU in this test');
+      if (probe.gate) await probe.gate;
       const app = await sdk.createApp(o);
       probe.apps.push(app);
       return app;
@@ -39,6 +41,7 @@ beforeEach(() => {
   probe.apps = [];
   probe.calls = 0;
   probe.failWhen = undefined;
+  probe.gate = undefined;
   vi.stubGlobal('IntersectionObserver', Viewport);
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
 });
@@ -393,5 +396,25 @@ describe('the picture after a mode change that a save wins (TT-R10)', () => {
     const old = await pictureIn('graphing', script, 200);
     expect(want).not.toBe(old);
     expect(figureAttrs(editor, 'fig_a')?.picture).toBe(want);
+  });
+});
+
+describe('a mode change while the app is being made (TT-R9)', () => {
+  it('mounts again in the new mode and holds one place under the cap', async () => {
+    let release: () => void = () => undefined;
+    probe.gate = new Promise<void>((res) => {
+      release = res;
+    });
+    const { editor } = makeEditor(one());
+    await tick(500);
+    expect(probe.calls).toBe(1);
+    setAttrs(editor, 'fig_a', { mode: 'geometry' });
+    probe.gate = undefined;
+    release();
+    for (let i = 0; i < 20; i++) await tick(100);
+    const live = mounted();
+    expect(live).toHaveLength(1);
+    expect(live[0]?.mode).toBe('geometry');
+    expect(boxOf(editor, 'fig_a')?.dataset['state']).toBe('live');
   });
 });

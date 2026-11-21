@@ -9,6 +9,8 @@ import { NodeSelection } from '@tiptap/pm/state';
 import type { EditorView, NodeView } from '@tiptap/pm/view';
 import { createApp } from '@incantly/sdk';
 import type { LineResult, MountedApp } from '@incantly/sdk';
+import { StateMachine } from '@incantly/kernel';
+import type { MachineTable } from '@incantly/kernel';
 import { FIGURE_DEFAULTS, FULL_WIDTH_PX, HEIGHT_MAX, HEIGHT_MIN, SCRIPT_HEADER, checkAttrs, isPictureUrl } from './attrs';
 import type { IncantlyFigureAttrs } from './attrs';
 import { CodePanel } from './code-panel';
@@ -44,6 +46,31 @@ export function createFigureView(editor: Editor, options: IncantlyTiptapOptions)
   return ({ node, getPos, view }) => new FigureNodeView(editor, options, node, getPos, view);
 }
 
+/**
+ * The figure's lifecycle (docs/state-machines.md T1). A figure holds a place under the live cap ("claim") while it is
+ * `mounting`, `live` or `lost`; it holds an app while it is `live`, `saving` or `lost`.
+ *
+ * - `idle`: no app, no claim; the placeholder or the saved picture shows.
+ * - `mounting`: claimed, the app is being made.
+ * - `live`: claimed, with an app.
+ * - `saving`: not claimed, the app is still there while its picture is made.
+ * - `lost`: claimed, with an app whose drawing context the browser took away.
+ * - `dead`: failed twice; a picture until its script or mode changes.
+ * - `destroyed`: the node view is gone.
+ */
+export type FigureLife = 'idle' | 'mounting' | 'live' | 'saving' | 'lost' | 'dead' | 'destroyed';
+export type FigureLifeEvent = 'claim' | 'release' | 'mounted' | 'unmounted' | 'lose' | 'regain' | 'giveUp' | 'revive' | 'destroy';
+
+export const FIGURE_MACHINE: MachineTable<FigureLife, FigureLifeEvent> = {
+  idle: { claim: 'mounting', release: 'idle', unmounted: 'idle', giveUp: 'dead', destroy: 'destroyed' },
+  mounting: { claim: 'mounting', release: 'idle', mounted: 'live', unmounted: 'idle', destroy: 'destroyed' },
+  live: { claim: 'live', release: 'saving', unmounted: 'idle', lose: 'lost', destroy: 'destroyed' },
+  saving: { claim: 'live', release: 'saving', unmounted: 'idle', destroy: 'destroyed' },
+  lost: { claim: 'lost', release: 'saving', unmounted: 'idle', regain: 'live', destroy: 'destroyed' },
+  dead: { revive: 'idle', unmounted: 'dead', destroy: 'destroyed' },
+  destroyed: {},
+};
+
 export class FigureNodeView implements NodeView, SchedulerView {
   readonly dom: HTMLElement;
   readonly box: HTMLElement;
@@ -53,8 +80,21 @@ export class FigureNodeView implements NodeView, SchedulerView {
   readonly srList: HTMLElement;
   readonly resizeEl: HTMLElement;
   node: PmNode;
+  /** The figure's lifecycle; every change goes through `FIGURE_MACHINE`. */
+  readonly life = new StateMachine(FIGURE_MACHINE, 'idle');
+
   /** True while the view holds, or is about to hold, a mounted app. */
-  wantsMount = false;
+  get wantsMount(): boolean {
+    return this.life.is('mounting', 'live', 'lost');
+  }
+
+  private get destroyed(): boolean {
+    return this.life.is('destroyed');
+  }
+
+  private get dead(): boolean {
+    return this.life.is('dead');
+  }
 
   protected readonly runtime: EditorRuntime;
   protected readonly doc: Document;
@@ -62,8 +102,6 @@ export class FigureNodeView implements NodeView, SchedulerView {
   private liveHost: HTMLElement | undefined;
   private key: string | undefined;
   private chain: Promise<void> = Promise.resolve();
-  private destroyed = false;
-  private dead = false;
   private failures = 0;
   private lastFailSeq = -1;
   private orderSeq = 0;
@@ -80,7 +118,6 @@ export class FigureNodeView implements NodeView, SchedulerView {
   private storeId = '';
   /** The elements that belong to the view's own interface (events in them are not the editor's). */
   protected readonly uiRoots: HTMLElement[] = [];
-  private contextLost = false;
   private panel: CodePanel | undefined;
   private toolbar: FigureToolbar | undefined;
   private selected = false;
@@ -211,7 +248,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     if (!checked.ok) {
       // a node that turned bad while live frees its figure and shows the message
       if (this.app) {
-        this.wantsMount = false;
+        this.life.send('release');
         // good again before the queue runs (an undo): the figure stays as it is
         this.queue(() => {
           if (!this.wantsMount) this.unmountNow();
@@ -355,7 +392,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     if (this.destroyed || this.dead || this.failures > 0 || this.app || this.wantsMount) return;
     if (this.attrs() === undefined) return;
     if (!this.runtime.scheduler.hasRoom(this)) return;
-    this.wantsMount = true;
+    this.life.send('claim');
     this.queue(() => this.doMount());
   }
 
@@ -365,9 +402,9 @@ export class FigureNodeView implements NodeView, SchedulerView {
     if (this.attrs() === undefined) return;
     if (!this.app && !this.wantsMount) {
       this.runtime.scheduler.makeRoom(this);
-      this.wantsMount = true;
+      this.life.send('claim');
       this.queue(() => this.doMount(seq));
-    } else this.wantsMount = true;
+    } else this.life.send('claim');
   }
 
   restore(): void {
@@ -385,7 +422,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
 
   save(): void {
     if (this.destroyed || !this.wantsMount) return;
-    this.wantsMount = false;
+    this.life.send('release');
     this.queue(() => this.doSave());
   }
 
@@ -397,7 +434,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     if (this.failures > 0 && seq <= this.lastFailSeq) return;
     const first = this.attrs();
     if (!first) {
-      this.wantsMount = false;
+      this.life.send('release');
       return;
     }
     const host = this.doc.createElement('div');
@@ -427,7 +464,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     if (!attrs) {
       this.safe(() => app.destroy());
       host.remove();
-      this.wantsMount = false;
+      this.life.send('release');
       return;
     }
     if (attrs.mode !== first.mode) {
@@ -440,7 +477,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.app = app;
     this.liveHost = host;
     this.failures = 0;
-    this.contextLost = false;
+    this.life.send('mounted');
     try {
       this.loadInto(app, attrs);
       this.followApp(app);
@@ -507,7 +544,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
   }
 
   private mountFailed(cause: unknown): void {
-    this.wantsMount = false;
+    this.life.send('release');
     this.failures++;
     this.lastFailSeq = this.orderSeq;
     const why = cause instanceof Error ? cause.message : 'the browser refused';
@@ -522,7 +559,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
 
   /** After a second failure the figure stays a picture: it leaves the scheduler, so it takes no more orders. */
   private giveUp(): void {
-    this.dead = true;
+    this.life.send('giveUp');
     if (this.key !== undefined) {
       this.runtime.scheduler.unregister(this.key, this);
       this.key = undefined;
@@ -563,7 +600,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
     for (const off of this.offApp) off();
     this.offApp = [];
     this.app = undefined;
-    this.wantsMount = false;
+    this.life.send('unmounted');
     this.runtime.store.setLive(this.storeId || this.figureId, undefined);
     this.onUnmounted();
     if (app) this.safe(() => app.destroy());
@@ -854,7 +891,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
         if (state === undefined) await this.refreshPictureFromScript();
         return;
       }
-      this.wantsMount = true;
+      this.life.send('claim');
       await this.doMount();
     });
   }
@@ -887,7 +924,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
 
   /** A figure that gave up gets another chance when its script or mode changes. */
   private revive(): void {
-    this.dead = false;
+    this.life.send('revive');
     this.failures = 0;
     this.lastFailSeq = -1;
     this.say('');
@@ -940,7 +977,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
   private onContextLost(e: Event): void {
     // the browser may give the context back, and only if the loss is not final
     e.preventDefault();
-    this.contextLost = true;
+    this.life.send('lose');
     const error = tiptapError('context_lost', 'The figure lost its drawing context. It shows its picture until the context comes back.', {
       hint: 'Nothing is lost: the figure is rebuilt from its script.',
       node: this.figureId,
@@ -952,8 +989,8 @@ export class FigureNodeView implements NodeView, SchedulerView {
   }
 
   private onContextRestored(): void {
-    if (!this.contextLost || this.destroyed) return;
-    this.contextLost = false;
+    if (!this.life.is('lost')) return;
+    this.life.send('regain');
     const app = this.app;
     if (!app) return;
     // remount from the reader's state, the way a saved figure comes back
@@ -1052,8 +1089,7 @@ export class FigureNodeView implements NodeView, SchedulerView {
 
   destroy(): void {
     if (this.destroyed) return;
-    this.destroyed = true;
-    this.wantsMount = false;
+    this.life.send('destroy');
     this.editor.off('update', this.onEditorUpdate);
     this.runtime.views.delete(this);
     this.panel?.dispose();
