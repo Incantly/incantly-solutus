@@ -14,7 +14,7 @@ The feature design is `docs/features/board/design.md`; this file says where each
 | `core/kinds/` | `KindDef` and one file per built-in kind |
 | `core/geometry.ts` | Bounds, hit tests, outlines, cached per record |
 | `core/ink/` | `samples.ts` (filter, simulated pressure), `outline.ts`, `recognise.ts` (shape fixing) |
-| `core/tools/` | `ToolDef`, the tool state machines (each a `*_MACHINE` table), `defaultTools` |
+| `core/tools/` | `ToolDef`, the tool state machines (each a `*_MACHINE` table), `defaultTools`, `inkTools` |
 | `core/bindings.ts` | Arrow bindings |
 | `core/snap.ts` | Snap guides |
 | `core/clipboard.ts` | Copy and paste formats |

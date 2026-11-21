@@ -69,7 +69,6 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 #### BR-12. Moving a stroke rebuilds its outline
 
 - **Status:** Fixed in 461156c. `OutlineCache` is keyed by the stroke's points array and also checks stride, size, nib and tolerance; the `ink` kind's `check` keeps an array it made itself (so a move or any patch to another field writes a record with the same array) and still copies an array a caller hands in (BR-10). Tests in `fixes-round2.test.ts` and the tester's `ink.test.ts` case.
-
 - **Where:** `core/draw.ts` / the outline cache (`OutlineCache` keyed by the record).
 - **What:** design 6.2 item 4 says moving or panning never rebuilds an outline; a move writes a new record, so the cache misses and rebuilds. A drag of 2,000 strokes rebuilds them all every frame.
 - **Fix:** key the outline by what it is made of (the points array, its count and stride, nib and size); the shape's `x`, `y` and `rotation` only change the transform. Test: the tester's failing test in `ink.test.ts`.
@@ -77,7 +76,6 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 #### BR-13. `touchDraws: 'always'` is refused while a pen is near
 
 - **Status:** Fixed in 461156c. `GATE_ALWAYS_MACHINE` is `GATE_MACHINE` plus `penNear` `touchDown`; the gate takes the table from the option when it is made. B5 is updated. Tests in `fixes-round2.test.ts` and the tester's `input.test.ts` case.
-
 - **Where:** `core/input.ts` `PointerGate`, B5.
 - **What:** `penNear` has no `touchDown` row, so the option the design promises (design 6.5, B5 invariants) cannot work.
 - **Fix:** the gate's table has the moves for `touchDraws: 'always'` (a touch draws in `penNear`, and while the pen is down it stays a second pointer as the design says), chosen from the option at construction. Update B5. Test: the tester's failing test in `input.test.ts`.
@@ -85,27 +83,23 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 #### BR-14. The mode's name
 
 - **Status:** Fixed in aa276f3. The locale files already said "Board" and "Tableau"; the two tests (`packages/modes/test/spec/modes.test.ts`, `apps/studio/test/modes.test.ts`) expect "Board", and `app-modes/ui.md`, `design.md` and `features/README.md` name the tile "Board".
-
 - **Ruling:** the product owner calls it the board, so the mode's title is "Board" ("Tableau" in French); its id stays `notes`. Change `docs/features/app-modes/ui.md` (the tile `[ Board ]`) and the other app-modes docs that name the tile, and make the two tests that expect "Notes" expect "Board".
 
 #### BR-15. The lasso of 2,000 strokes takes 6.4 to 7.2 ms (goal 4 ms)
 
 - **Status:** Fixed in 461156c. `IndexGrid.queryLassoSplit` says which boxes lie wholly inside the loop (no polygon edge touches the box and a corner is inside); `mostlyInside` counts points and stops once the half is settled. Bench row: 6.95 ms before, 0.69 ms after (goal 4 ms). Tests: `mostlyInside` equals the full count on 400 random strokes and loops, and the lasso selection equals counting every point.
-
 - **Where:** the lasso selection pass.
 - **Fix:** ask the index grid for the strokes whose boxes touch the lasso's box; a stroke whose box is inside the lasso is in without a point test; a stroke whose box is outside is out; only the rest count points, stopping as soon as more than half are in or can no longer be. Bench row must meet 4 ms.
 
 #### BR-16. A 10 s stroke makes 7 garbage collections (goal 0)
 
 - **Status:** Fixed in 461156c. `Outliner.extend` keeps the triangles of the points that can no longer change (eight points behind the end) and makes the rest again; its arrays grow by doubling and keep their numbers. A full build allocated about 370 KB per call at 2,000 points (measured with the scavenger off); the per-point `Math.hypot` calls are replaced by a square root, the options and view objects are reused, and the work per frame no longer grows with the stroke. Bench rows: 7 collections before, 0 after; a frame while drawing 0.219 ms before, 0.008 ms after. Tests: `extend` equals `build` after every point of a stroke for every nib and both strides, after several points at a time, after a change of zoom or size, after `reset`, and for the live stroke frame by frame.
-
 - **Where:** `core/ink/live.ts` `LiveStroke.rebuild` → `Outliner.build`.
 - **Fix:** the outliner writes into buffers it keeps and grows by doubling, and the live stroke extends its outline from the last settled point instead of rebuilding the whole stroke each frame (only the last few segments, which streamlining can still move, are made again). The bench row must show 0 collections, and the outline must equal a full rebuild (test).
 
 #### BR-17. A live stroke keeps its page after it ends
 
 - **Status:** Fixed in ec79faf (the rule) and 461156c (the test). At `6e21a38` `end` and `cancel` already set `#page` to `null`, so `page` was `null` when idle (checked by the new test, which passes on the unchanged code); what was missing was a check that it stays so. `incantly/state-no-shadow-null` is that check: the repository lints clean with it, so no other class has the flaw. The field is now documented as data of the `drawing` state in B7.
-
 - **Where:** `core/ink/live.ts` `#page`.
 - **What:** `#page` is set on `begin` and never cleared, so `page` reports the last page while the stroke is `idle`; the field and the machine can disagree.
 - **Fix:** clear it when the stroke ends or is cancelled, or hold the page in the drawing state's data. Test: `page` is `null` when idle.
@@ -178,7 +172,7 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-35.** Tiles holding shapes are painted with Canvas 2D and uploaded; a WebGL path for shapes would be faster on big boards (measure in round 6 first).
 - **BR-36.** The selection bar wraps to two rows (it is placed from `left: 50%` with a translate, so its width is half the view). **Fixed in round 4:** one row that never wraps, centred as the toolbar is, and it scrolls sideways on a phone (`.ib-actions`).
 - **BR-37.** A listener's own write during a gesture's transaction makes a separate diff the gesture does not keep, so a cancel will not undo it; nothing does this today.
-- **BR-38.** A live figure card in the Board app draws with the studio's frame style (axes and grid off in the Board app), because `frameStyle` in the SDK's `screen/paint.ts` is one module-wide object set by the app mode, while a card's picture (made in a headless app) draws axes and grid. A card and its picture can look different. Fix: let `createApp` take its frame style as an option, or have the picture use the same style.
+- **BR-38** (moved to Fix now in round 4; fixed there). A live figure card in the Board app draws with the studio's frame style (axes and grid off in the Board app), because `frameStyle` in the SDK's `screen/paint.ts` is one module-wide object set by the app mode, while a card's picture (made in a headless app) draws axes and grid. A card and its picture can look different. Fix: let `createApp` take its frame style as an option, or have the picture use the same style.
 - **BR-39.** Not built in round 4: the long press that opens the context menu on touch, the main menu's New, Open and Export (the host adds them through `menus.main`; Save is there), the minimap part of `ui`, and a French or Arabic catalogue for the board's strings beyond the tool names (the rest fall back to English).
 - **BR-40.** The card toolbar is above the selected card only on the page the card is on and is not a real toolbar for the keyboard (Tab from the board does not reach it); the Edit lines panel and the toolbar buttons are reachable by Tab only after a click.
 
@@ -188,12 +182,14 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 #### BR-38. Live cards draw without axes or grid (new lint rule)
 
+- **Status:** Fixed in 7ab2f7c (the frame style of each app) and bbb241d (`incantly/no-imported-mutation`).
 - **Where:** `packages/sdk/src/screen/paint.ts` `frameStyle`, one module-wide object; `packages/sdk/src/export.ts` and the studio's app mode write into it.
 - **What:** the app mode sets the page-wide style, so a card live in Board mode loses its axes and grid while its picture (made in a headless app) has them: the card changes look when it goes live (`round4-five-cards.png`). Two apps on one page share one style.
 - **Fix:** the frame style belongs to each app (`MountedApp` holds its own, from its mode and `@axes`/`@grid`); `paintScene`, the grid painter and the export take it as an argument; nothing writes a module's object from outside. New rule `incantly/no-imported-mutation` in `tools/eslint-rules/`: assigning to a property of an imported binding (`x.y = …`, `x.y++`, `Object.assign(x, …)` where `x` is imported) is an error ("a module's object is shared by everyone who imports it; pass state in, or give each owner its own"), registered as 'error' for product code, with RuleTester cases. Fix whatever else it finds so the repo lints clean. Test: a live card and its picture draw the same axes and grid; two apps with different `@axes` on one page each keep their own.
 
 #### BR-46. The live cap is broken (new lint rule)
 
+- **Status:** Fixed in bbb241d.
 - **Where:** `web/figures.ts` card layer `goLive`/`activate`; B26 has no `release` row in `mounting`.
 - **What:** giving the input to a fourth card while 3 are live makes 4 (`makeRoom` returning false is ignored); a fast pan has up to 5 cards mounting, live or moving (bench). B26's invariant is at most 3.
 - **Fix:** a card claims a place only when `makeRoom` says there is one; otherwise it stays a picture and the scheduler's next order decides. `mounting` gets a `release` row (the app being made is freed when it arrives). Tests: the tester's failing test and failing bench row.
@@ -201,22 +197,30 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 #### BR-47. A lost app is not noticed
 
+- **Status:** Fixed in bbb241d.
 - **Where:** `web/figures.ts`.
 - **What:** a `webglcontextlost` on a card's canvas, or an app destroyed from outside, leaves the card holding a dead app; after a lost context the card is not claimed again; a script that fails at mount ends in `picture` instead of `failed` (the app is freed before `fail` is sent, and `picture` has no `fail` row).
 - **Fix:** the card listens for context loss and the app's destroy, frees the app (`unmounted`), and is claimed again when the scheduler still wants it, as the Tiptap figure does; a mount failure sends `fail` before the app is freed. Tests: the tester's four failing tests.
 
 #### BR-48. `defaultTools`
 
+- **Status:** Fixed in bbb241d.
 - **Ruling:** `defaultTools` is every built-in tool (design 10, R7.2); the round-2 six become `inkTools`. Remove `boardTools` or make it the same list; the studio and tests use `defaultTools`.
 
 #### BR-49. String lookup order
 
+- **Status:** Fixed in bbb241d.
 - **Fix:** host strings, then the language catalogue, then the English table, then a tool's own label (design 10). Test: the tester's failing test.
 
 #### BR-50. Key order
 
+- **Status:** Fixed in bbb241d.
 - **Fix:** a key string is written `mod+shift+alt+key` (B30). Test: the tester's failing test.
 
 ### Later
 
 - **BR-39** and **BR-40** above (from the builder) stay on the fix-later list. BR-38 moved up to Fix now.
+- **BR-51.** A card that is asked for the input while no place is free (`makeRoom` says no) keeps `inputAsked` set, so it takes the input when the scheduler later makes it live, which may be long after the user asked. Clear the ask when the order was not followed, or keep a time on it.
+- **BR-52.** The default key map of the tools (`core/tools/keys.ts` `defaultMap`) is one module-level `KeyMap` with no error sink, so a refused move in it is not reported. It is only read, so no move is refused today.
+- **BR-53.** The Tiptap figure keeps its app in `lost` after a lost graphics context and takes it back on `webglcontextrestored`; the board's card frees the app and claims again (BR-47). The two behave differently; pick one and write it in both designs.
+- **BR-54.** A refused move of a machine is now reported as `internal`, so calls that may come in any state (cancel with nothing going on, `release` of a card with no input) ask first (`sendIfAble` in `core/machine.ts`). Other machines in `packages/view`, `packages/ui` and `packages/sdk` still make refused moves silently; the rule `state-refusal-reported` covers only `packages/board`, `packages/tiptap` and `tools`.

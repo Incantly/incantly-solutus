@@ -1501,7 +1501,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 
 ## board
 
-Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends the agent job and circle to ask. Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends the agent job and circle to ask. Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. A machine is made with its third argument, `onRefused` (`incantly/state-refusal-reported`): a move the table refuses is reported to the board's `onError` as `internal`, with `detail.machine`, `detail.state` and `detail.event` (`refusedMove` in `core/errors.ts`); a call that may come in any state asks first (`sendIfAble` in `core/machine.ts`), so a report always means a bug. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
 
 Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
 
@@ -1957,7 +1957,7 @@ Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts
 
 - **Where:** `web/figures.ts` `FigureCard`, `CARD_MACHINE`; one card for each figure shape of the current page, owned by `FigureLayer`. Every mount, save and unmount of one card runs on its own promise chain (`queue`).
 - **States:** `picture` (no app; the slot shows the shape's `picture`, or nothing and the canvas shows the placeholder); `mounting` (claimed, `createApp` in flight); `live` (an app is there and shown, counted against the cap of 3); `moving` (an app is there, hidden, and the card's picture shows because the camera is moving; still counted against the cap); `saving` (not claimed, the app is still there while its picture is made); `failed` (the mount or the script failed once: the picture and a small error badge; tried again by the next live order); `dead` (failed twice; a picture until the script or mode changes); `gone` (terminal: the shape is removed, the page is left or the board is disposed).
-- **Invariants:** at most 3 cards are `mounting`, `live` or `moving` (the scheduler's `maxLive` and `makeRoom` both keep it); a card holds at most one app; a card on another page has no card at all (the layer drops every card when the page changes); the script is the only source of truth: the card reads `props.script` and nothing else, and a script change from outside (undo, a paste, the lines panel) applies to the live card (added lines run alone, any other change loads again); the picture is a cache: it is written with `history: false`, and a script change writes `picture: null` in the same undo step; a card that is `gone` takes no order; `figure_failed` is reported once for each failure and the card keeps its picture.
+- **Invariants:** at most 3 cards are `mounting`, `live` or `moving` (the scheduler's `maxLive` and `makeRoom` both keep it: a card is claimed only when `makeRoom` says there is a place, otherwise it stays a `picture` and the scheduler's next order decides); a card holds at most one app; a card on another page has no card at all (the layer drops every card when the page changes); the script is the only source of truth: the card reads `props.script` and nothing else, and a script change from outside (undo, a paste, the lines panel) applies to the live card (added lines run alone, any other change loads again); the picture is a cache: it is written with `history: false`, and a script change writes `picture: null` in the same undo step; a card that is `gone` takes no order; `figure_failed` is reported once for each failure and the card keeps its picture.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -1965,15 +1965,16 @@ Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts
 | `picture` | `claim` | the script and mode check | `mounting` | `makeRoom` saves the least recently used card that is not live |
 | `mounting` | `claim` | | `mounting` | |
 | `mounting` | `mounted` | still wanted, same mode | `live` | the script is loaded; the scheduler is told (`noteMounted`) |
+| `mounting` | `release` | the card is asked to give its place up (`makeRoom`, a save order) | `picture` | the app being made is freed when it arrives (the card no longer wants it) |
 | `mounting` | `unmounted` | released before the app came | `picture` | app freed |
-| `mounting` | `fail` | first failure | `failed` | `figure_failed`, badge |
+| `mounting` | `fail` | first failure: the app cannot be made, or its script cannot be loaded | `failed` | `figure_failed`, badge; `fail` is sent while the card is still `mounting`, and then the app is freed |
 | `mounting` | `giveUp` | second failure | `dead` | `figure_failed`; the card leaves the scheduler |
 | `failed` | `claim` | a live order after the failure | `mounting` | |
 | `live` | `claim` | | `live` | |
 | `live` | `move` | the camera moved (B28) | `moving` | the picture shows, the app hides |
 | `moving` | `claim` | | `moving` | |
 | `moving` | `settle` | the camera was still for 150 ms | `live` | the host is sized for the steady zoom and the app paints again |
-| `live`, `moving` | `unmounted` | the mode changed, or the app is lost | `picture` | app freed; the card is claimed again when the scheduler still wants it |
+| `live`, `moving`, `saving` | `unmounted` | the mode changed, or the app is lost: the graphics context was lost (`webglcontextlost` on the app's canvas), or the app was destroyed from outside (its element left the host) | `picture` | app freed; the card is claimed again when the scheduler still wants it and there is a place |
 | `live`, `moving` | `release` | | `saving` | the reader's lines are kept, the picture is made |
 | `saving` | `claim` | wanted again during the export | `live` | the kept lines are dropped |
 | `saving` | `unmounted` | picture made | `picture` | app freed; the picture is written without an undo step |
@@ -1981,7 +1982,7 @@ Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts
 | `dead` | `revive` | script or mode changed | `picture` | registered again |
 | any but `gone` | `remove` | | `gone` | app freed, scheduler key dropped |
 
-- **Reachable invalid states or transitions:** `move` and `settle` in `picture`, `mounting`, `saving`, `failed` and `dead` have no row (a card with no shown app has nothing to hide); `mounted` in `picture` or `saving` has no row, so an app that arrives after a release is freed and the card stays as it was; `release` in `picture`, `mounting` and `failed` has no row except `mounting` through `unmounted`; every event in `gone` has no row.
+- **Reachable invalid states or transitions:** `move` and `settle` in `picture`, `mounting`, `saving`, `failed` and `dead` have no row (a card with no shown app has nothing to hide); `mounted` in `picture` or `saving` has no row, so an app that arrives after a release is freed and the card stays as it was; `release` in `picture` and `failed` has no row (`mounting` has one, to `picture`); every event in `gone` has no row.
 
 ### B27. Card input
 

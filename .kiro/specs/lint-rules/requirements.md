@@ -15,6 +15,8 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 7. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
 8. In a class that holds a `StateMachine`, a field typed `X | null` or `X | undefined` that a method sets to a value when it sends a begin-like move (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) SHALL be set back to `null` or `undefined` somewhere in the class: it holds part of the state, so it is cleared when the machine leaves the state, or kept in the state's data (`incantly/state-no-shadow-null`).
 
+9. In `packages/board`, `packages/tiptap` and `tools`, `new StateMachine(table, initial)` SHALL take the third argument, `onRefused`, so a refused move is reported and never silent (`incantly/state-refusal-reported`). The board reports through its `onError` as `internal`; Tiptap through `reportError`.
+
 ### R2. Package rules (AGENTS.md)
 
 1. Product code SHALL import only `@incantly/*` packages, `node:` built-ins where allowed, relative files, and the libraries in the "Ship in the product" table of `docs/design/libraries.md` (`incantly/allowed-imports`). Tests, benches and configs MAY also import the dev and test libraries of that file, `vitest`, `vite` and `playwright`.
@@ -22,6 +24,8 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 3. Code and comments SHALL NOT credit an AI assistant (`incantly/no-ai-credit`).
 4. The DOM-free packages, now including `packages/board/src/core`, SHALL NOT use DOM globals, timers, `fetch`, `Date` or `Math.random`.
 5. A core folder SHALL NOT import its web layer or a DOM package (`no-restricted-imports`).
+
+6. In product code, a property of an imported binding SHALL NOT be assigned (`x.y = …`), changed with `++` or `--`, or given to `Object.assign`, `Object.defineProperty` or `Object.setPrototypeOf` as the target (`incantly/no-imported-mutation`): a module's object is shared by everyone who imports it, so state is passed in, or each owner has its own, or the owner of a registry gives a function that writes it.
 
 ### R3. Repository checks (`tools/check-repo.mjs`, hackathon rules)
 
