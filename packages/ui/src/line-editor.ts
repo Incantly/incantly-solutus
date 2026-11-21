@@ -4,8 +4,8 @@
  * history and a live region. It uses only the language's public API; the host supplies the figure it checks against
  * and applies each accepted line.
  */
-import { accepts, complete, preview, signatureHelp, tokenize, tyStr, typeSet } from '@incantly/kernel';
-import type { Completion, FigureView, LanguageError, PreviewResult, SignatureHelp } from '@incantly/kernel';
+import { StateMachine, accepts, complete, preview, signatureHelp, tokenize, tyStr, typeSet } from '@incantly/kernel';
+import type { Completion, FigureView, LanguageError, MachineTable, PreviewResult, SignatureHelp } from '@incantly/kernel';
 import { emit, h, styleEl, uid } from './dom';
 import { bracketInfo, buildRuns, markDefinitionTargets, placeTokens } from './highlight';
 import type { Mark, Placed } from './highlight';
@@ -35,6 +35,31 @@ const ICONS: Readonly<Record<string, string>> = {
 
 const WORD_BEFORE = /[\p{L}_][\p{L}\p{N}_]*$/u;
 const PAIRS: Readonly<Record<string, string>> = { '(': ')', '[': ']' };
+
+/**
+ * The line's errors (docs ui.md section 3): hidden while the learner types, shown once they pause.
+ * `typing`: no error shows. `quiet`: paused, no error. `error`: paused, the error shows.
+ */
+type ErrorState = 'typing' | 'quiet' | 'error';
+type ErrorEvent = 'type' | 'settleQuiet' | 'settleError' | 'fail';
+const ERROR_MACHINE: MachineTable<ErrorState, ErrorEvent> = {
+  typing: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
+  quiet: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
+  error: { type: 'typing', settleQuiet: 'quiet', settleError: 'error', fail: 'error' },
+};
+
+/**
+ * What covers the strip under the field. Esc first hides the strip (`dismissed`), then asks to clear the line
+ * (`confirm`, or `confirmDismissed` when the strip was hidden first); a key other than Enter keeps the line.
+ */
+type CoverState = 'open' | 'dismissed' | 'confirm' | 'confirmDismissed';
+type CoverEvent = 'reset' | 'dismiss' | 'askClear' | 'keep' | 'show';
+const COVER_MACHINE: MachineTable<CoverState, CoverEvent> = {
+  open: { reset: 'open', dismiss: 'dismissed', askClear: 'confirm', show: 'open' },
+  dismissed: { reset: 'open', askClear: 'confirmDismissed', show: 'open' },
+  confirm: { reset: 'open', keep: 'open' },
+  confirmDismissed: { reset: 'open', keep: 'dismissed' },
+};
 
 export class LineEditorElement extends HTMLElement {
   static observedAttributes = ['placeholder', 'label'];
@@ -67,10 +92,20 @@ export class LineEditorElement extends HTMLElement {
   private lexMarks: Mark[] = [];
   private result: PreviewResult | null = null;
   private resultBlock: LogicalSpan | null = null;
-  private paused = false;
-  private errorShown = false;
-  private dismissed = false;
-  private confirmClear = false;
+  private readonly errors = new StateMachine(ERROR_MACHINE, 'typing');
+  private readonly cover = new StateMachine(COVER_MACHINE, 'open');
+  private get paused(): boolean {
+    return !this.errors.is('typing');
+  }
+  private get errorShown(): boolean {
+    return this.errors.is('error');
+  }
+  private get dismissed(): boolean {
+    return this.cover.is('dismissed', 'confirmDismissed');
+  }
+  private get confirmClear(): boolean {
+    return this.cover.is('confirm', 'confirmDismissed');
+  }
   private sig: SignatureHelp | null = null;
 
   private items: Completion[] = [];
@@ -219,10 +254,8 @@ export class LineEditorElement extends HTMLElement {
       ta.setSelectionRange(fixed.caret, fixed.caret);
     }
     this.lastLen = ta.value.length;
-    this.dismissed = false;
-    this.confirmClear = false;
-    this.paused = false;
-    this.errorShown = false;
+    this.cover.send('reset');
+    this.errors.send('type');
     clearTimeout(this.previewTimer);
     clearTimeout(this.errorTimer);
     this.retokenize();
@@ -242,9 +275,8 @@ export class LineEditorElement extends HTMLElement {
   /** The learner paused: errors may now show (docs ui.md section 3). */
   private settle(): void {
     if (!this.result && this.firstBlock()) this.runPreview();
-    this.paused = true;
     const r = this.result;
-    this.errorShown = !!r && !r.ok && !r.incomplete;
+    this.errors.send(!!r && !r.ok && !r.incomplete ? 'settleError' : 'settleQuiet');
     this.paint();
     this.renderStrip();
     if (this.errorShown && r && !r.ok) this.announce(this.errorAnnouncement(r.error));
@@ -627,10 +659,8 @@ export class LineEditorElement extends HTMLElement {
     const block = this.firstBlock();
     this.resultBlock = block;
     this.result = { ok: false, incomplete: false, error };
-    this.paused = true;
-    this.errorShown = true;
-    this.dismissed = false;
-    this.confirmClear = false;
+    this.errors.send('fail');
+    this.cover.send('reset');
     this.closeCompletion();
     this.updateSignature();
     if (block) {
@@ -686,7 +716,7 @@ export class LineEditorElement extends HTMLElement {
         this.announce('Line cleared');
         return;
       }
-      this.confirmClear = false;
+      this.cover.send('keep');
       this.renderStrip();
       if (k === 'Escape') {
         e.preventDefault();
@@ -717,7 +747,7 @@ export class LineEditorElement extends HTMLElement {
     if (mod && k === ' ') {
       e.preventDefault();
       if (e.shiftKey) {
-        this.dismissed = false;
+        this.cover.send('show');
         this.updateSignature();
         this.renderStrip();
       } else this.maybeComplete(true);
@@ -768,13 +798,13 @@ export class LineEditorElement extends HTMLElement {
 
   private escape(): void {
     if (!this.dismissed && this.strip.childNodes.length > 0) {
-      this.dismissed = true;
+      this.cover.send('dismiss');
       this.renderStrip();
       emit(this, 'incantly-preview', { result: null });
       return;
     }
     if (this.input.value !== '') {
-      this.confirmClear = true;
+      this.cover.send('askClear');
       this.renderStrip();
       this.announce('Clear the line? Press Enter to clear it, Escape to keep it.');
     }

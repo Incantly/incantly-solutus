@@ -6,7 +6,7 @@
  * test does not depend on how the engine orders or prints a correct answer.
  */
 import { describe, expect, test } from 'vitest';
-import { parseExpression, toText } from '@incantly/symbolic';
+import { parseExpression, toText } from '@incantly/symbolic/engine';
 import {
   agree,
   asExpr,

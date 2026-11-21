@@ -19,9 +19,6 @@ const domFree = [
 const product = ['packages/*/src/**/*.{ts,js}', 'apps/*/src/**/*.{ts,js}'];
 const devCode = ['packages/*/test/**', 'packages/*/bench/**', 'packages/*/wasm/**', 'apps/*/test/**', 'tools/**', '**/*.config.{js,ts,mjs}'];
 
-// New and rebuilt code gets every rule as an error; older code gets the state rules as warnings until it is fixed.
-const strict = ['packages/board/**/*.ts', 'packages/tiptap/src/**/*.ts', 'tools/**/*.js'];
-
 const stateRules = (level) => ({
   'incantly/state-no-flag-soup': level,
   'incantly/state-transition-only': level,
@@ -31,7 +28,7 @@ const stateRules = (level) => ({
 });
 
 export default defineConfig([
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'coverage/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'coverage/**', 'tools/eslint-rules/test/fixtures/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -49,14 +46,14 @@ export default defineConfig([
       'no-new-func': 'error',
       'no-implied-eval': 'error',
       'incantly/no-ai-credit': 'error',
-      ...stateRules('warn'),
+      ...stateRules('error'),
     },
   },
   {
     files: product,
     rules: {
       'incantly/allowed-imports': 'error',
-      'incantly/no-throw-export': 'warn',
+      'incantly/no-throw-export': 'error',
     },
   },
   {
@@ -87,10 +84,6 @@ export default defineConfig([
         },
       ],
     },
-  },
-  {
-    files: strict,
-    rules: { ...stateRules('error'), 'incantly/no-throw-export': 'error' },
   },
   {
     // the helper that the state rules point to

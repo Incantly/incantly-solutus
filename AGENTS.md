@@ -32,7 +32,9 @@ Where a feature folder and the core design disagree, `docs/features/README.md` a
 ## Rules are checked by code
 
 - A rule is not done until code checks it: a lint rule in `tools/eslint-rules/` (the `incantly` plugin in `eslint.config.js`), a check in `tools/check-repo.mjs`, or a test. `npm run lint` runs both.
-- Fix every lint error; never turn a rule off in a file to get past it. New and rebuilt code (`packages/board`, `packages/tiptap`) has every rule as an error; older code has the state rules and `no-throw-export` as warnings until a batch fixes it.
+- Fix every lint error; never turn a rule off in a file to get past it. Every rule is an error in every package.
+- Flags that must agree become one state field over a `*_MACHINE` table. Marks that do not depend on each other (cache marks, facts a pass found, what a call is doing) go together in one named `readonly` record (`this.layers.bgDirty`), never as loose boolean fields.
+- Only what a package's entry points reach is its boundary (`no-throw-export`). A package's inner engine that unwinds with exceptions sits behind an internal entry (`incantly.internal` in its package.json, such as `@incantly/symbolic/engine`), which only its own tests and benches may import. A wrong argument type may throw `TypeError` (a programming error, embed-files-export design).
 - The rules: `state-no-flag-soup`, `state-transition-only`, `state-union-type`, `state-table-required`, `state-no-stale-after-await`, `allowed-imports` (from `docs/design/libraries.md`), `no-throw-export`, `no-ai-credit`, DOM-free globals and `Math.random`, and core folders that may not import a web or GPU layer. The repository check: no name of the reference app, a spec for every package with code, `.kiro` never ignored.
 
 ## Tests

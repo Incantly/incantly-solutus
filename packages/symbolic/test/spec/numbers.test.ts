@@ -15,8 +15,8 @@ import {
   parseExpression,
   permutationsBig,
   toText,
-} from '@incantly/symbolic';
-import type { OpCtx } from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
+import type { OpCtx } from '@incantly/symbolic/engine';
 import {
   asBool,
   asExpr,

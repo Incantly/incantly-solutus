@@ -30,8 +30,8 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 
 ### R4. Strength
 
-1. New and rebuilt code (`packages/board`, `packages/tiptap`, `tools`) SHALL get every rule as an error.
-2. Older code SHALL get the state rules and `no-throw-export` as warnings until a later batch fixes it; every other rule is an error everywhere.
+1. Every rule SHALL be an error in every package. (Until `fix/lint-warnings`, older code had the state rules and `no-throw-export` as warnings.)
+2. `no-throw-export` SHALL look only at what a package's entry points reach (package.json `exports`, through `export *` and `export { … } from`), leave out entries listed in `incantly.internal`, and allow `throw new TypeError(…)` for a wrong argument type. `allowed-imports` SHALL refuse an internal entry outside tests, benches and configs.
 3. Each rule SHALL have tests that show code it accepts and code it refuses.
 
 ### R5. Tiptap

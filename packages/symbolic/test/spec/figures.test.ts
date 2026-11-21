@@ -8,7 +8,7 @@ import {
   registerText, setCasEngine, valueText,
 } from '@incantly/kernel';
 import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';
-import { casEngine } from '@incantly/symbolic';
+import { casEngine } from '@incantly/symbolic/engine';
 
 const registry = new CommandRegistry();
 geometry.registerGeometry(registry);

@@ -1155,7 +1155,7 @@ export function parseExprTokens(toks: readonly Token[], sm: SourceMap): Result<E
     return { ok: true, value: e, notices: [] };
   } catch (err) {
     if (err instanceof Stop) return err.err;
-    throw err;
+    return internalFault(sm.text, 1, err);
   }
 }
 

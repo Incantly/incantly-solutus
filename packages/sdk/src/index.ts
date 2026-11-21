@@ -21,5 +21,5 @@ export type { AsyncApp, ConnectOptions, Envelope, MessageHost, MessageLike, Mess
 export { EXPORT_FORMATS, EXPORT_LIMITS, exportFigure } from './export';
 export type { CanvasFactory, ExportEnv, ExportOptions, ExportRegion, ExportResult, ExportWarning } from './export';
 export { SvgContext } from './svg-context';
-export { createApp, hasClock } from './mount';
+export { SCREEN_MEMBERS, createApp, hasClock } from './mount';
 export type { AppOptions, MountedApp, UiOptions } from './mount';

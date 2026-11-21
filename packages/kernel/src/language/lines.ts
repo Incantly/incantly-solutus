@@ -46,11 +46,11 @@ export function checkLine(parsed: ParsedLine, fig: import('./table').FigureView,
     text: printLineNode(parsed.node),
     source: parsed.source,
     reads: [...c.reads],
-    usesT: c.usesT,
+    usesT: c.found.usesT,
     ...(c.rangeReads.size > 0 ? { rangeReads: [...c.rangeReads] } : {}),
     ...(c.styleReads.size > 0 ? { styleReads: [...c.styleReads] } : {}),
-    ...(c.styleUsesT ? { styleUsesT: true } : {}),
-    ...(c.rangeUsesT ? { rangeUsesT: true } : {}),
+    ...(c.found.styleUsesT ? { styleUsesT: true } : {}),
+    ...(c.found.rangeUsesT ? { rangeUsesT: true } : {}),
     slots: c.slotCount,
   };
   return { ok: true, value: checked, notices: c.notices };
@@ -614,7 +614,7 @@ function checkDefine(c: Checker, written: Extract<LineNode, { k: 'define' }>): P
 }
 
 function isFreeNode(c: Checker, tn: TNode): boolean {
-  return c.reads.size === 0 && !c.usesT && !c.hasCommand && tn.n !== 'relation' && tn.ty.k !== 'Function';
+  return c.reads.size === 0 && !c.found.usesT && !c.found.hasCommand && tn.n !== 'relation' && tn.ty.k !== 'Function';
 }
 
 function checkState(c: Checker, call: Expr & { k: 'call' }): { node: TNode; state: { initial: TNode; velocity?: TNode } } | null {

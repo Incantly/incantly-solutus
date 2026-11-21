@@ -308,7 +308,8 @@ export function parseTex(src: string): TexResult {
     return { ok: true, box };
   } catch (e) {
     if (e instanceof Unsupported) return { ok: false, kind: 'latex_unsupported', macro: e.macro, at: e.at, message: `${e.macro} is not in the supported LaTeX subset.` };
-    throw e;
+    // a fault in the layout itself: the caller shows the source, as for a macro it does not know
+    return { ok: false, kind: 'latex_unsupported', macro: '', at: 0, message: 'This LaTeX could not be laid out.' };
   }
 }
 

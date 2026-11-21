@@ -7,7 +7,8 @@
  * sliced, because refinement is a pure function of each span and emission sorts
  * everything by x.
  */
-import type { ErrorObject, FunctionValue, Result } from '@incantly/kernel';
+import type { ErrorObject, FunctionValue, MachineTable, Result } from '@incantly/kernel';
+import { transition } from '@incantly/kernel';
 import {
   DEFAULT_MAX_EVALS_FUNCTION,
   HARD_MAX_SAMPLES,
@@ -63,6 +64,21 @@ interface FCfg {
   readonly exact: boolean;
 }
 
+type SamplerPhase = 'setup' | 'refine' | 'classify' | 'band';
+type SamplerEvent = 'refine' | 'classify' | 'band';
+
+/** The sampler's phases (functions-calculus 9): setup, then refine and classify in turn, then the exact band. */
+const SAMPLER_MACHINE: MachineTable<SamplerPhase, SamplerEvent> = {
+  setup: { refine: 'refine', band: 'band' },
+  refine: { classify: 'classify', band: 'band' },
+  classify: { classify: 'classify', refine: 'refine', band: 'band' },
+  band: { band: 'band' },
+};
+
+function movePhase(st: { phase: SamplerPhase }, event: SamplerEvent): void {
+  st.phase = transition(SAMPLER_MACHINE, st.phase, event) ?? st.phase;
+}
+
 interface FState {
   readonly pv: PlotView;
   readonly samples: Map<number, FSample>;
@@ -101,7 +117,7 @@ interface FState {
   breaks: readonly number[];
   coarseXs: readonly number[];
   coarseDone: number;
-  phase: 'setup' | 'refine' | 'classify' | 'band';
+  phase: SamplerPhase;
   evals: number;
   intervalEvals: number;
   maxDepthSeen: number;
@@ -390,7 +406,7 @@ function runSetup(st: FState): void {
     }
     st.coarseDone += 1;
   }
-  st.phase = 'refine';
+  movePhase(st, 'refine');
 }
 
 function samePiece(pieces: readonly ResumePiece[], eps: number, a: number, b: number): boolean {
@@ -524,7 +540,7 @@ function forceCap(st: FState): void {
  * bisection heuristics decide and `rigorous` is set to false.
  */
 function runClassify(st: FState): void {
-  st.phase = 'classify';
+  movePhase(st, 'classify');
   while (st.suspicious.length > 0) {
     if (st.suspended) return;
     if (st.steps++ > STEP_CAP) {
@@ -1081,7 +1097,7 @@ function addMarker(st: FState, kind: MarkerKind, x: number, y: number): void {
  */
 function runExact(st: FState): void {
   const pv = st.pv;
-  st.phase = 'band';
+  movePhase(st, 'band');
   // The band is only entered with an enclosure (resume refuses one without).
   if (!st.enclosure) throw new Error('the band phase needs an enclosure');
   while (st.pending.length > 0) {
@@ -1116,7 +1132,7 @@ function runLoop(st: FState): void {
     // The band is drawn on top of the same verdicts: markers come from the curve pass.
     st.ink.length = 0;
     setupExactColumns(st);
-    st.phase = 'band';
+    movePhase(st, 'band');
   }
   runExact(st);
 }
@@ -1132,13 +1148,13 @@ function runCurve(st: FState): void {
       runRefine(st);
       if (st.suspended) return;
       if (st.suspicious.length === 0) return;
-      st.phase = 'classify';
+      movePhase(st, 'classify');
     }
     // Classification may push spans back to pending; alternate until both drain.
     runClassify(st);
     if (st.suspended) return;
     if (st.pending.length === 0) return;
-    st.phase = 'refine';
+    movePhase(st, 'refine');
   }
 }
 

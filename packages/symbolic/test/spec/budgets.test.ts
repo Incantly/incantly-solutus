@@ -3,8 +3,8 @@
  * Each case was an evidence line of a finding: it ran out of memory or ran for seconds past its budget.
  */
 import { describe, expect, it } from 'vitest';
-import { binomialExact, run } from '@incantly/symbolic';
-import type { RunOptions, SymArg } from '@incantly/symbolic';
+import { binomialExact, run } from '@incantly/symbolic/engine';
+import type { RunOptions, SymArg } from '@incantly/symbolic/engine';
 import { ex, tx } from './helpers';
 
 const timed = (op: Parameters<typeof run>[0], args: readonly SymArg[], opts: RunOptions) => {

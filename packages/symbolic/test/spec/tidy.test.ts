@@ -3,7 +3,7 @@
  * left under a root, no root left in a denominator, and quadratic roots split into a number and a root.
  */
 import { describe, expect, it } from 'vitest';
-import { intN, pow, ratN, run, toLatex, toText } from '@incantly/symbolic';
+import { intN, pow, ratN, run, toLatex, toText } from '@incantly/symbolic/engine';
 import { cd, ex, sy } from './helpers';
 
 const value = (r: ReturnType<typeof run>): string => {

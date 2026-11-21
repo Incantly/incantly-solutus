@@ -4,8 +4,8 @@
  * Division, GCD, LCM.
  */
 import { describe, expect, test } from 'vitest';
-import { condText, floatN, parseCondition, parseExpression, run, toText } from '@incantly/symbolic';
-import type { Result, RunSuccess } from '@incantly/symbolic';
+import { condText, floatN, parseCondition, parseExpression, run, toText } from '@incantly/symbolic/engine';
+import type { Result, RunSuccess } from '@incantly/symbolic/engine';
 import {
   asCond,
   asExpr,

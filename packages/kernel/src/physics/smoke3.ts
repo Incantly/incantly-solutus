@@ -28,6 +28,8 @@ import type { Allocator, GridKernels } from './wasm/kernels';
 import { GF, GI, GRID_OF, KernelArena, PLAIN } from './wasm/kernels';
 import type { World3 } from './world3';
 import { BodyType3, FK3 } from './world3';
+import { StateMachine } from '../contracts/state-machine';
+import { GRID_MACHINE } from './grid-life';
 
 /** The most bodies the Rust solid-face loop has room for (design 11.3: 1,000 bodies), and the most drops the fire's water list holds (2,000). */
 const BODY_CAP = 1024;
@@ -147,8 +149,14 @@ export class Smoke3 {
   heat = 0;
   /** The source makes smoke this step. */
   making = true;
-  /** The walls moved: mark them again before the next step. */
-  staticDirty = true;
+  /** The walls moved: they are marked again before the next step while `wallsMarkedAt` is behind `wallsMoved`. */
+  private wallsMoved = 0;
+  private wallsMarkedAt = -1;
+
+  /** The walls moved (a body was added, removed or changed type): they are marked again before the next step. */
+  markWallsAgain(): void {
+    this.wallsMoved++;
+  }
   /** The air's drag on each body (N), found by the last smoke step and applied over the bodies' steps that follow it. */
   fx = new Float64Array(0);
   fy = new Float64Array(0);
@@ -159,7 +167,11 @@ export class Smoke3 {
   private cnt = new Int32Array(0);
   /** The mass correction of the last step's smoke advection (1 is none). */
   lastScale = 1;
-  unstable = false;
+  /** Running, or `unstable` once a speed went over the limit or stopped being a number. */
+  readonly life = new StateMachine(GRID_MACHINE, 'running');
+  get unstable(): boolean {
+    return this.life.is('unstable');
+  }
   /** The flow at the point of the last `flowAt` (m/s). */
   ox = 0;
   oy = 0;
@@ -388,7 +400,7 @@ export class Smoke3 {
     this.w.fill(windZ);
     this.s.fill(0);
     this.p.fill(0);
-    this.unstable = false;
+    this.life.send('reset');
     if (this.fire) this.seedFire();
     else this.makeSmoke();
   }
@@ -438,8 +450,8 @@ export class Smoke3 {
       this.sumZ = new Float64Array(w.n);
       this.cnt = new Int32Array(w.n);
     }
-    if (this.staticDirty) {
-      this.staticDirty = false;
+    if (this.wallsMarkedAt !== this.wallsMoved) {
+      this.wallsMarkedAt = this.wallsMoved;
       this.own0.fill(-1);
       for (let b = 0; b < w.n; b++) if (w.type[b] !== DYNAMIC && !w.gone.has(b)) this.markBody(w, b, this.own0);
     }
@@ -1505,7 +1517,7 @@ export class Smoke3 {
 
   /** The grid blew up: everything is set to rest and the grid stops. */
   private blowUp(): void {
-    this.unstable = true;
+    this.life.send('blowUp');
     this.u.fill(0);
     this.v.fill(0);
     this.w.fill(0);
@@ -1599,8 +1611,8 @@ export class Smoke3 {
   }
 
   load(src: Float64Array): void {
-    this.unstable = src[1] === 1;
-    this.staticDirty = true;
+    this.life.send(src[1] === 1 ? 'blowUp' : 'reset');
+    this.wallsMoved++;
     const nb = src[2] as number;
     this.alive = src[3] === 1;
     if (this.fx.length !== nb) {

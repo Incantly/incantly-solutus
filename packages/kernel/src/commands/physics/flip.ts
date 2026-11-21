@@ -10,17 +10,18 @@
  */
 export class FlipArrays<T extends Float32Array | Float64Array | Uint8Array> {
   private readonly pair: (T | undefined)[] = [undefined, undefined];
-  private phase = 0;
+  /** Which of the two arrays the last frame wrote: an index, not a state. */
+  private slot: 0 | 1 = 0;
 
   constructor(private readonly make: (n: number) => T) {}
 
   /** The array to write this frame's `n` numbers into. Its old numbers are the frame before the last one's. */
   next(n: number): T {
-    this.phase = 1 - this.phase;
-    let a = this.pair[this.phase];
+    this.slot = this.slot === 0 ? 1 : 0;
+    let a = this.pair[this.slot];
     if (a === undefined || a.length !== n) {
       a = this.make(n);
-      this.pair[this.phase] = a;
+      this.pair[this.slot] = a;
     }
     return a;
   }

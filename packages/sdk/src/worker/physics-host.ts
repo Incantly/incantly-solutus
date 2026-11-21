@@ -5,9 +5,25 @@
  * `worker_unavailable` once; if the worker stops, the page takes the world back from its start (`worker_crashed`).
  * Either way the film is the same.
  */
-import { physics, sameValue, worldDriverOf } from '@incantly/kernel';
-import type { Figure, Notice } from '@incantly/kernel';
+import { StateMachine, physics, sameValue, worldDriverOf } from '@incantly/kernel';
+import type { Figure, MachineTable, Notice } from '@incantly/kernel';
 import type { FromWorker, ToWorker } from './physics-worker';
+
+/**
+ * - `off`: the page plays the world itself; a worker may start.
+ * - `idle`: the world runs in the worker, no frame in flight.
+ * - `waiting`: one frame is in flight (a slow worker makes the film slower, never a longer queue).
+ * - `failed`: no worker could be made, or it crashed; the page keeps the world for good.
+ */
+export type WorkerLife = 'off' | 'idle' | 'waiting' | 'failed';
+export type WorkerLifeEvent = 'start' | 'post' | 'answer' | 'stop' | 'fail';
+
+export const WORKER_MACHINE: MachineTable<WorkerLife, WorkerLifeEvent> = {
+  off: { start: 'idle', stop: 'off', fail: 'failed' },
+  idle: { post: 'waiting', answer: 'idle', stop: 'off', fail: 'failed' },
+  waiting: { answer: 'idle', stop: 'off', fail: 'failed' },
+  failed: { stop: 'failed', fail: 'failed' },
+};
 
 /** A way to talk to a worker: a real `Worker`, or a channel that runs the handler in the same thread (tests). */
 export interface PhysicsChannel {
@@ -19,8 +35,7 @@ export interface PhysicsChannel {
 
 export class PhysicsWorkerHost {
   private channel: PhysicsChannel | undefined;
-  private active = false;
-  private told = false;
+  readonly life = new StateMachine(WORKER_MACHINE, 'off');
   private version = -1;
   private seq = 0;
   private sent = new Map<string, unknown>();
@@ -38,6 +53,10 @@ export class PhysicsWorkerHost {
     return this.active;
   }
 
+  private get active(): boolean {
+    return this.life.is('idle', 'waiting');
+  }
+
   /** Before the page's frame at film time t. */
   frame(t: number): void {
     const f = this.figure;
@@ -51,17 +70,17 @@ export class PhysicsWorkerHost {
       if (!wants) return;
     }
     if (!this.active) {
-      if (this.told && !this.channel) return;
+      if (this.life.is('failed')) return;
       const ch = this.makeChannel();
       if (!ch) {
-        this.told = true;
+        this.life.send('fail');
         this.warnings.push(physics.makeNotice('worker_unavailable', {}, []));
         return;
       }
       this.channel = ch;
       ch.onMessage((m) => this.receive(m));
       ch.onError(() => this.crashed());
-      this.active = true;
+      this.life.send('start');
       this.driver = d;
       d.setRemote(true);
       this.version = -1;
@@ -77,14 +96,13 @@ export class PhysicsWorkerHost {
       ch.post({ k: 'load', seq: ++this.seq, script: f.toScript() });
     }
     // one frame in flight at a time: a slow worker makes the film slower, never longer queues (design 10.5)
-    if (this.waiting) {
+    if (this.life.is('waiting')) {
       this.wantT = t;
       return;
     }
     this.postFrame(t);
   }
 
-  private waiting = false;
   private wantT: number | undefined;
 
   private postFrame(t: number): void {
@@ -98,7 +116,7 @@ export class PhysicsWorkerHost {
       this.sent.set(o.name, o.cell.value);
       sets.push([o.name, o.cell.value]);
     }
-    this.waiting = true;
+    this.life.send('post');
     this.wantT = undefined;
     ch.post({ k: 'frame', seq: ++this.seq, t, sets, lines: d.takeOutbox() });
   }
@@ -111,11 +129,10 @@ export class PhysicsWorkerHost {
   stop(): void {
     this.channel?.close();
     this.channel = undefined;
-    this.waiting = false;
     this.wantT = undefined;
     if (this.active) (this.driver ?? worldDriverOf(this.figure)).setRemote(false);
     this.driver = undefined;
-    this.active = false;
+    this.life.send('stop');
   }
 
   private receive(m: FromWorker): void {
@@ -130,13 +147,13 @@ export class PhysicsWorkerHost {
     this.copyMs = this.now() - t0;
     this.lastT = m.t;
     this.warnings.push(...m.warnings);
-    if (m.seq === this.seq) this.waiting = false;
-    if (!this.waiting && this.wantT !== undefined) this.postFrame(this.wantT);
+    if (m.seq === this.seq) this.life.send('answer');
+    if (!this.life.is('waiting') && this.wantT !== undefined) this.postFrame(this.wantT);
   }
 
   private crashed(): void {
     this.stop();
-    this.told = true;
+    this.life.send('fail');
     this.warnings.push(physics.makeNotice('worker_crashed', {}, []));
   }
 }
