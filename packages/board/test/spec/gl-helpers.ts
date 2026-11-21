@@ -11,6 +11,8 @@ export interface GlEvent {
   readonly what: string;
   /** The number of indices of a `gl:draw`. */
   readonly count?: number;
+  /** Where a `gl:draw` went: `screen` is the canvas's own framebuffer (nothing the board draws goes there), `target` one of the back-end's targets. */
+  readonly into?: 'screen' | 'target';
 }
 
 export interface GpuProbe {
@@ -31,6 +33,7 @@ export const QUAD_INDICES = 6;
 
 function fakeGl(log: GlEvent[]): WebGL2RenderingContext {
   let made = 0;
+  let bound: unknown = null;
   return new Proxy(
     {},
     {
@@ -52,9 +55,14 @@ function fakeGl(log: GlEvent[]): WebGL2RenderingContext {
             return { __id: made };
           };
         }
+        if (p === 'bindFramebuffer') {
+          return (_target: number, framebuffer: unknown) => {
+            bound = framebuffer;
+          };
+        }
         if (p === 'drawElements' || p === 'drawElementsInstanced') {
           return (_mode: number, count: number) => {
-            log.push({ what: 'gl:draw', count });
+            log.push({ what: 'gl:draw', count, into: bound === null ? 'screen' : 'target' });
           };
         }
         if (p === 'texSubImage2D') {

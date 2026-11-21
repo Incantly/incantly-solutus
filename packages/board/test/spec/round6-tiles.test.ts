@@ -137,6 +137,16 @@ describe('a tile is drawn in order on the GPU (design 9 item 4, BR-35)', () => {
     expect(drawsMany).toBe(1);
   });
 
+  it('BR-72: the first tile with paper draws every call into the tile\'s own target, none into the canvas (making the layer target in mid-frame unbinds the frame)', () => {
+    const rig = shapeRig('pen');
+    drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
+    drawInFrame(theTile(), { box: BOX, items: rig.core.drawList.itemsIn(BOX, 1), background: 'lines' });
+    const draws = probe.log.filter((e) => e.what === 'gl:draw');
+    expect(draws.length).toBeGreaterThan(2);
+    expect(draws.filter((e) => e.into === 'screen')).toEqual([]);
+    expect(tileOrder(probe)).toEqual(['layer', 'strokes']);
+  });
+
   it('a drawn tile is fresh and counted; its picture is shown again later without being drawn again', () => {
     const rig = shapeRig('pen');
     drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);

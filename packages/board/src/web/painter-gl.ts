@@ -85,7 +85,7 @@ export class GlRaster implements TileRaster {
   /** The shapes and the paper of a tile are drawn on this canvas with Canvas 2D, then copied into `#layer`'s texture and drawn over the strokes. */
   #paper: HTMLCanvasElement | null = null;
   #paperCtx: CanvasRenderingContext2D | null = null;
-  #layer: Target | null = null;
+  readonly #layer: Target;
   #images: ImageLookup = () => null;
   /** The four corners of a tile's quad, its index list and its batch: one set, written again for every tile of a frame, so composing makes no garbage. */
   readonly #quadData = new Float32Array(16);
@@ -97,7 +97,7 @@ export class GlRaster implements TileRaster {
   /** Draw calls of the last frame, for the painter's statistics. */
   drawCalls = 0;
 
-  private constructor(gl: WebGL2RenderingContext, backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target) {
+  private constructor(gl: WebGL2RenderingContext, backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target, layer: Target) {
     this.#gl = gl;
     this.#backend = backend;
     this.#ink = ink;
@@ -105,6 +105,7 @@ export class GlRaster implements TileRaster {
     this.#inkArena = inkArena;
     this.#quadArena = quadArena;
     this.#scratch = scratch;
+    this.#layer = layer;
   }
 
   /** WebGL 2 on `canvas`, or `render_failed`. */
@@ -125,7 +126,11 @@ export class GlRaster implements TileRaster {
     if (!quadArena.ok) return failed('the tile buffer');
     const scratch = backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 4, depth: true, float: false });
     if (!scratch.ok) return failed('the tile target');
-    return ok(new GlRaster(gl, backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value));
+    // made here, never while a tile's frame is open: making a target unbinds the framebuffer a frame draws into, and every
+    // call after it would go to the canvas, leaving the tile blank (BR-72)
+    const layer = backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 1, depth: false, float: false });
+    if (!layer.ok) return failed('a tile layer');
+    return ok(new GlRaster(gl, backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value, layer.value));
   }
 
   get backend(): GpuBackend {
@@ -146,16 +151,6 @@ export class GlRaster implements TileRaster {
     return ok(tile.handle as Target);
   }
 
-  /** The target that holds a picture made with Canvas 2D while a tile is drawn, made when first needed. */
-  #layerTarget(): BoardResult<Target> {
-    if (this.#layer === null) {
-      const made = this.#backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 1, depth: false, float: false });
-      if (!made.ok) return failed('a tile layer');
-      this.#layer = made.value;
-    }
-    return ok(this.#layer);
-  }
-
   /**
    * The paper and the shapes of one run (vector parts, text, images) are drawn with Canvas 2D, copied into the layer's
    * texture (rows flipped, colours premultiplied) and drawn over what the frame holds, in order, as one quad. The strokes
@@ -163,9 +158,8 @@ export class GlRaster implements TileRaster {
    * each of them (BR-35).
    */
   #paintLayer(frame: FrameCtx, scale: number, x0: number, y0: number, background: PageBackground | undefined, run: readonly DrawItem[]): BoardResult<undefined> {
-    const layer = this.#layerTarget();
-    if (!layer.ok) return layer;
-    const texture = (layer.value as unknown as { colorTex?: WebGLTexture }).colorTex;
+    const layer = this.#layer;
+    const texture = (layer as unknown as { colorTex?: WebGLTexture }).colorTex;
     if (texture === undefined) return failed('a tile texture');
     let paper = this.#paper;
     let ctx = this.#paperCtx;
@@ -234,7 +228,7 @@ export class GlRaster implements TileRaster {
       mode: 'triangles',
       instances: 1,
       uniforms: {},
-      textures: { uTex: layer.value },
+      textures: { uTex: layer },
       scissor: null,
       depthTest: false,
       depthFunc: 'less',
