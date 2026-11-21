@@ -126,7 +126,7 @@ function layoutLine(src: string, px: number, family: FontFamily, color: string):
     return { w: m.w, reach: m.w, asc: m.asc, desc: m.desc, items: s === '' ? [] : [{ k: 'glyph', x: 0, y: 0, s, font: 'text', px, color }] };
   };
   for (const run of math.splitMath(src)) {
-    let l: Laid;
+    let l: Omit<Laid, 'reach'>;
     if (run.kind === 'math') {
       const t = math.parseTex(run.s);
       l = t.ok ? math.layoutBox(t.box, px, measure, color) : plain(`$${run.s}$`);

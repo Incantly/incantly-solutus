@@ -413,7 +413,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     toolButtons.set(def.id, b);
   }
   if (hasMore) {
-    moreBtn.addEventListener('click', () => showMore(moreMenu.hidden));
+    moreBtn.addEventListener('click', () => showMore(moreMenu.hasAttribute('hidden')));
     moreBtn.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') showMore(false);
     });
@@ -425,7 +425,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     // a press anywhere else on the board closes the menu
     root.addEventListener('pointerdown', (e) => {
       const t = e.target as Node;
-      if (!moreMenu.hidden && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
+      if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
     });
     root.append(moreMenu);
   }

@@ -170,7 +170,7 @@ While a pen is down or hovering, touches are ignored for drawing; two-finger tou
 | `rect`, `ellipse`, `triangle`, `diamond`, `star` | `w`, `h`, `fill`, `stroke`, `dash`, `size`, `label` | `label` is text inside |
 | `line` | `points` (2 or more), `stroke`, `dash` | Points can be dragged |
 | `arrow` | `start`, `end`, `bend`, heads | Ends stick to shapes through bindings |
-| `text` | `text`, `font`, `size`, `align`, `w` (auto or fixed) | Maths between `$…$` is typeset by the view package's maths layout |
+| `text` | `text`, `font`, `size`, `align`, `w` (auto or fixed) | Maths between `$…$` is typeset by the view package's maths layout. An auto width is as wide as the laid-out boxes reach (the ink of an italic letter included), so no maths is cut off at the box |
 | `sticky` | `text`, `color` | Fixed size, grows with text |
 | `frame` | `w`, `h`, `name` | Holds children; clips them; can be a slide |
 | `image` | `asset`, `w`, `h`, `crop` | PNG, JPEG, WebP, SVG (checked, as SDK files) |
@@ -196,15 +196,18 @@ interface KindDef<P> {
 
 A host adds its own kind with `board.kinds.register(def)`. Built-in kinds use the same interface.
 
+**Default sizes.** The size of a shape made by a click is in the kind's `defaults` (`w` and `h`), and the shape tools read it from there, so a host's own kind in a shape tool follows the same rule and no tool keeps a size of its own. The built-in sizes: rect and ellipse 120 × 80, triangle and diamond 120 × 100, star 110 × 105, frame 400 × 300. A box kind's `check` fills a missing `w` or `h` from the same defaults.
+
 ### 7.3 Shape fixing
 
-When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from the toolbar), `core/ink/recognise.ts` tries, in order: a straight line, a circle or ellipse, a polygon with 3 to 6 corners (found from turning angle), an arrow (a line with a head). A fit is kept only when the mean distance from the stroke to the clean shape is under 6% of the shape's size. The stroke is replaced by the clean shape in one undo step; undo gives the ink back. No match leaves the ink.
+When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from the toolbar), `core/ink/recognise.ts` looks at the stroke. An open stroke is a straight line, else an arrow (a line with a head). A closed stroke looks for its corners first: the stroke is simplified, points that lie on a side (the pen turns by under 20°) are dropped, and a corner is clear when the pen turns by more than 45° at it. With 3 to 6 clear corners the stroke is tried as a polygon (a rectangle when it has four right angles) before the ellipse, so a drawn pentagon or hexagon is a polygon and not a circle. The ellipse still wins when it is the closer fit (the mean distance to the ellipse is smaller than to the polygon), so a drawn circle stays a circle: a circle has no clear corners, and a hexagon laid over a circle is further from it than the circle is. A closed stroke with no such corners is tried as a circle or ellipse. A fit is kept only when the mean distance from the stroke to the clean shape is under 6% of the shape's size. The stroke is replaced by the clean shape in one undo step; undo gives the ink back. No match leaves the ink.
 
 ### 7.4 Editing
 
-- Select by click, Shift-click, box drag or lasso. Selected shapes show handles: 8 resize handles, one rotate handle, and the kind's own handles (arrow bend, line points).
+- Select by click, Shift-click, box drag or lasso. Selected shapes show handles: 8 resize handles, one rotate handle, and the kind's own handles (arrow bend, line points). A line or an arrow alone shows only its own handles (its ends and bend, or its points), because a box and a turn mean little for a line; with other shapes in the selection, the box with 8 handles and the rotate handle shows.
+- A drag, a resize, a rotation, a shape being made and an eraser stroke write through one gesture (`beginGesture` in `core/edit.ts`, B25). Each write is one transaction with the gesture's merge key, so the whole gesture is one undo step. The gesture keeps what every write changed (read from the store's diffs: the shape, the arrows that followed it, a binding it dropped or added, the members of a group), so a cancel puts back every one of those records and leaves no undo step. A tool never lists what to put back; `eslint.config.js` makes a `.change(` call in `core/tools/` an error.
 - Snap while moving and resizing: to other shapes' edges and centres, to equal gaps, and to the page grid when it is shown. Snap guides draw on the overlay.
-- Align, distribute, bring forward, send back, group, ungroup, lock, duplicate, flip.
+- Align, distribute, bring forward, send back, group, ungroup, lock, duplicate, flip. Front, back, forward and backward keep the selection's own order: a selection moved to the back stays in the same order relative to itself.
 - Copy and paste: inside a document and between documents as JSON records with a type tag; pasting plain text makes a text shape; pasting an Incantly script (header `# incantly 1`) makes a figure card; pasting an image makes an image shape.
 
 ## 8. Figure cards
@@ -251,7 +254,7 @@ const board = createBoard({
 ```
 
 - **Tools** are registered with `ToolDef`: an id, an icon, a label, a key, and a state machine of handlers (`onDown`, `onMove`, `onUp`, `onKey`, `onCancel`) that call the core API. Built-in tools use the same interface; `defaultTools` is a list a host filters.
-- **Toolbar** is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI.
+- **Toolbar** is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI. The default board view lists the tools in the order of `ui.md` and puts triangle, diamond and star in a More shapes menu on the rectangle's group, so the toolbar is one row.
 - **Icons**: every built-in icon can be replaced by SVG text (checked: no script, no event attributes, no outside links) or by a factory that returns an element.
 - **Keys**: one map from action to key strings; `mod` is Ctrl or Cmd. A key used twice is reported (`shortcut_conflict`) and the later one is dropped.
 - **Menus**: the context menu, page menu and main menu are lists of `MenuItem { id, label, icon?, key?, enabled(target), run(target) }`, built by functions the host can wrap.
