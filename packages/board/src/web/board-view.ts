@@ -155,10 +155,10 @@ const CSS = `
 .ib-bar button,.ib-bar select{font:inherit;border:1px solid transparent;border-radius:7px;background:transparent;padding:5px 9px;cursor:pointer;color:inherit}
 .ib-bar button:hover{background:#eef0f4}.ib-bar button[aria-pressed=true]{background:#e0e7ff;border-color:#a5b4fc}
 .ib-bar button:disabled{opacity:.4;cursor:default}
-.ib-tools{left:0;right:0;margin:0 auto;bottom:14px;width:max-content;max-width:94%;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
-.ib-tools button{flex:none;white-space:nowrap;padding:5px 7px;font-size:12px}
+.ib-tools{left:0;right:0;margin:0 auto;bottom:14px;width:max-content;max-width:calc(100% - 340px);gap:2px;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.ib-tools button{flex:none;white-space:nowrap;padding:5px 5px;font-size:12px}
 .ib-tools .ib-sep{flex:none}
-.ib-more{left:auto;top:auto;bottom:62px;min-width:120px}
+.ib-list.ib-more{left:0;top:auto;bottom:62px;min-width:120px}
 .ib-style{right:12px;top:70px;flex-wrap:wrap;max-width:300px;justify-content:flex-start}
 .ib-style[hidden],.ib-list[hidden]{display:none}
 .ib-sep{width:1px;align-self:stretch;background:#d5d7dd;margin:2px 2px}
