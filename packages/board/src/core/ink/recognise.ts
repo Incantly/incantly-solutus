@@ -1,8 +1,10 @@
 /**
- * Shape fixing (design 7.3): a rough hand-drawn stroke becomes a clean shape. Our own code: it tries, in order, a
- * straight line, a circle or ellipse, a polygon of 3 to 6 corners (a rectangle when it has four right angles), and an
- * arrow (a line that ends in a head). A fit is kept only when the mean distance from the stroke to the clean shape is
- * under 6% of the shape's size (`FIT_MAX`). No DOM, no timers, no `Date`.
+ * Shape fixing (design 7.3): a rough hand-drawn stroke becomes a clean shape. Our own code. An open stroke is a straight
+ * line, else an arrow (a line that ends in a head). A closed stroke looks for its corners first: with 3 to 6 clear
+ * corners (each turns the pen by more than 45 degrees) it is a polygon (a rectangle when it has four right angles),
+ * unless a circle or ellipse is a closer fit, so a drawn pentagon is a pentagon and a drawn circle stays a circle;
+ * a closed stroke with no such corners is tried as a circle or ellipse. A fit is kept only when the mean distance from
+ * the stroke to the clean shape is under 6% of the shape's size (`FIT_MAX`). No DOM, no timers, no `Date`.
  */
 import { distToSegmentSq, wrapAngle } from '../math2d';
 
@@ -17,6 +19,9 @@ export type Recognised =
   | { readonly kind: 'polygon'; readonly fit: number; readonly points: readonly number[] };
 
 const SAMPLES = 64;
+
+/** A corner is clear when the pen turns by more than this at it. */
+const CORNER_TURN = Math.PI / 4;
 
 /** `n` points along the polyline, equally spaced by the length walked. */
 function resample(xy: ArrayLike<number>, n: number): number[] {
@@ -165,6 +170,7 @@ function tryPolygon(xy: ArrayLike<number>, pts: readonly number[], diag: number)
     merged.push(corners[i] as number, corners[i + 1] as number);
   }
   if (merged.length >= 4 && Math.hypot((merged[0] as number) - (merged[merged.length - 2] as number), (merged[1] as number) - (merged[merged.length - 1] as number)) < diag * 0.08) merged.length -= 2;
+  dropStraight(merged);
   const k = merged.length / 2;
   if (k < 3 || k > 6) return undefined;
   const fit = meanDistance(pts, merged, true) / diag;
@@ -196,6 +202,49 @@ function tryPolygon(xy: ArrayLike<number>, pts: readonly number[], diag: number)
     }
   }
   return { kind: 'polygon', fit, points: merged };
+}
+
+/** The pen turns by less than this at a point that is no corner but only a point on a side. */
+const STRAIGHT_TURN = Math.PI / 9;
+
+/** Takes the points that lie on a side (the pen turns by under 20 degrees there) out of the closed polygon `xy`, the flattest first. */
+function dropStraight(xy: number[]): void {
+  for (;;) {
+    const n = xy.length / 2;
+    if (n <= 3) return;
+    let flattest = -1;
+    let least = STRAIGHT_TURN;
+    for (let i = 0; i < n; i++) {
+      const a = ((i + n - 1) % n) * 2;
+      const b = i * 2;
+      const c = ((i + 1) % n) * 2;
+      const turn = Math.PI - angleAt(xy[a] as number, xy[a + 1] as number, xy[b] as number, xy[b + 1] as number, xy[c] as number, xy[c + 1] as number);
+      if (turn < least) {
+        least = turn;
+        flattest = i;
+      }
+    }
+    if (flattest < 0) return;
+    xy.splice(flattest * 2, 2);
+  }
+}
+
+/** True when every corner of the closed polygon `xy` turns the pen by more than 45 degrees. */
+function clearCorners(xy: readonly number[]): boolean {
+  const n = xy.length / 2;
+  for (let i = 0; i < n; i++) {
+    const a = ((i + n - 1) % n) * 2;
+    const b = i * 2;
+    const c = ((i + 1) % n) * 2;
+    const turn = Math.PI - angleAt(xy[a] as number, xy[a + 1] as number, xy[b] as number, xy[b + 1] as number, xy[c] as number, xy[c + 1] as number);
+    if (turn <= CORNER_TURN) return false;
+  }
+  return true;
+}
+
+/** The mean distance from the stroke to the clean shape, in the stroke's own units (a fit is a fraction of the shape's size). */
+function meanOff(r: Recognised, diag: number): number {
+  return r.kind === 'ellipse' ? r.fit * ((r.w + r.h) / 2) : r.fit * diag;
 }
 
 function tryArrow(xy: ArrayLike<number>, length: number, diag: number): Recognised | undefined {
@@ -247,5 +296,10 @@ export function recogniseStroke(xy: ArrayLike<number>): Recognised | undefined {
   const gap = Math.hypot((xy[0] as number) - (xy[(count - 1) * 2] as number), (xy[1] as number) - (xy[(count - 1) * 2 + 1] as number));
   const closed = gap <= length * 0.25;
   if (!closed) return tryLine(pts, length) ?? tryArrow(xy, length, diag);
-  return tryEllipse(pts) ?? tryPolygon(xy, pts, diag);
+  const polygon = tryPolygon(xy, pts, diag);
+  const ellipse = tryEllipse(pts);
+  if (polygon === undefined || ellipse === undefined) return polygon ?? ellipse;
+  // the corners come first; the ellipse keeps a stroke it fits more closely than the corners do (a circle has no clear corners)
+  const clear = polygon.kind === 'rect' || (polygon.kind === 'polygon' && clearCorners(polygon.points));
+  return clear && meanOff(polygon, diag) <= meanOff(ellipse, diag) ? polygon : ellipse;
 }
