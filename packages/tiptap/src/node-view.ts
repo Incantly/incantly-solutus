@@ -547,6 +547,12 @@ export class FigureNodeView implements NodeView, SchedulerView {
     }
     this.unmountNow();
     this.box.dataset['state'] = 'saved';
+    // the mode changed while the picture was made: that picture shows the old mode (TT-R10)
+    const now = this.attrs();
+    if (attrs && now && now.mode !== attrs.mode) {
+      await this.refreshPictureFromScript();
+      return;
+    }
     // the picture is a cache: writing it is not an undo step
     if (attrs && picture !== undefined && picture.length <= PICTURE_LIMIT && picture !== attrs.picture) this.commitAttrs({ picture }, false);
   }
@@ -838,16 +844,34 @@ export class FigureNodeView implements NodeView, SchedulerView {
     this.queue(async () => {
       if (this.destroyed || this.dead || !app || this.app !== app) return;
       const wanted = this.wantsMount;
-      this.saved = reader();
+      const state = reader();
+      this.saved = state;
       this.unmountNow();
       if (!wanted) {
         this.saved = undefined;
         this.box.dataset['state'] = 'saved';
+        // after a mode change the old picture shows the old mode: make one from the script in the new mode (TT-R10)
+        if (state === undefined) await this.refreshPictureFromScript();
         return;
       }
       this.wantsMount = true;
       await this.doMount();
     });
+  }
+
+  /** A picture of the node's script in its mode, from the store's headless figure; written without an undo step. */
+  private async refreshPictureFromScript(): Promise<void> {
+    const attrs = this.attrs();
+    if (!attrs) return;
+    const headless = this.runtime.store.appFor(attrs.id);
+    if (!headless) return;
+    const width = typeof attrs.width === 'number' ? attrs.width : this.box.clientWidth || FULL_WIDTH_PX;
+    const picture = await pictureOf(headless, attrs.mode, width, attrs.height);
+    // the figure was wanted again, or changed, while the picture was made: the next save makes the picture
+    if (this.destroyed || this.wantsMount || this.app) return;
+    const now = this.attrs();
+    if (!now || now.mode !== attrs.mode || now.script !== attrs.script) return;
+    if (picture !== undefined && picture.length <= PICTURE_LIMIT && picture !== now.picture) this.commitAttrs({ picture }, false);
   }
 
   private resized(): void {

@@ -67,4 +67,5 @@ Status: **Fix now** means the fixer of this round fixes it with a spec test; **L
 ### TT-R10. A figure that yields to a save during a remount keeps the picture of its old mode
 
 - **Where:** `node-view.ts` `remount`.
-- **What:** when a `save` order wins over a remount after a mode change, no new picture is made, so the placeholder shows the picture of the old mode until the figure is live and saved again. The picture is a cache, so nothing is lost.
+- **What:** when a `save` order wins over a remount after a mode change, no new picture is made, so the placeholder shows the picture of the old mode until the figure is live and saved again. The picture is a cache, so nothing is lost. The same happens when the mode changes while `doSave` makes the picture: the old app's picture is written.
+- **Status:** Fixed on `fix/tiptap-r10`. Both paths make the picture from the store's headless figure of the script in the new mode (`refreshPictureFromScript`), and write it without an undo step only if the node's mode and script are still the same. Test: `errors.test.ts` "the picture after a mode change that a save wins (TT-R10)" (graphing to scientific, which leaves the function out); it fails without the fix. In 2D modes that draw the same objects the picture does not change.
