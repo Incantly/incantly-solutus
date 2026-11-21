@@ -16,10 +16,10 @@
 import { PerformanceObserver, performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
-  BoardCore, Cameras, History, IndexGrid, KindRegistry, Pages, PointerGate, Store, TileCache, ToolHost, createOverlayState, defaultStyles, defaultTools, keysBetween, loadBoard, saveBoard,
-  tileBox,
+  BoardCore, Cameras, History, IndexGrid, KindRegistry, Pages, PointerGate, Snapper, Store, TileCache, ToolHost, boardTools, copySelection, createOverlayState, defaultStyles, keysBetween,
+  loadBoard, pasteData, recogniseStroke, saveBoard, tileBox,
 } from '../src/index';
-import type { BoardResult, InputSample, KindDef, ShapeRecord, Tile, ToolContext } from '../src/index';
+import type { BoardResult, Bounds, InputSample, KindDef, ShapeRecord, Tile, ToolContext } from '../src/index';
 
 interface RectProps {
   readonly w: number;
@@ -210,7 +210,7 @@ function makeRig(tool = 'pen'): Rig {
     strokeEnded: () => undefined,
     strokeDropped: () => undefined,
   };
-  return { core, host: new ToolHost(ctx, defaultTools, tool) };
+  return { core, host: new ToolHost(ctx, boardTools, tool) };
 }
 
 /** One sample object, reused for every event, as the input layer does (`phase` is read through a getter, as in `web/input.ts`). */
@@ -534,5 +534,169 @@ describe('board ink, design 13 (round 2)', () => {
     obs.disconnect();
     info('collections during the second simulated 10 s stroke', `${collections}   (${frames} frames, ${frames * SAMPLES_PER_FRAME} samples)`);
     expect(collections).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// round 3: shapes and editing (design 13 and docs/design/performance.md)
+//
+// Reference engines: the other engines named for comparison (Box2D v3, Rapier, Jolt) are physics engines with no paste,
+// selection-drag, snap or stroke recognition, so there is no like-for-like number for these rows; they are measured
+// here against the design's own budgets only.
+
+/** `n` filled rects in a grid of 100 columns, 60 units apart, put in one transaction. */
+function putRects(core: BoardCore, n: number, history: boolean): string[] {
+  const page = core.pages.current as string;
+  const idx = must(keysBetween(null, null, n));
+  const ids: string[] = [];
+  must(
+    core.store.change(
+      'host',
+      (tx) => {
+        for (let i = 0; i < n; i++) {
+          const id = tx.newId('shape');
+          ids.push(id);
+          must(
+            tx.put({
+              id, page, kind: 'rect', x: (i % 100) * 60, y: Math.floor(i / 100) * 50, rotation: 0, parent: null, index: idx[i] as string, locked: false, opacity: 1,
+              props: { w: 40, h: 30, fill: '#ffcc00', stroke: '#1f2430', dash: 'solid', size: 3, label: '', font: 'sans' }, meta: {},
+            }),
+          );
+        }
+      },
+      { history },
+    ),
+  );
+  return ids;
+}
+
+describe('board shapes and editing, design 13 (round 3)', () => {
+  it('undo of a 500-shape paste, with real shapes, is under 16 ms', () => {
+    const { core } = makeRig('select');
+    putRects(core, 20, false);
+    const source = putRects(core, 500, false);
+    const data = must(copySelection(core, source));
+    let undoBest = Number.POSITIVE_INFINITY;
+    let redoBest = Number.POSITIVE_INFINITY;
+    core.history.clear();
+    for (let i = 0; i < 18; i++) {
+      const pasted = must(pasteData(core, data, { x: 20_000, y: 20_000 }));
+      expect(pasted).toHaveLength(500);
+      const t0 = performance.now();
+      must(core.history.undo());
+      const t1 = performance.now();
+      must(core.history.redo());
+      const t2 = performance.now();
+      if (i >= 3) {
+        undoBest = Math.min(undoBest, t1 - t0);
+        redoBest = Math.min(redoBest, t2 - t1);
+      }
+      must(core.history.undo());
+      core.history.clear();
+    }
+    report('undo of a 500-shape paste (rects, bindings checked)', undoBest, 'ms', 16);
+    report('redo of a 500-shape paste (info)', redoBest, 'ms', 16);
+    expect(undoBest).toBeLessThan(16);
+  });
+
+  it('a drag of 200 selected shapes: one move is under 4 ms of core work, and the whole drag is one undo step', () => {
+    const { core, host } = makeRig('select');
+    const ids = putRects(core, 2000, false).slice(0, 200);
+    core.selection.set(ids);
+    const s = reused();
+    s.device = 'mouse';
+    s.pressure = Number.NaN;
+    s.buttons = 1;
+    const FRAMES = 120;
+    const times = new Float64Array(FRAMES);
+    // the pointer goes down on the first selected shape (its middle: 20, 15) and moves 3 units to the right each frame
+    s.setPhase('down');
+    s.x = 20;
+    s.y = 15;
+    s.time = 0;
+    host.sample(s as InputSample);
+    s.setPhase('move');
+    for (let f = 0; f < FRAMES; f++) {
+      s.x = 20 + (f + 1) * 3;
+      s.y = 15 + (f + 1);
+      s.time = (f + 1) * 16;
+      const t0 = performance.now();
+      host.sample(s as InputSample);
+      times[f] = performance.now() - t0;
+    }
+    s.setPhase('up');
+    host.sample(s as InputSample);
+    const st = stats(times.subarray(10));
+    reportRow('drag of 200 selected shapes, one move (mean)', st.mean, 'ms', 4, `   p95 ${st.p95.toFixed(3)}  max ${st.max.toFixed(3)}`);
+    expect(core.history.undoSteps).toBe(1);
+    // snap guides may pull a few units; the shapes went most of the way
+    expect((core.store.get(ids[0] as string) as ShapeRecord).x).toBeGreaterThan(300);
+    expect(st.p95).toBeLessThan(4);
+  });
+
+  it('a snap search with 10,000 shapes is under 1 ms a move', () => {
+    const { core } = makeRig('select');
+    const ids = putRects(core, 10_000, false);
+    const boxes: Bounds[] = [];
+    for (const id of ids.slice(4000, 4400)) {
+      const r = core.store.get(id) as ShapeRecord;
+      boxes.push({ minX: r.x, minY: r.y, maxX: r.x + 40, maxY: r.y + 30 });
+    }
+    const snapper = new Snapper();
+    snapper.begin(boxes);
+    const MOVES = 2000;
+    const ms = best(() => {
+      for (let i = 0; i < MOVES; i++) {
+        const x = 2400 + (i % 400) * 1.7;
+        const y = 1000 + (i % 50) * 0.9;
+        snapper.snapMove({ minX: x, minY: y, maxX: x + 40, maxY: y + 30 }, 6, 24);
+      }
+    });
+    const perMove = ms / MOVES;
+    report('snap search, 400 neighbours of 10,000 shapes (per move)', perMove, 'ms', 1);
+    snapper.end();
+    // the whole path: find the neighbours through the index, as the select tool does at the start of a drag
+    const gridMs = best(() => {
+      const found = core.index.grid.queryBox({ minX: 2000, minY: 800, maxX: 3600, maxY: 1400 });
+      expect(found.length).toBeGreaterThan(0);
+    });
+    report('index query for the neighbours of a drag (10,000 shapes)', gridMs, 'ms', 1);
+    expect(perMove).toBeLessThan(1);
+    expect(gridMs).toBeLessThan(1);
+  });
+
+  it('recognising a 200-point stroke is under 1 ms', () => {
+    const circle: number[] = [];
+    for (let i = 0; i < 200; i++) {
+      const a = (i / 200) * Math.PI * 2.05;
+      circle.push(300 + (80 + 2 * Math.sin(i * 2.3)) * Math.cos(a), 300 + (80 + 2 * Math.sin(i * 2.3)) * Math.sin(a));
+    }
+    const polygon: number[] = [];
+    const corners = [[100, 100], [400, 100], [250, 330]] as const;
+    for (let c = 0; c < 3; c++) {
+      const a = corners[c] as readonly [number, number];
+      const b = corners[(c + 1) % 3] as readonly [number, number];
+      for (let i = 0; i < 66; i++) polygon.push(a[0] + ((b[0] - a[0]) * i) / 66 + Math.sin(i + c), a[1] + ((b[1] - a[1]) * i) / 66);
+    }
+    const scribble: number[] = [];
+    for (let i = 0; i < 200; i++) scribble.push(300 + (8 + i * 0.6) * Math.cos(i * 0.22), 300 + (8 + i * 0.6) * Math.sin(i * 0.22));
+    const line: number[] = [];
+    for (let i = 0; i < 200; i++) line.push(i * 2, Math.sin(i) * 2);
+    const cases: readonly (readonly [string, number[], string | undefined])[] = [
+      ['ellipse', circle, 'ellipse'],
+      ['polygon', polygon, 'polygon'],
+      ['no match (spiral)', scribble, undefined],
+      ['line', line, 'line'],
+    ];
+    let worst = 0;
+    for (const [name, xy, want] of cases) {
+      expect(recogniseStroke(xy)?.kind, name).toBe(want);
+      const ms = best(() => {
+        recogniseStroke(xy);
+      }, 50, 10);
+      worst = Math.max(worst, ms);
+      report(`recognise a 200-point stroke: ${name}`, ms, 'ms', 1);
+    }
+    expect(worst).toBeLessThan(1);
   });
 });

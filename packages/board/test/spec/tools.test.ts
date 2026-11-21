@@ -6,10 +6,11 @@
  * that choose a tool.
  */
 import { describe, expect, it } from 'vitest';
-import { BUTTON_ERASER, BUTTON_MIDDLE, LASER_FADE_MS, LASER_MAX_POINTS, defaultTools } from '../../src/index';
+import { BUTTON_ERASER, BUTTON_MIDDLE, LASER_FADE_MS, LASER_MAX_POINTS, defaultTools, groupShapes } from '../../src/index';
 import type { ShapeRecord } from '../../src/index';
 import { copyOf, drawPath, line, makeRig, pointCount, pointsOf, sample, strokes } from './ink-helpers';
 import type { Rig } from './ink-helpers';
+import { add } from './shape-helpers';
 
 const key = (k: string, over: { down?: boolean; shift?: boolean; mod?: boolean; repeat?: boolean } = {}): Parameters<Rig['host']['key']>[0] => ({
   key: k, down: over.down ?? true, shift: over.shift ?? false, alt: false, mod: over.mod ?? false, repeat: over.repeat ?? false,
@@ -415,8 +416,75 @@ describe('lasso (design 6.4, B10)', () => {
     expect(strokes(rig)).toHaveLength(2);
   });
 
-  // design 6.4: "or a shape's centre"; B10 says "and later shapes whose centre is inside": shapes come in round 3
-  it.todo('selects a shape whose centre is inside the loop (round 3: the shape kinds exist then)');
+  // design 6.4: "or a shape's centre"; B10: "and later shapes whose centre is inside"
+  it('selects a shape whose centre is inside the loop', () => {
+    const rig = makeRig();
+    const a = add(rig, 'rect', 50, 50, { w: 100, h: 60, fill: '#ffcc00' });
+    lasso(rig, loop);
+    expect(rig.core.selection.ids).toEqual([a.id]);
+  });
+
+  it('does not select a shape whose centre is outside, even when a corner of it is inside the loop', () => {
+    const rig = makeRig();
+    // x 150..350 and y 50..110: its centre (250, 80) is outside the loop, which ends at x = 210
+    add(rig, 'rect', 150, 50, { w: 200, h: 60, fill: '#ffcc00' });
+    lasso(rig, loop);
+    expect(rig.core.selection.size).toBe(0);
+  });
+
+  it('selects a shape that is bigger than the loop when its centre is inside', () => {
+    const rig = makeRig();
+    const big = add(rig, 'rect', -200, -200, { w: 600, h: 600, fill: '#ffcc00' });
+    lasso(rig, loop);
+    expect(rig.core.selection.ids).toEqual([big.id]);
+  });
+
+  it('the rule is the centre for every kind: ellipse, line, text, sticky and frame', () => {
+    const rig = makeRig();
+    const made = [
+      add(rig, 'ellipse', 20, 20, { w: 60, h: 40 }),
+      add(rig, 'line', 50, 100, { points: [0, 0, 100, 0] }),
+      add(rig, 'text', 20, 150, { text: 'hi' }),
+      add(rig, 'sticky', 100, 10, { text: 'n' }),
+      add(rig, 'frame', 10, 120, { w: 100, h: 60 }),
+    ];
+    // a sticky note is 200 wide: its centre (200, 110) is inside; the one far away is not
+    const far = add(rig, 'ellipse', 600, 600, { w: 60, h: 40 });
+    lasso(rig, loop);
+    expect(new Set(rig.core.selection.ids)).toEqual(new Set(made.map((s) => s.id)));
+    expect(rig.core.selection.has(far.id)).toBe(false);
+  });
+
+  it('a turned shape is judged by its centre, which a turn does not move', () => {
+    const rig = makeRig();
+    const a = add(rig, 'rect', 50, 90, { w: 100, h: 20, fill: '#ffcc00' }, { rotation: Math.PI / 2 });
+    lasso(rig, [[60, 40], [140, 40], [140, 160], [60, 160], [60, 42]]);
+    expect(rig.core.selection.ids).toEqual([a.id]);
+  });
+
+  it('a locked shape is not selected, and a shape of a group brings the whole group', () => {
+    const rig = makeRig();
+    const locked = add(rig, 'rect', 50, 50, { w: 100, h: 60 }, { locked: true });
+    const inside = add(rig, 'rect', 50, 130, { w: 100, h: 40 });
+    const outside = add(rig, 'rect', 600, 600, { w: 100, h: 40 });
+    groupShapes(rig.core, [inside.id, outside.id]);
+    lasso(rig, loop);
+    expect(rig.core.selection.has(locked.id)).toBe(false);
+    expect(new Set(rig.core.selection.ids)).toEqual(new Set([inside.id, outside.id]));
+  });
+
+  it('shapes and strokes are chosen together by their own rules, and the selection is not an undo step', () => {
+    const rig = makeRig();
+    drawPath(rig, line(20, 150, 180, 150, 10), {}, 0);
+    const [ink] = strokes(rig) as [ShapeRecord];
+    const a = add(rig, 'rect', 50, 50, { w: 100, h: 60 });
+    const steps = rig.core.history.undoSteps;
+    const size = rig.core.store.size;
+    lasso(rig, loop);
+    expect(new Set(rig.core.selection.ids)).toEqual(new Set([ink.id, a.id]));
+    expect(rig.core.history.undoSteps).toBe(steps);
+    expect(rig.core.store.size).toBe(size);
+  });
 });
 
 describe('hand, wheel and pinch (R3.4, design 9 item 1, B11, B12)', () => {
