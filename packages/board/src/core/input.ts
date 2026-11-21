@@ -272,7 +272,7 @@ export class PointerGate {
   #mayDraw(time: number): boolean {
     if (this.#touchDraws === 'never') return false;
     if (this.#touchDraws === 'always') return true;
-    return !(this.#machine.is('penNear', 'penDown') || time - this.#penTime < PALM_GRACE_MS);
+    return !(this.#machine.state === 'penNear' || this.#machine.state === 'penDown' || time - this.#penTime < PALM_GRACE_MS);
   }
 }
 
@@ -312,7 +312,7 @@ export class PressureProbe {
       sendIfAble(this.#machine, 'varied');
       return pressure;
     }
-    if (this.#machine.is('real')) return pressure;
+    if (this.#machine.state === 'real') return pressure;
     this.#flatSeen++;
     if (this.#flatSeen >= PROBE_FLAT_SAMPLES) sendIfAble(this.#machine, 'flat');
     return Number.NaN;

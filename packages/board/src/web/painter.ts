@@ -113,6 +113,13 @@ export class WebPainter implements BoardPainter {
   /** The live layer's marks: which stroke, how many groups are on it, the camera it was drawn under. */
   readonly ink = { serial: -1, drawn: 0, x: 0, y: 0, zoom: 1, dpr: 1 };
   readonly #counters = { tilesDrawn: 0, drawCalls: 0 };
+  /**
+   * What the tile canvas shows now: the camera, the size, how many tiles had been drawn and which tiles were put on it. A
+   * frame that would put the same picture there again does not (a stroke being drawn changes the live layer and the
+   * overlay, never the tiles, so it costs the GPU and the garbage collector nothing).
+   */
+  readonly #screen = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN, dpr: Number.NaN, devW: 0, devH: 0, drawn: -1 };
+  readonly #composed: Tile[] = [];
   readonly #stops: (() => void)[] = [];
 
   constructor(options: WebPainterOptions = {}) {
@@ -221,6 +228,7 @@ export class WebPainter implements BoardPainter {
   /** WebGL 2 failed: tell the host once and draw with Canvas 2D from now on. */
   #fallBack(error: BoardError): void {
     if (!this.#backend.send('fail')) return;
+    this.#screen.drawn = -1;
     this.tiles.lose();
     this.#raster?.dispose();
     this.#raster = null;
@@ -235,7 +243,7 @@ export class WebPainter implements BoardPainter {
 
   /** The context came back: build the GPU pieces again, or fall back. */
   #restore(): void {
-    if (!this.#backend.is('lost')) return;
+    if (this.#backend.state !== 'lost') return;
     this.#raster?.dispose();
     const gl = GlRaster.open(this.#tileCanvas);
     if (!gl.ok) {
@@ -243,6 +251,7 @@ export class WebPainter implements BoardPainter {
       return;
     }
     this.#raster = gl.value;
+    this.#screen.drawn = -1;
     gl.value.setImages(this.#images);
     this.#backend.send('contextRestored');
     this.tiles.invalidateAll();
@@ -272,7 +281,8 @@ export class WebPainter implements BoardPainter {
       c.style.width = `${w}px`;
       c.style.height = `${h}px`;
     }
-    // changing a canvas's size empties it: the live layer starts again from the stroke's first group
+    // changing a canvas's size empties it: the live layer starts again from the stroke's first group, and the tiles are composed again
+    this.#screen.drawn = -1;
     this.ink.drawn = 0;
     this.ink.serial = -1;
     this.#topDrawn = false;
@@ -300,13 +310,13 @@ export class WebPainter implements BoardPainter {
   }
 
   drawTile(tile: Tile, content: TileContent | null): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawTile');
-    if (this.#backend.is('lost')) return DONE;
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawTile');
+    if (this.#backend.state === 'lost') return DONE;
     if (content !== null) {
       const raster = this.#raster;
       if (raster === null) return boardError('render_failed', 'The board has no way to draw.', { detail: { backend: this.#backend.state } });
       let drawn = raster.render(tile, content);
-      if (!drawn.ok && this.#backend.is('gl')) {
+      if (!drawn.ok && this.#backend.state === 'gl') {
         this.#fallBack(drawn);
         drawn = this.#raster === null ? drawn : (this.#raster as TileRaster).render(tile, content);
       }
@@ -319,7 +329,7 @@ export class WebPainter implements BoardPainter {
   }
 
   drawItems(items: readonly DrawItem[]): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawItems');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawItems');
     this.#extra.push(...items);
     return DONE;
   }
@@ -330,7 +340,7 @@ export class WebPainter implements BoardPainter {
    * clears it.
    */
   drawOverCards(entries: readonly OverCardItem[]): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawOverCards');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawOverCards');
     const ctx = this.#top;
     if (ctx === null) return DONE;
     if (entries.length === 0 && !this.#topDrawn) return DONE;
@@ -363,13 +373,13 @@ export class WebPainter implements BoardPainter {
    * with one group of overlap so no seam shows. The groups not final yet are drawn on the overlay by `drawOverlay`.
    */
   drawLiveStroke(view: LiveStrokeView | null): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawLiveStroke');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawLiveStroke');
     const ctx = this.#live;
     if (view === null) {
-      if (this.#layer.is('inking')) this.abortLive();
+      if (this.#layer.state === 'inking') this.abortLive();
       return DONE;
     }
-    if (ctx === null || this.#layer.is('holding')) return DONE;
+    if (ctx === null || this.#layer.state === 'holding') return DONE;
     this.#layer.send('ink');
     const f = this.frame;
     const ink = this.ink;
@@ -427,7 +437,7 @@ export class WebPainter implements BoardPainter {
   }
 
   drawOverlay(overlay: OverlayItems): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawOverlay');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawOverlay');
     const ctx = this.#overlay;
     if (ctx === null) return DONE;
     const { dpr, zoom, x: camX, y: camY } = this.frame;
@@ -609,15 +619,41 @@ export class WebPainter implements BoardPainter {
   endFrame(): BoardResult<undefined> {
     if (!this.#frameState.send('end')) return boardError('bad_argument', 'There is no frame to end.', { detail: { field: 'endFrame' } });
     const raster = this.#raster;
-    if (raster === null || this.#backend.is('lost')) return DONE;
+    if (raster === null || this.#backend.state === 'lost') return DONE;
     const { x, y, zoom, dpr } = this.frame;
+    if (this.#unchanged(x, y, zoom, dpr)) return DONE;
     let composed = raster.compose(this.#shown, x, y, zoom, dpr);
-    if (!composed.ok && this.#backend.is('gl')) {
+    if (!composed.ok && this.#backend.state === 'gl') {
       this.#fallBack(composed);
       composed = this.#raster === null ? composed : (this.#raster as TileRaster).compose(this.#shown, x, y, zoom, dpr);
     }
+    if (composed.ok) this.#remember(x, y, zoom, dpr);
+    else this.#screen.drawn = -1;
     if (raster instanceof GlRaster) this.#counters.drawCalls = raster.drawCalls;
     return composed;
+  }
+
+  /** True when the tile canvas already shows what composing the shown tiles would draw. */
+  #unchanged(x: number, y: number, zoom: number, dpr: number): boolean {
+    const s = this.#screen;
+    const shown = this.#shown;
+    const was = this.#composed;
+    if (s.drawn !== this.#counters.tilesDrawn || s.x !== x || s.y !== y || s.zoom !== zoom || s.dpr !== dpr || s.devW !== this.size.devW || s.devH !== this.size.devH || was.length !== shown.length) return false;
+    for (let i = 0; i < shown.length; i++) if (was[i] !== shown[i]) return false;
+    return true;
+  }
+
+  #remember(x: number, y: number, zoom: number, dpr: number): void {
+    const s = this.#screen;
+    s.x = x;
+    s.y = y;
+    s.zoom = zoom;
+    s.dpr = dpr;
+    s.devW = this.size.devW;
+    s.devH = this.size.devH;
+    s.drawn = this.#counters.tilesDrawn;
+    this.#composed.length = 0;
+    for (const tile of this.#shown) this.#composed.push(tile);
   }
 
   #outside(call: string): BoardResult<never> {

@@ -31,6 +31,8 @@ export const TILE_PX = 512;
 export const TILE_BYTES = (TILE_PX + 4) * (TILE_PX + 4) * 4;
 export const TILE_CAP_BYTES = 64 * 1024 * 1024;
 export const TILE_CAP_BYTES_LOW = 24 * 1024 * 1024;
+/** More tiles than this in a view at the steady step, and the step of the zoom as it is now is used instead. */
+export const MAX_VISIBLE_TILES = 48;
 
 /** The zoom step of a zoom: tiles are drawn at `2^k` device pixels per page unit, never more than half a step too coarse. */
 export function stepOf(zoom: number, dpr: number): number {
@@ -90,7 +92,7 @@ export class Tile {
 
   /** True when the tile has to be drawn before it is shown. */
   get needsDraw(): boolean {
-    return this.#machine.is('blank', 'stale');
+    return this.#machine.state === 'blank' || this.#machine.state === 'stale';
   }
 
   get box(): Bounds {
@@ -180,12 +182,23 @@ export class TileCache {
   visible(camera: CameraView & { readonly steadyZoom: number }, width: number, height: number, dpr: number, out: Tile[]): number {
     out.length = 0;
     if (!(width > 0) || !(height > 0)) return 0;
-    const k = stepOf(camera.steadyZoom, dpr);
-    const span = tileSpan(k);
-    const tx0 = Math.floor(camera.x / span);
-    const ty0 = Math.floor(camera.y / span);
-    const tx1 = Math.floor((camera.x + width / camera.zoom) / span);
-    const ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    let k = stepOf(camera.steadyZoom, dpr);
+    let span = tileSpan(k);
+    let tx0 = Math.floor(camera.x / span);
+    let ty0 = Math.floor(camera.y / span);
+    let tx1 = Math.floor((camera.x + width / camera.zoom) / span);
+    let ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    // zoomed far out from the steady zoom, the steady step would need a great many tiles, all to be drawn again when the zoom
+    // settles: the step the zoom is at now needs the few that the settled view needs
+    const ideal = stepOf(camera.zoom, dpr);
+    if (ideal < k && (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_VISIBLE_TILES) {
+      k = ideal;
+      span = tileSpan(k);
+      tx0 = Math.floor(camera.x / span);
+      ty0 = Math.floor(camera.y / span);
+      tx1 = Math.floor((camera.x + width / camera.zoom) / span);
+      ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    }
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const id = tileId(k, tx, ty);

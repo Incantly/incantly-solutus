@@ -621,9 +621,12 @@ export class FigureCard {
 // ---------------------------------------------------------------------------------------------------------------
 // what is drawn over the cards (BR-55)
 
+/** Nothing is over a card: the one empty list every such frame is given. */
+const NO_OVER_CARDS: readonly OverCardItem[] = Object.freeze([]);
+
 /** The draw items of the shapes above the shown `cards`, each with the card outlines it shows inside, at `scale` device pixels per page unit. */
-export function overCardItems(core: BoardCore, cards: readonly ShapeRecord[], scale: number): OverCardItem[] {
-  if (cards.length === 0) return [];
+export function overCardItems(core: BoardCore, cards: readonly ShapeRecord[], scale: number): readonly OverCardItem[] {
+  if (cards.length === 0) return NO_OVER_CARDS;
   const out: OverCardItem[] = [];
   for (const over of shapesOverCards(core, cards)) {
     const item = core.drawList.itemOf(over.shape, scale);
@@ -668,7 +671,7 @@ export class FigureLayer {
   #visible = new Set<string>();
   #near = new Set<string>();
   /** The shapes of the cards whose slot is on show this frame: each one hides what the tiles draw under it. */
-  #covering: Shape[] = [];
+  readonly #covering: Shape[] = [];
   /** A headless picture job for cards that have never been live, one at a time. */
   #jobs: Promise<void> = Promise.resolve();
 
@@ -758,7 +761,7 @@ export class FigureLayer {
     if (this.#marks.disposed) return false;
     if (this.#core.pages.current !== this.#page) this.#changePage();
     if (this.#marks.stale) this.#reconcile();
-    this.#covering = [];
+    this.#covering.length = 0;
     if (this.cards.size === 0) {
       this.#bar.sync(undefined, camera, width, height);
       return false;

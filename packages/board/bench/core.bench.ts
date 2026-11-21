@@ -700,3 +700,104 @@ describe('board shapes and editing, design 13 (round 3)', () => {
     expect(worst).toBeLessThan(1);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// round 6: the rows of design 13 on real boards (strokes, rects, text), up to the first picture the core can make
+
+/** A board of `count` shapes on its current page: 14 in 20 are strokes of 16 points, the rest rects, ellipses, text and sticky notes. */
+function putMixed(core: BoardCore, count: number): void {
+  const page = core.pages.current as string;
+  const idx = must(keysBetween(null, null, count));
+  must(
+    core.store.change(
+      'host',
+      (tx) => {
+        for (let i = 0; i < count; i++) {
+          const slot = i % 20;
+          const base = { id: tx.newId('shape'), page, x: (i % 100) * 60, y: Math.floor(i / 100) * 50, rotation: 0, parent: null, index: idx[i] as string, locked: false, opacity: 1, meta: {} };
+          if (slot < 14) {
+            const pts = new Float32Array(48);
+            for (let k = 0; k < 16; k++) {
+              pts[k * 3] = k * 2.5;
+              pts[k * 3 + 1] = 12 * Math.sin(k / 3 + i) + 15;
+              pts[k * 3 + 2] = 0.3 + 0.6 * ((k % 7) / 7);
+            }
+            must(tx.put({ ...base, kind: 'ink', props: { points: pts, stride: 3, nib: 'pen', size: 3, color: '#1f2430', opacity: 1 } }));
+          } else if (slot < 18) {
+            must(tx.put({ ...base, kind: slot < 16 ? 'rect' : 'ellipse', props: { w: 40, h: 30, fill: '#ffe08a', stroke: '#1f2430', dash: 'solid', size: 3, label: '', font: 'sans' } }));
+          } else if (slot === 18) {
+            must(tx.put({ ...base, kind: 'text', props: { text: 'x = 2', size: 18 } }));
+          } else {
+            must(tx.put({ ...base, kind: 'sticky', props: { text: 'note' } }));
+          }
+        }
+      },
+      { history: false },
+    ),
+  );
+}
+
+/** What the first picture needs from the core: the camera's tiles, and the draw list of each (outlines and parts built cold). */
+function firstPicture(core: BoardCore, cache: TileCache, list: Tile[], W: number, H: number): number {
+  const camera = core.camera as NonNullable<BoardCore['camera']>;
+  cache.beginFrame();
+  cache.visible(camera, W, H, 1, list);
+  let items = 0;
+  for (const tile of list) {
+    const scale = Math.pow(2, tile.k);
+    const box = tileBox(tile.k, tile.tx, tile.ty);
+    const grow = 2 / scale;
+    items += core.drawList.itemsIn({ minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow }, scale).length;
+  }
+  return items;
+}
+
+describe('board on real shapes, design 13 (round 6)', () => {
+  it('opens a 1,000-shape board of strokes, shapes and text to its first picture in under 200 ms (load, index, draw lists of the tiles in view)', () => {
+    const { core: source } = makeRig();
+    putMixed(source, 1000);
+    const text = must(saveBoard(source.store));
+    let items = 0;
+    const ms = best(() => {
+      const loaded = must(loadBoard(text, { kinds: new KindRegistry() }));
+      const core = must(BoardCore.create({ store: loaded.store }));
+      core.camera?.moveTo(0, 0, 1, 0);
+      core.index.refresh();
+      items = firstPicture(core, new TileCache(), [], 1280, 800);
+      core.dispose();
+    }, 10, 2);
+    reportRow('open a 1,000-shape board to its first picture', ms, 'ms', 200);
+    expect(items).toBeGreaterThan(100);
+    expect(ms).toBeLessThan(200);
+  });
+
+  it('switches to a page of 2,000 shapes of strokes, shapes and text in under 100 ms (page, index, draw lists of the tiles in view, nothing cached)', () => {
+    const { core: source } = makeRig();
+    putMixed(source, 100);
+    const second = must(source.pages.addPage()).id;
+    must(source.pages.goToPage(second));
+    putMixed(source, 2000);
+    must(source.pages.goToPage(source.pages.list()[0]?.id as string));
+    const text = must(saveBoard(source.store));
+    let items = 0;
+    let fastest = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 12; run++) {
+      // a board just opened on its first page: the switch is timed, the load is not
+      const loaded = must(loadBoard(text, { kinds: new KindRegistry() }));
+      const core = must(BoardCore.create({ store: loaded.store }));
+      core.index.refresh();
+      const target = core.pages.list()[1]?.id as string;
+      const t0 = performance.now();
+      must(core.pages.goToPage(target));
+      core.camera?.moveTo(0, 0, 1, 0);
+      core.index.refresh();
+      items = firstPicture(core, new TileCache(), [], 1280, 800);
+      const ms = performance.now() - t0;
+      if (run >= 2) fastest = Math.min(fastest, ms);
+      core.dispose();
+    }
+    reportRow('switch to a page of 2,000 shapes, first picture', fastest, 'ms', 100);
+    expect(items).toBeGreaterThan(100);
+    expect(fastest).toBeLessThan(100);
+  });
+});

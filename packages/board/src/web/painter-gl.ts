@@ -8,10 +8,11 @@
  */
 import { WebGL2Backend, createDrawStats } from '@incantly/view';
 import type { Arena, Batch, DrawStats, FrameCtx, GpuBackend, Program, Target } from '@incantly/view';
-import { TILE_PX, tileBox } from '../core/draw';
-import type { Tile, TileContent } from '../core/draw';
+import { TILE_PX, tileBox, tileSpan } from '../core/draw';
+import type { DrawItem, Tile, TileContent } from '../core/draw';
 import { boardError, DONE, ok } from '../core/errors';
 import type { BoardResult } from '../core/errors';
+import type { PageBackground } from '../core/types';
 import { TILE_GUTTER, TILE_SIZE, drawBackground2D, drawItems2D } from './painter-2d';
 import type { ImageLookup, TileRaster } from './painter-2d';
 
@@ -55,6 +56,9 @@ const INK_FLOATS = 7;
 const INK_ARENA_BYTES = 8 * 1024 * 1024;
 const QUAD_ARENA_BYTES = 4 * 1024;
 
+/** A batch the caller writes again for each draw. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
 const failed = (what: string, hint?: string): BoardResult<never> =>
   boardError('render_failed', `The board could not use WebGL 2 (${what}).`, { ...(hint !== undefined ? { hint } : {}), detail: { backend: 'webgl2', what } });
 
@@ -78,9 +82,16 @@ export class GlRaster implements TileRaster {
   #screen: Target | null = null;
   #devW = 1;
   #devH = 1;
-  /** A tile with shapes in it is drawn on this canvas with Canvas 2D, then copied into the tile's texture. */
+  /** The shapes and the paper of a tile are drawn on this canvas with Canvas 2D, then copied into `#layer`'s texture and drawn over the strokes. */
   #paper: HTMLCanvasElement | null = null;
+  #paperCtx: CanvasRenderingContext2D | null = null;
+  #layer: Target | null = null;
   #images: ImageLookup = () => null;
+  /** The four corners of a tile's quad, its index list and its batch: one set, written again for every tile of a frame, so composing makes no garbage. */
+  readonly #quadData = new Float32Array(16);
+  readonly #quadIndices = new Uint32Array(6);
+  readonly #quadTextures: Record<string, Target> = {};
+  readonly #quadUniforms: Record<string, number> = {};
   #vbuf = new Float32Array(1024 * INK_FLOATS);
   #ibuf = new Uint32Array(3072);
   /** Draw calls of the last frame, for the painter's statistics. */
@@ -135,30 +146,42 @@ export class GlRaster implements TileRaster {
     return ok(tile.handle as Target);
   }
 
+  /** The target that holds a picture made with Canvas 2D while a tile is drawn, made when first needed. */
+  #layerTarget(): BoardResult<Target> {
+    if (this.#layer === null) {
+      const made = this.#backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 1, depth: false, float: false });
+      if (!made.ok) return failed('a tile layer');
+      this.#layer = made.value;
+    }
+    return ok(this.#layer);
+  }
+
   /**
-   * A tile that holds shapes (vector parts, text, images) is drawn with Canvas 2D and copied into the tile's texture,
-   * rows flipped and colours premultiplied as the tile quads expect. Tiles of strokes only stay on the GPU.
+   * The paper and the shapes of one run (vector parts, text, images) are drawn with Canvas 2D, copied into the layer's
+   * texture (rows flipped, colours premultiplied) and drawn over what the frame holds, in order, as one quad. The strokes
+   * stay on the GPU, so a tile of ten thousand strokes and a few shapes costs the strokes' triangles, not a path call for
+   * each of them (BR-35).
    */
-  #renderVia2D(tile: Tile, content: TileContent): BoardResult<undefined> {
-    const target = this.#targetOf(tile);
-    if (!target.ok) return target;
-    const texture = (target.value as unknown as { colorTex?: WebGLTexture }).colorTex;
+  #paintLayer(frame: FrameCtx, scale: number, x0: number, y0: number, background: PageBackground | undefined, run: readonly DrawItem[]): BoardResult<undefined> {
+    const layer = this.#layerTarget();
+    if (!layer.ok) return layer;
+    const texture = (layer.value as unknown as { colorTex?: WebGLTexture }).colorTex;
     if (texture === undefined) return failed('a tile texture');
     let paper = this.#paper;
-    if (paper === null) {
+    let ctx = this.#paperCtx;
+    if (paper === null || ctx === null) {
       paper = document.createElement('canvas');
       paper.width = TILE_SIZE;
       paper.height = TILE_SIZE;
+      ctx = paper.getContext('2d');
+      if (ctx === null) return failed('a tile canvas');
       this.#paper = paper;
+      this.#paperCtx = ctx;
     }
-    const ctx = paper.getContext('2d');
-    if (ctx === null) return failed('a tile canvas');
-    const scale = Math.pow(2, tile.k);
-    const box = tileBox(tile.k, tile.tx, tile.ty);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
-    if (content.background !== undefined) drawBackground2D(ctx, content.background, scale, box.minX - TILE_GUTTER / scale, box.minY - TILE_GUTTER / scale);
-    drawItems2D(ctx, content.items, scale, box.minX - TILE_GUTTER / scale, box.minY - TILE_GUTTER / scale, this.#images);
+    if (background !== undefined) drawBackground2D(ctx, background, scale, x0, y0);
+    drawItems2D(ctx, run, scale, x0, y0, this.#images);
     const gl = this.#gl;
     try {
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -169,13 +192,63 @@ export class GlRaster implements TileRaster {
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
       gl.bindTexture(gl.TEXTURE_2D, null);
     } catch {
-      return failed('copying a tile');
+      return failed('copying a tile layer');
     }
-    return DONE;
+    const arena = this.#quadArena;
+    const at = arena.alloc(4);
+    if (at < 0) return failed('the tile buffer is full');
+    const data = this.#quadData;
+    // the whole tile: top-left, top-right, bottom-left, bottom-right; a texture's rows start at the bottom
+    data[0] = -1;
+    data[1] = 1;
+    data[2] = 0;
+    data[3] = 1;
+    data[4] = 1;
+    data[5] = 1;
+    data[6] = 1;
+    data[7] = 1;
+    data[8] = -1;
+    data[9] = -1;
+    data[10] = 0;
+    data[11] = 0;
+    data[12] = 1;
+    data[13] = -1;
+    data[14] = 1;
+    data[15] = 0;
+    arena.writeVertices(at, data);
+    const idx = this.#quadIndices;
+    idx[0] = at;
+    idx[1] = at + 1;
+    idx[2] = at + 2;
+    idx[3] = at + 2;
+    idx[4] = at + 1;
+    idx[5] = at + 3;
+    arena.writeIndices(0, idx);
+    const batch: Batch = {
+      program: this.#quad,
+      arena,
+      firstVertex: at,
+      vertexCount: 4,
+      firstIndex: 0,
+      indexCount: 6,
+      mode: 'triangles',
+      instances: 1,
+      uniforms: {},
+      textures: { uTex: layer.value },
+      scissor: null,
+      depthTest: false,
+      depthFunc: 'less',
+      // a layer is painted over what is there and writes no depth: the strokes after it have a smaller depth than every stroke before it
+      depthWrite: false,
+      blend: 'premult',
+      cullBack: false,
+    };
+    const drawn = this.#backend.draw(frame, batch, this.#stats);
+    arena.free(at, 4);
+    return drawn.ok ? DONE : failed('drawing a tile layer');
   }
 
   render(tile: Tile, content: TileContent): BoardResult<undefined> {
-    if (content.items.some((i) => i.k === 'shape') || (content.background !== undefined && content.background !== 'none')) return this.#renderVia2D(tile, content);
     const own = this.#targetOf(tile);
     if (!own.ok) return own;
     const scale = Math.pow(2, tile.k);
@@ -188,13 +261,31 @@ export class GlRaster implements TileRaster {
     const uniforms = { uXf: [k, -k, -1, 1] };
     const items = content.items;
     const n = items.length;
+    // the paper goes first, under everything
+    if (content.background !== undefined && content.background !== 'none') {
+      const painted = this.#paintLayer(frame.value, scale, x0, y0, content.background, []);
+      if (!painted.ok) return painted;
+    }
     let vcount = 0;
     let icount = 0;
     const maxVerts = Math.floor((INK_ARENA_BYTES / (INK_FLOATS * 4)) * 0.9);
     const maxIndices = Math.floor(INK_ARENA_BYTES / 8) - 3;
     for (let j = 0; j < n; j++) {
       const item = items[j];
-      if (item === undefined || item.k !== 'ink') continue;
+      if (item === undefined) continue;
+      if (item.k === 'shape') {
+        // a run of shapes: the strokes before it are drawn first, so the order of the items is kept
+        const sent = this.#flush(frame.value, vcount, icount, uniforms);
+        if (!sent.ok) return sent;
+        vcount = 0;
+        icount = 0;
+        let end = j + 1;
+        while (end < n && (items[end] as DrawItem).k === 'shape') end++;
+        const painted = this.#paintLayer(frame.value, scale, x0, y0, undefined, items.slice(j, end));
+        if (!painted.ok) return painted;
+        j = end - 1;
+        continue;
+      }
       const verts = item.outline.vertices;
       const idx = item.outline.indices;
       const vn = verts.length / 2;
@@ -316,14 +407,35 @@ export class GlRaster implements TileRaster {
     const pxPerUnit = zoom * dpr;
     const lo = TILE_GUTTER / TILE_SIZE;
     const hi = (TILE_GUTTER + TILE_PX) / TILE_SIZE;
-    const data = new Float32Array(16);
+    const data = this.#quadData;
+    const idx = this.#quadIndices;
+    const arena = this.#quadArena;
+    const batch: Mutable<Batch> = {
+      program: this.#quad,
+      arena,
+      firstVertex: 0,
+      vertexCount: 4,
+      firstIndex: 0,
+      indexCount: 6,
+      mode: 'triangles',
+      instances: 1,
+      uniforms: this.#quadUniforms,
+      textures: this.#quadTextures,
+      scissor: null,
+      depthTest: false,
+      depthFunc: 'less',
+      // the depth mask stays on, so the next tile's clear of the depth buffer works
+      depthWrite: true,
+      blend: 'premult',
+      cullBack: false,
+    };
     for (const tile of tiles) {
       const target = tile.handle as Target | null;
       if (target === null) continue;
-      const box = tileBox(tile.k, tile.tx, tile.ty);
-      const dx0 = (box.minX - camX) * pxPerUnit;
-      const dy0 = (box.minY - camY) * pxPerUnit;
-      const size = (box.maxX - box.minX) * pxPerUnit;
+      const span = tileSpan(tile.k);
+      const dx0 = (tile.tx * span - camX) * pxPerUnit;
+      const dy0 = (tile.ty * span - camY) * pxPerUnit;
+      const size = span * pxPerUnit;
       const x0 = Math.round(dx0);
       const y0 = Math.round(dy0);
       const x1 = Math.round(dx0 + size);
@@ -334,31 +446,34 @@ export class GlRaster implements TileRaster {
       const cy0 = 1 - (y0 / this.#devH) * 2;
       const cy1 = 1 - (y1 / this.#devH) * 2;
       // top-left, top-right, bottom-left, bottom-right; a texture's rows start at the bottom
-      data.set([cx0, cy0, lo, 1 - lo, cx1, cy0, hi, 1 - lo, cx0, cy1, lo, 1 - hi, cx1, cy1, hi, 1 - hi]);
-      const arena = this.#quadArena;
+      data[0] = cx0;
+      data[1] = cy0;
+      data[2] = lo;
+      data[3] = 1 - lo;
+      data[4] = cx1;
+      data[5] = cy0;
+      data[6] = hi;
+      data[7] = 1 - lo;
+      data[8] = cx0;
+      data[9] = cy1;
+      data[10] = lo;
+      data[11] = 1 - hi;
+      data[12] = cx1;
+      data[13] = cy1;
+      data[14] = hi;
+      data[15] = 1 - hi;
       const at = arena.alloc(4);
       if (at < 0) return failed('the tile buffer is full');
       arena.writeVertices(at, data);
-      arena.writeIndices(0, new Uint32Array([at, at + 1, at + 2, at + 2, at + 1, at + 3]));
-      const batch: Batch = {
-        program: this.#quad,
-        arena,
-        firstVertex: at,
-        vertexCount: 4,
-        firstIndex: 0,
-        indexCount: 6,
-        mode: 'triangles',
-        instances: 1,
-        uniforms: {},
-        textures: { uTex: target },
-        scissor: null,
-        depthTest: false,
-        depthFunc: 'less',
-        // the depth mask stays on, so the next tile's clear of the depth buffer works
-        depthWrite: true,
-        blend: 'premult',
-        cullBack: false,
-      };
+      idx[0] = at;
+      idx[1] = at + 1;
+      idx[2] = at + 2;
+      idx[3] = at + 2;
+      idx[4] = at + 1;
+      idx[5] = at + 3;
+      arena.writeIndices(0, idx);
+      this.#quadTextures['uTex'] = target;
+      batch.firstVertex = at;
       const drawn = this.#backend.draw(frame.value, batch, this.#stats);
       arena.free(at, 4);
       if (!drawn.ok) return failed('drawing a tile');

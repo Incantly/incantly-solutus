@@ -114,6 +114,8 @@ function tracePath(ctx: CanvasRenderingContext2D, d: readonly number[]): void {
   }
 }
 
+const SOLID: number[] = [];
+
 function drawPathPart(ctx: CanvasRenderingContext2D, p: PathPart): void {
   tracePath(ctx, p.d);
   if (p.fill !== null) {
@@ -125,9 +127,14 @@ function drawPathPart(ctx: CanvasRenderingContext2D, p: PathPart): void {
     ctx.lineWidth = p.width;
     ctx.lineCap = p.cap;
     ctx.lineJoin = 'round';
-    ctx.setLineDash(p.dash as number[]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    // a solid line is the context's default (`save` and `restore` keep it so): two calls and an array saved for each part
+    if (p.dash.length > 0) {
+      ctx.setLineDash(p.dash as number[]);
+      ctx.stroke();
+      ctx.setLineDash(SOLID);
+    } else {
+      ctx.stroke();
+    }
   }
 }
 
@@ -229,7 +236,18 @@ export function drawItems2D(ctx: CanvasRenderingContext2D, items: readonly DrawI
 }
 
 /** `rgb(…)` of a colour whose channels are 0 to 1. */
-export const rgbCss = (r: number, g: number, b: number): string => `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+export function rgbCss(r: number, g: number, b: number): string {
+  // the last colour asked for is kept: a stroke asks for the same one every frame
+  const last = lastRgb;
+  if (last.r === r && last.g === g && last.b === b) return last.css;
+  last.r = r;
+  last.g = g;
+  last.b = b;
+  last.css = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+  return last.css;
+}
+
+const lastRgb = { r: Number.NaN, g: 0, b: 0, css: '' };
 
 function tryContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   try {

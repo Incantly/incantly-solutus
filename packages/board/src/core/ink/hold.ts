@@ -72,12 +72,12 @@ export class HoldWatch {
   /** True when the pen has been still for 500 ms and the stroke is long enough to be a shape. */
   due(now: number): boolean {
     const s = this.#since;
-    return this.#machine.is('watching') && now - s.time >= HOLD_MS && s.length >= HOLD_MIN_LENGTH_PX && s.points >= HOLD_MIN_POINTS;
+    return this.#machine.state === 'watching' && now - s.time >= HOLD_MS && s.length >= HOLD_MIN_LENGTH_PX && s.points >= HOLD_MIN_POINTS;
   }
 
   /** True while the pen is down and could still hold. */
   get watching(): boolean {
-    return this.#machine.is('watching');
+    return this.#machine.state === 'watching';
   }
 
   /** The hold happened: the stroke is handed to shape fixing. */
