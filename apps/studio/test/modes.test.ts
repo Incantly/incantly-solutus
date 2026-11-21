@@ -192,7 +192,7 @@ describe('the Board app shows the board (app-modes ui 2 Board; board design 15)'
   it('the board has its tools, a page bar with an add button, and undo and redo', () => {
     mount('notes');
     const board = m.board.element;
-    expect([...board.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool'])).toEqual(['pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand']);
+    expect([...board.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool'])).toEqual(['select', 'pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand', 'rect', 'ellipse', 'triangle', 'diamond', 'star', 'line', 'arrow', 'text', 'sticky', 'frame']);
     expect(board.querySelector('button[aria-label="Add a page"]')).not.toBeNull();
     expect(board.querySelector('button[aria-label="Undo"]')).not.toBeNull();
     expect(board.querySelector('button[aria-label="Redo"]')).not.toBeNull();
