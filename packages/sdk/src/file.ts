@@ -178,7 +178,8 @@ export function checkFile(v: unknown): IncantlyFile | ApiError {
     };
   } catch (e) {
     if (e instanceof Bad) return apiError('file', 'file_invalid', `${e.path} ${e.why}.`, { hint: 'Re-export the figure or fix the field.', detail: { path: e.path } });
-    throw e;
+    // a fault in the checks themselves: the file is refused, never half-read
+    return apiError('file', 'file_invalid', 'The file could not be checked.', { hint: 'Re-export the figure.' });
   }
 }
 

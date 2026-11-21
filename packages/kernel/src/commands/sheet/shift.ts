@@ -9,7 +9,11 @@ import type { CellRef } from '../../language/cells';
 import { parseLine } from '../../language/parser';
 import { printLineNode } from '../../language/printer';
 
-export type ShiftResult = { readonly ok: true; readonly tree: Expr } | { readonly ok: false; readonly reason: 'off_sheet'; readonly ref: CellRef };
+/** `internal`: a fault inside the shift (a bug); the caller skips the cell, as for a line that does not parse. */
+export type ShiftResult =
+  | { readonly ok: true; readonly tree: Expr }
+  | { readonly ok: false; readonly reason: 'off_sheet'; readonly ref: CellRef }
+  | { readonly ok: false; readonly reason: 'internal'; readonly ref?: undefined };
 
 /** Grid limits a shifted reference must stay inside (the sheet's size, or the largest sheet). */
 export interface ShiftBounds {
@@ -77,7 +81,7 @@ export function shiftRefs(tree: Expr, dCol: number, dRow: number, bounds: ShiftB
     return { ok: true, tree: shiftAny(tree, { dCol, dRow, b: bounds, reads, inRange: 0 }) as Expr };
   } catch (e) {
     if (e instanceof OffSheet) return { ok: false, reason: 'off_sheet', ref: e.ref };
-    throw e;
+    return { ok: false, reason: 'internal' };
   }
 }
 
@@ -94,7 +98,7 @@ export function shiftLine(line: string, from: string, to: string, bounds?: Shift
   const node = pr.value.node;
   if (node.k !== 'define' && node.k !== 'function') return { ok: false, reason: 'parse' };
   const r = shiftRefs(node.expr, b.col - a.col, b.row - a.row, bounds);
-  if (!r.ok) return { ok: false, reason: 'off_sheet', ref: r.ref };
+  if (!r.ok) return r.reason === 'off_sheet' ? { ok: false, reason: 'off_sheet', ref: r.ref } : { ok: false, reason: 'parse' };
   const moved: LineNode = { ...node, target: { ...node.target, name: to }, expr: r.tree };
   return { ok: true, line: printLineNode(moved) };
 }

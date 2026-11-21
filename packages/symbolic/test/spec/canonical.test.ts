@@ -42,8 +42,8 @@ import {
   upolyRationalRoots,
   upolySquarefree,
   upolyToTree,
-} from '@incantly/symbolic';
-import { floatToExactRat, nearestFraction, shortestDecimalRational } from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
+import { floatToExactRat, nearestFraction, shortestDecimalRational } from '@incantly/symbolic/engine';
 import { tree } from './helpers';
 
 const x = (): ReturnType<typeof symN> => symN('x');

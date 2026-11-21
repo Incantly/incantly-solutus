@@ -3,8 +3,8 @@
  * cas/design.md 2.3, 5.6, 5.8, 5.9, 5.11, 5.13; .kiro/specs/cas task 10).
  */
 import { describe, expect, it } from 'vitest';
-import { clearCache, condText, floatN, parseExpression, run, toText } from '@incantly/symbolic';
-import type { SymArg } from '@incantly/symbolic';
+import { clearCache, condText, floatN, parseExpression, run, toText } from '@incantly/symbolic/engine';
+import type { SymArg } from '@incantly/symbolic/engine';
 import { cd, ex, sy } from './helpers';
 
 const value = (r: ReturnType<typeof run>): SymArg => {

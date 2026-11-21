@@ -317,9 +317,8 @@ export class Figure extends FigureHist {
    * The film range and the solver rate, read from their directives only when the directive changed (a frame asks for them
    * at every step, and a regular expression makes its match array each time, which is garbage, design 11.4).
    */
-  private clockItem: unknown;
-  private clockWord: string | undefined;
-  private clockRead = false;
+  /** False until the `@clock` line is read once; then the item and word it was read from. */
+  private clockKnown: { readonly item: unknown; readonly word: string | undefined } | undefined;
   private clockFromNow = 0;
   private clockToNow = Infinity;
 
@@ -332,27 +331,22 @@ export class Figure extends FigureHist {
   private readClock(): void {
     const d = this.directiveItem('clock');
     const word = d?.words[0];
-    if (this.clockRead && d === this.clockItem && word === this.clockWord) return;
-    this.clockRead = true;
-    this.clockItem = d;
-    this.clockWord = word;
+    if (this.clockKnown !== undefined && d === this.clockKnown.item && word === this.clockKnown.word) return;
+    this.clockKnown = { item: d, word };
     const m = d ? /^(-?\d+(?:\.\d+)?)\.\.(-?\d+(?:\.\d+)?)$/.exec(d.words[0] ?? '') : null;
     this.clockFromNow = m ? Number(m[1]) : 0;
     this.clockToNow = m ? Number(m[2]) : Infinity;
   }
 
-  private rateItem: unknown;
-  private rateWord: string | undefined;
-  private rateRead = false;
+  /** The `@solver` line the step rate was read from, once read. */
+  private rateKnown: { readonly item: unknown; readonly word: string | undefined } | undefined;
   private rateNow = 240;
 
   protected directiveStepRate(): number {
     const d = this.directiveItem('solver');
     const word = d?.words[1];
-    if (this.rateRead && d === this.rateItem && word === this.rateWord) return this.rateNow;
-    this.rateRead = true;
-    this.rateItem = d;
-    this.rateWord = word;
+    if (this.rateKnown !== undefined && d === this.rateKnown.item && word === this.rateKnown.word) return this.rateNow;
+    this.rateKnown = { item: d, word };
     const m = d ? /^1\/(\d+)$/.exec(d.words[1] ?? '') : null;
     this.rateNow = m ? Number(m[1]) : 240;
     return this.rateNow;

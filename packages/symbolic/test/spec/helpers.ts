@@ -12,7 +12,7 @@ import {
   parseExpression,
   run,
   toText,
-} from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
 import type {
   Cell,
   Domain,
@@ -27,7 +27,7 @@ import type {
   SymCond,
   SymNode,
   UndefinedDetail,
-} from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
 
 // ---------------------------------------------------------------------------------------------
 // Argument builders (SymArg shapes from the public contracts)

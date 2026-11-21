@@ -9,7 +9,7 @@ import {
   assumptions, completeSquareNode, csolveEquation, expandNode, factorNode, integrateNode,
   limitNode, nsolveEquation, parseCondition, parseExpression, ruleCtx, simplifyNode, solveEquation,
   solveSystem, symN, toDifference, upolyToTree, upolyFromInts,
-} from '../src/index.js';
+} from '../src/engine.js';
 
 const tick = { tick(): void {} };
 const ctx = (): ReturnType<typeof ruleCtx> => ruleCtx(assumptions(), tick);

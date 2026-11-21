@@ -1498,3 +1498,19 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 - **Invariants:** an order goes only to a registered view; one view's failed order never stops the others; `mountedCount() <= liveLimit`.
 - **Transitions:** as in V1, routed one to one (`build`, `goLive`, `pause`, `save`, `restore`). Without `IntersectionObserver`, `measure` sets visible and near from the boxes on scroll (50 ms later) and resize.
 - **Reachable invalid states or transitions:** the cap is only kept by the views themselves; T1's remount paths pass it (TT-R5).
+
+## Explicit since the lint rules (branch `fix/lint-warnings`)
+
+Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same.
+
+| Machine | Where | States | Notes |
+|---|---|---|---|
+| `SCHEDULE_MACHINE` | `packages/view/src/core/scheduler.ts` | placeholder, ready, live, paused, saved | V1: `build`, `restore`, `promote`, `pause`, `save` |
+| `TICK_MACHINE` | `packages/view/src/web/scheduler-host.ts` | idle, ticking, again | A tick asked for inside a tick runs once more, never nested |
+| `SAMPLER_MACHINE` | `packages/plot/src/function.ts` | setup, refine, classify, band | Refine and classify alternate; the exact band is last |
+| `WORKER_MACHINE` | `packages/sdk/src/worker/physics-host.ts` | off, idle, waiting, failed | One frame in flight; `failed` (no worker, or it crashed) is final |
+| `GRID_MACHINE` | `packages/kernel/src/physics/grid-life.ts` | running, unstable | Smoke and fire grids in the plane and in space; a checkpoint sets either |
+| `ERROR_MACHINE`, `COVER_MACHINE` | `packages/ui/src/line-editor.ts` | typing, quiet, error; open, dismissed, confirm, confirmDismissed | The line's errors show after a pause; Esc hides the strip, then asks to clear |
+| `FIGURE_MACHINE` | `packages/tiptap/src/node-view.ts` | see T1 | |
+
+Marks that do not depend on each other are grouped in named records instead of loose flags: the physics drivers' `coneFacts`, `advanceFacts` and `doing`, the checker's `found` and `context`, the figure view's `frameLoop` and `layers`, the event hub's `queued`. The smoke grids' `staticDirty` became a count of wall moves (`markWallsAgain`), and the figure's `@clock` and `@solver` caches keep the item they were read from instead of a "read" flag.

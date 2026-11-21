@@ -208,16 +208,17 @@ export class Physics3Driver implements WorldDriver {
   private cone: ObjRec[] = [];
   private varySet = new Set<ObjRec>();
   private varyingStyle: { member: Member3; entry: StyleEntry }[] = [];
-  private varyingWorld = false;
-  private coneDirty = true;
-  private short = false;
+  /** What the last look at the dependency cone found (`findCone`), and whether it must look again. */
+  private readonly coneFacts = { dirty: true, varyingWorld: false };
+  /** What the last `advance` found: it ran out of budget (`short`), the pose before the step is not known (`prevStale`). */
+  private readonly advanceFacts = { short: false, prevStale: false };
+  /** What the driver is doing now, inside a call: sampling another time, or reading `@input` lines back. */
+  private readonly doing = { sampling: false, restoring: false };
   private catching: { from: number; to: number } | undefined;
   private warnings: Notice[] = [];
   private warned = new Set<string>();
   private failedAt = new Map<number, number>();
   private leftAt = new Map<number, number>();
-  private prevStale = false;
-  private sampling = false;
   private touchLists: number[][] = [];
   hits: { readonly t: number; readonly a: string; readonly b: string; readonly speed: number; readonly x: number; readonly y: number; readonly z: number; readonly impulse: number }[] = [];
   private pendingHits: Physics3Driver['hits'] = [];
@@ -378,20 +379,20 @@ export class Physics3Driver implements WorldDriver {
     if (!this.world) return;
     const t = this.acc.clockT();
     if (t <= this.t0 + 1e-12) return;
-    if (this.coneDirty) this.findCone();
+    if (this.coneFacts.dirty) this.findCone();
     if (!this.vehicleInputs.has(rec.id) || this.startInputs.has(rec.id)) return;
     if (!this.base.has(rec.id)) this.base.set(rec.id, was);
     this.addEntry({ kind: 'set', n: this.gridAt(t), id: rec.id, value: rec.p.value });
     this.logged.add(rec.id);
-    this.coneDirty = true;
+    this.coneFacts.dirty = true;
   }
 
   inputLine(words: readonly string[]): string | undefined | false {
-    this.restoring = true;
+    this.doing.restoring = true;
     try {
       return this.inputLineOf(words);
     } finally {
-      this.restoring = false;
+      this.doing.restoring = false;
     }
   }
 
@@ -422,7 +423,7 @@ export class Physics3Driver implements WorldDriver {
         if (!this.base.has(rec.id)) this.base.set(rec.id, rec.p.value);
         this.addEntry({ kind: 'set', n, id: rec.id, value });
         this.logged.add(rec.id);
-        this.coneDirty = true;
+        this.coneFacts.dirty = true;
       }
       return undefined;
     }
@@ -456,7 +457,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   needsFrame(): boolean {
-    return this.short;
+    return this.advanceFacts.short;
   }
 
   catchingUp(): { from: number; to: number } | undefined {
@@ -486,7 +487,7 @@ export class Physics3Driver implements WorldDriver {
     const keepN = this.n;
     const kp = Float64Array.from(this.prevP);
     const kq = Float64Array.from(this.prevQ);
-    this.sampling = true;
+    this.doing.sampling = true;
     try {
       this.gridFor(t);
       const alpha = this.gridAlpha;
@@ -507,7 +508,7 @@ export class Physics3Driver implements WorldDriver {
       for (const [r, arr] of lists) out.push([r, { defined: true, value: arr }]);
       return out;
     } finally {
-      this.sampling = false;
+      this.doing.sampling = false;
       this.loadState(keep);
       if (pairs) this.fluid?.restorePairs(pairs);
       this.n = keepN;
@@ -537,7 +538,7 @@ export class Physics3Driver implements WorldDriver {
       }
       return [];
     }
-    if (this.coneDirty) this.findCone();
+    if (this.coneFacts.dirty) this.findCone();
     if (this.signatureChanged()) this.build();
     if (!this.world) return [];
     this.gridFor(this.acc.clockT());
@@ -575,7 +576,6 @@ export class Physics3Driver implements WorldDriver {
 
   /** Entries that came in as `@input` lines (a reloaded script), not yet matched by a hit handler's own action. */
   private restored = new Set<LogEntry3>();
-  private restoring = false;
 
   /** A hit handler's action that the script's `@input` lines already hold is that line, not a second one (once per hit). */
   private claimRestored(e: LogEntry3): boolean {
@@ -646,7 +646,7 @@ export class Physics3Driver implements WorldDriver {
       else if (k === 'View3') this.spaceRec = r;
       else if (r.p.style.has('solid') || isGround(r)) this.solidRecs.push(r);
     }
-    this.coneDirty = true;
+    this.coneFacts.dirty = true;
   }
 
   private solidOn(r: ObjRec): boolean {
@@ -733,7 +733,7 @@ export class Physics3Driver implements WorldDriver {
     this.sigPush(this.acc.t0());
     this.sigPush(this.acc.solverStepsPerSecond());
     const w = this.settings();
-    if (this.varyingWorld) this.sigPush('varying');
+    if (this.coneFacts.varyingWorld) this.sigPush('varying');
     else {
       this.sigPush(w.gx);
       this.sigPush(w.gy);
@@ -1098,7 +1098,7 @@ export class Physics3Driver implements WorldDriver {
     this.failedAt = new Map();
     this.leftAt = new Map();
     this.grabs = new Map();
-    this.prevStale = false;
+    this.advanceFacts.prevStale = false;
     this.findCone();
     this.applyStatic();
     this.saveCheckpoint(0);
@@ -1175,7 +1175,7 @@ export class Physics3Driver implements WorldDriver {
 
   /** What changes during the film: property formulas of `t`, and the world's settings. */
   private findCone(): void {
-    this.coneDirty = false;
+    this.coneFacts.dirty = false;
     const bodies = new Set(this.bodyRecs);
     const targets: ObjRec[] = [];
     if (this.worldRec) targets.push(this.worldRec);
@@ -1215,17 +1215,17 @@ export class Physics3Driver implements WorldDriver {
         if (e && (this.isVarying(e) || e.reads.some((id) => bodies.has(this.acc.byId(id) as ObjRec)))) this.varyingStyle.push({ member: m, entry: e });
       }
     }
-    this.varyingWorld = this.worldRec !== undefined && vary.has(this.worldRec);
+    this.coneFacts.varyingWorld = this.worldRec !== undefined && vary.has(this.worldRec);
   }
 
   /* ------------------------------ stepping ------------------------------ */
 
   private advance(nTarget: number, budget: number): void {
     const w = this.world as World3;
-    this.short = false;
+    this.advanceFacts.short = false;
     const want = Math.max(0, nTarget - 1);
     let best = this.checkpoints.best(want);
-    if (this.n > nTarget || this.prevStale || best > this.n) {
+    if (this.n > nTarget || this.advanceFacts.prevStale || best > this.n) {
       if (best < 0) best = 0;
       const cp = this.checkpoints.get(best);
       if (cp) {
@@ -1234,7 +1234,7 @@ export class Physics3Driver implements WorldDriver {
       }
       this.prevP.set(w.p);
       this.prevQ.set(w.q);
-      this.prevStale = false;
+      this.advanceFacts.prevStale = false;
     }
     if (this.n >= nTarget) {
       this.catching = undefined;
@@ -1246,7 +1246,7 @@ export class Physics3Driver implements WorldDriver {
     // (whole numbers: ⌈x / 4⌉ is (x + 3) >> 2 for a count, with no division made in a number the engine boxes)
     const perStep = Math.max(1, w.awakeCount() + 1 + (((this.fluid?.ps.n ?? 0) + 3) >> 2) + ((cells + 63) >> 6) + ((this.smokeCells() + 31) >> 5) + (((this.cloth?.n ?? 0) + 7) >> 3));
     let steps = Math.max(2, Math.floor(budget / perStep));
-    const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.varyingWorld || this.base.size > 0;
+    const varying = this.cone.length > 0 || this.varyingStyle.length > 0 || this.coneFacts.varyingWorld || this.base.size > 0;
     const saved = varying ? this.saveCells() : undefined;
     try {
       while (this.n < nTarget && steps-- > 0) this.stepOnce(varying);
@@ -1254,7 +1254,7 @@ export class Physics3Driver implements WorldDriver {
       if (saved) this.restoreCells(saved);
     }
     if (this.n < nTarget) {
-      this.short = true;
+      this.advanceFacts.short = true;
       const from = this.t0 + this.n / this.rate;
       if (!this.catching) this.warnings.push(makeNotice('catching_up', { from: Number(from.toFixed(3)), to: Number((this.t0 + nTarget / this.rate).toFixed(3)) }, this.members.map((m) => m.rec.p.name)));
       this.catching = { from, to: this.t0 + nTarget / this.rate };
@@ -1341,7 +1341,7 @@ export class Physics3Driver implements WorldDriver {
       const name = this.nameOfIndex[i] ?? '';
       this.warnOnce(`left:${i}`, makeNotice('left_world', { name, t: Number((this.t0 + this.n / this.rate).toFixed(3)), range: w.range }, [name]));
     }
-    if (!this.sampling) {
+    if (!this.doing.sampling) {
       const fresh = this.n > this.frontier;
       for (let k = 0; k < w.hits.length; k++) {
         const hit = w.hits[k] as (typeof w.hits)[number];
@@ -1455,7 +1455,7 @@ export class Physics3Driver implements WorldDriver {
         w.wakeBody(jm.joint.b);
       }
     }
-    if (this.varyingWorld && this.worldRec) {
+    if (this.coneFacts.varyingWorld && this.worldRec) {
       const c = this.worldRec.cell;
       if (c.defined && isWorldValue(c.value)) {
         w.gx = c.value.g3 ? c.value.gx : 0;
@@ -1489,7 +1489,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   private addEntry(e: LogEntry3): void {
-    if (this.restoring) this.restored.add(e);
+    if (this.doing.restoring) this.restored.add(e);
     else if (this.actionT !== undefined && this.claimRestored(e)) return;
     if (e.kind === 'set') this.log = this.log.filter((x) => !(x.kind === 'set' && x.id === e.id && x.n >= e.n));
     this.log.push(e);
@@ -1497,7 +1497,7 @@ export class Physics3Driver implements WorldDriver {
     this.checkpoints.dropAfter(e.n);
     this.cpBytes = this.checkpoints.bytes();
     if (this.n > e.n) {
-      this.prevStale = true;
+      this.advanceFacts.prevStale = true;
       const best = Math.max(0, this.checkpoints.best(e.n));
       const cp = this.checkpoints.get(best);
       if (cp && this.world) {
@@ -1781,7 +1781,7 @@ export class Physics3Driver implements WorldDriver {
 
   private writeCells(): readonly ObjRec[] {
     const w = this.world as World3;
-    const alpha = this.short ? 1 : this.gridAlpha;
+    const alpha = this.advanceFacts.short ? 1 : this.gridAlpha;
     this.alphaNow = alpha;
     const changed = this.changedBuf;
     changed.reset();
@@ -2228,7 +2228,7 @@ export class Physics3Driver implements WorldDriver {
 
   /** The world's settings as the smoke step reads the wind (a formula of t was evaluated for it). */
   private windSettings(): WorldValue {
-    return this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    return this.coneFacts.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
   }
 
   /** The cells of the grids in space, for the step's budget. */
@@ -2568,7 +2568,7 @@ export class Physics3Driver implements WorldDriver {
         for (const j of w.joints) if (j.a === i || j.b === i) j.broken = true;
       } else {
         // a wall that burnt away is no longer solid: the grids mark their walls again
-        for (const sm of this.smokeMembers) sm.grid.staticDirty = true;
+        for (const sm of this.smokeMembers) sm.grid.markWallsAgain();
       }
       this.warnOnce(`burnt:${th.name}`, makeNotice('burnt', { name: th.name, t: Number(t.toFixed(3)) }, [th.name]));
     }
@@ -2760,7 +2760,7 @@ export class Physics3Driver implements WorldDriver {
   }
 
   private clothInputs(c: Cloth3, n: number): void {
-    const wv = this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    const wv = this.coneFacts.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
     c.windX = wv.windX;
     c.windY = wv.windY;
     c.windZ = wv.windZ;
@@ -2804,7 +2804,7 @@ export class Physics3Driver implements WorldDriver {
       const info = c.cloths[cm.index];
       if (!info) continue;
       const torn = c.tornNow[cm.index] as number;
-      if (torn > 0 && !this.sampling && this.n > this.frontier) {
+      if (torn > 0 && !this.doing.sampling && this.n > this.frontier) {
         const t = Number((this.t0 + this.n / this.rate).toFixed(3));
         this.events.push({ t: this.t0 + this.n / this.rate, kind: 'torn', name: cm.rec.p.name, links: torn });
         this.warnOnce(`torn:${cm.rec.id}`, makeNotice('torn', { name: cm.rec.p.name, t, links: info.torn }, [cm.rec.p.name]));

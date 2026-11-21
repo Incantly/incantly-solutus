@@ -204,9 +204,12 @@ export class PhysicsDriver implements WorldDriver {
   /** Objects whose values change during the film, in order: recomputed at each step time. */
   private cone: ObjRec[] = [];
   private varyingStyle: { member: Member; entry: StyleEntry }[] = [];
-  private varyingWorld = false;
-  private readsBodies = false;
-  private short = false;
+  /** What the last look at the dependency cone found (`findCone`), and whether it must look again. */
+  private readonly coneFacts = { dirty: true, varyingWorld: false, readsBodies: false };
+  /** What the last `advance` found: it ran out of budget (`short`), the pose before the step is not known (`prevStale`). */
+  private readonly advanceFacts = { short: false, prevStale: false };
+  /** What the driver is doing now, inside a call: sampling another time, or reading `@input` lines back. */
+  private readonly doing = { sampling: false, restoring: false };
   private catching: { from: number; to: number } | undefined;
   private warnings: Notice[] = [];
   private warned = new Set<string>();
@@ -215,7 +218,6 @@ export class PhysicsDriver implements WorldDriver {
   /** Hits of the steps taken in the last pass, for `on … hit` handlers. */
   hits: { readonly t: number; readonly a: string; readonly b: string; readonly speed: number; readonly x: number; readonly y: number; readonly impulse: number }[] = [];
   /** Time of the last step taken, so hits are reported once. */
-  private sampling = false;
   private pendingHits: PhysicsDriver['hits'] = [];
   private brokeAt = new WeakMap<object, number>();
   /** Joints that broke, for the teacher's `figure` result. */
@@ -342,15 +344,15 @@ export class PhysicsDriver implements WorldDriver {
     if (!this.base.has(rec.id)) this.base.set(rec.id, was);
     this.addEntry({ kind: 'set', n: this.gridAt(t), id: rec.id, value: rec.p.value });
     this.logged.add(rec.id);
-    this.coneDirty = true;
+    this.coneFacts.dirty = true;
   }
 
   inputLine(words: readonly string[]): string | undefined | false {
-    this.restoring = true;
+    this.doing.restoring = true;
     try {
       return this.inputLineOf(words);
     } finally {
-      this.restoring = false;
+      this.doing.restoring = false;
     }
   }
 
@@ -397,14 +399,14 @@ export class PhysicsDriver implements WorldDriver {
         if (!this.base.has(rec.id)) this.base.set(rec.id, rec.p.value);
         this.addEntry({ kind: 'set', n, id: rec.id, value });
         this.logged.add(rec.id);
-        this.coneDirty = true;
+        this.coneFacts.dirty = true;
       }
     } else return 'push, grab, release, set, ignite, wake, sleep or reset';
     return undefined;
   }
 
   needsFrame(): boolean {
-    return this.short;
+    return this.advanceFacts.short;
   }
 
   catchingUp(): { from: number; to: number } | undefined {
@@ -429,7 +431,7 @@ export class PhysicsDriver implements WorldDriver {
     if (!this.world) return undefined;
     const keep = this.saveState();
     const keepN = this.n;
-    this.sampling = true;
+    this.doing.sampling = true;
     const kx = Float64Array.from(this.prevX);
     const ky = Float64Array.from(this.prevY);
     const ka = Float64Array.from(this.prevA);
@@ -452,7 +454,7 @@ export class PhysicsDriver implements WorldDriver {
       for (const [r, arr] of lists) out.push([r, { defined: true, value: arr }]);
       return out;
     } finally {
-      this.sampling = false;
+      this.doing.sampling = false;
       this.loadState(keep);
       this.n = keepN;
       this.prevX = kx;
@@ -467,7 +469,7 @@ export class PhysicsDriver implements WorldDriver {
     this.scan();
     if (this.remote) return this.writeRemote();
     if (this.bodyRecs.length === 0 && this.solidRecs.length === 0 && this.liquidRecs.length === 0 && this.wavesRecs.length === 0 && this.smokeRecs.length === 0 && this.clothRecs.length === 0 && !this.world) return [];
-    if (this.coneDirty) this.findCone();
+    if (this.coneFacts.dirty) this.findCone();
     if (this.signatureChanged()) this.build();
     if (!this.world) return this.writeEmpty();
     this.gridFor(this.acc.clockT());
@@ -508,7 +510,7 @@ export class PhysicsDriver implements WorldDriver {
     this.clothRecs = [];
     this.pinRecs = [];
     this.worldRec = undefined;
-    this.coneDirty = true;
+    this.coneFacts.dirty = true;
     // a figure with a body in space is a world in space: its driver takes the world, the ground and the solids
     if (isSpaceWorld(this.acc.list)) return;
     for (const r of this.acc.list) {
@@ -526,10 +528,9 @@ export class PhysicsDriver implements WorldDriver {
       else if (k === 'World') this.worldRec = r;
       else if (r.p.style.has('solid') || isGround(r)) this.solidRecs.push(r);
     }
-    this.coneDirty = true;
+    this.coneFacts.dirty = true;
   }
 
-  private coneDirty = true;
   private logged = new Set<ObjId>();
   /** Free objects any physics input reads, those that set the start, and those that only move a solid. */
   private inputs = new Set<ObjId>();
@@ -647,7 +648,7 @@ export class PhysicsDriver implements WorldDriver {
     this.sigPush(this.acc.t0());
     this.sigPush(this.acc.solverStepsPerSecond());
     const w = this.settings();
-    if (this.varyingWorld) this.sigPush('varying');
+    if (this.coneFacts.varyingWorld) this.sigPush('varying');
     else {
       this.sigPush(w.gx);
       this.sigPush(w.gy);
@@ -1250,7 +1251,7 @@ export class PhysicsDriver implements WorldDriver {
   private bodyVaries = new Set<ObjRec>();
 
   private findCone(): void {
-    this.coneDirty = false;
+    this.coneFacts.dirty = false;
     const bodies = new Set(this.bodyRecs);
     // what physics reads: solid shapes, the world, and the reads of body and solid properties
     const targets: ObjRec[] = [...this.solidRecs, ...this.jointRecs, ...this.vehicleRecs, ...this.waterRecs, ...this.smokeRecs];
@@ -1278,7 +1279,7 @@ export class PhysicsDriver implements WorldDriver {
     this.varySet = vary;
     this.bodyVaries = new Set(this.bodyRecs.filter((r) => r.usesClock || r.inputs.some((i) => vary.has(i))));
     this.cone = all.filter((r) => vary.has(r) && r.p.kind === 'rule' && !bodies.has(r));
-    this.readsBodies = all.some((r) => vary.has(r) && !isJointRec(r) && r.inputs.some((i) => bodies.has(i)));
+    this.coneFacts.readsBodies = all.some((r) => vary.has(r) && !isJointRec(r) && r.inputs.some((i) => bodies.has(i)));
     // the free inputs: of the start (body shapes and named arguments), and of movers
     this.inputs = new Set();
     this.startInputs = new Set();
@@ -1310,7 +1311,7 @@ export class PhysicsDriver implements WorldDriver {
         if (e && this.isVarying(e)) this.varyingStyle.push({ member: m, entry: e });
       }
     }
-    if (this.readsBodies) for (const m of this.members) {
+    if (this.coneFacts.readsBodies) for (const m of this.members) {
       // a formula that reads a body is evaluated with the body where it is at each step
       for (const k of BODY_PROPS) {
         const e = m.rec.p.style.get(k);
@@ -1323,18 +1324,18 @@ export class PhysicsDriver implements WorldDriver {
         if (e && !this.varyingStyle.some((s) => s.entry === e) && e.reads.some((id) => bodies.has(this.acc.byId(id) as ObjRec))) this.varyingStyle.push({ member: m, entry: e });
       }
     }
-    this.varyingWorld = this.worldRec !== undefined && vary.has(this.worldRec);
+    this.coneFacts.varyingWorld = this.worldRec !== undefined && vary.has(this.worldRec);
   }
 
   /* ------------------------------ stepping ------------------------------ */
 
   private advance(nTarget: number, budget: number): void {
     const w = this.world as World2;
-    this.short = false;
+    this.advanceFacts.short = false;
     // the nearest checkpoint at least one step before the target, so the pose before the last step is known
     const want = Math.max(0, nTarget - 1);
     let best = this.checkpoints.best(want);
-    if (this.n > nTarget || this.prevStale || best > this.n) {
+    if (this.n > nTarget || this.advanceFacts.prevStale || best > this.n) {
       if (best < 0) best = 0;
       const cp = this.checkpoints.get(best);
       if (cp) {
@@ -1344,7 +1345,7 @@ export class PhysicsDriver implements WorldDriver {
       this.prevX.set(w.px);
       this.prevY.set(w.py);
       this.prevA.set(w.ang);
-      this.prevStale = false;
+      this.advanceFacts.prevStale = false;
     }
     if (this.n >= nTarget) {
       this.catching = undefined;
@@ -1368,15 +1369,14 @@ export class PhysicsDriver implements WorldDriver {
       if (saved) this.restoreCells(saved);
     }
     if (this.n < nTarget) {
-      this.short = true;
+      this.advanceFacts.short = true;
       const from = this.t0 + this.n / this.rate;
       if (!this.catching) this.warnings.push(makeNotice('catching_up', { from: Number(from.toFixed(3)), to: Number((this.t0 + nTarget / this.rate).toFixed(3)) }, this.members.map((m) => m.rec.p.name)));
       this.catching = { from, to: this.t0 + nTarget / this.rate };
     } else this.catching = undefined;
   }
 
-  /** The pose before the last step is not the one before the current step (after a jump to a checkpoint). */
-  private prevStale = false;
+  /** The pose before the last step is not the one before the current step (after a jump to a checkpoint): `advanceFacts.prevStale`. */
 
   private stepOnce(varying: boolean): void {
     const w = this.world as World2;
@@ -1425,7 +1425,7 @@ export class PhysicsDriver implements WorldDriver {
     w.hStep = h;
     w.step();
     this.n = n + 1;
-    this.prevStale = false;
+    this.advanceFacts.prevStale = false;
     if (this.waters.length > 0) this.waterForces.account(w);
     if (cl) cl.account(w, h);
     if (fl || cl) for (let i = 0; i < w.n; i++) if (w.type[i] !== BodyType.Static && !w.gone.has(i)) w.updateShapes(i);
@@ -1455,7 +1455,7 @@ export class PhysicsDriver implements WorldDriver {
     for (let k = 0; k < w.left.length; k++) if (!this.leftAt.has(w.left[k] as number)) this.leftAt.set(w.left[k] as number, this.n);
     for (let k = 0; k < this.jointMembers.length; k++) this.noteBroken(this.jointMembers[k] as (typeof this.jointMembers)[number]);
     for (let k = 0; k < this.wheelMembers.length; k++) this.noteBroken(this.wheelMembers[k] as (typeof this.wheelMembers)[number]);
-    if (!this.sampling) {
+    if (!this.doing.sampling) {
       const fresh = this.n > this.frontier;
       for (let k = 0; k < w.hits.length; k++) {
         const hit = w.hits[k] as (typeof w.hits)[number];
@@ -1506,7 +1506,7 @@ export class PhysicsDriver implements WorldDriver {
 
   /** The settings whose wind is the world's now (what `windNow` reads; nothing is made). */
   private windSource(): { readonly windX: number; readonly windY: number } {
-    return this.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
+    return this.coneFacts.varyingWorld && this.worldRec?.cell.defined && isWorldValue(this.worldRec.cell.value) ? this.worldRec.cell.value : this.settings();
   }
 
   /**
@@ -1607,7 +1607,6 @@ export class PhysicsDriver implements WorldDriver {
 
   /** Entries that came in as `@input` lines (a reloaded script), not yet matched by a hit handler's own action. */
   private restored = new Set<LogEntry>();
-  private restoring = false;
 
   /**
    * A hit handler's action that the script's `@input` lines already hold (a reload of a played film) is that line, not a
@@ -1625,7 +1624,7 @@ export class PhysicsDriver implements WorldDriver {
   }
 
   private addEntry(e: LogEntry): void {
-    if (this.restoring) this.restored.add(e);
+    if (this.doing.restoring) this.restored.add(e);
     else if (this.actionT !== undefined && this.claimRestored(e)) return;
     if (e.kind === 'set') {
       const later = this.log.filter((x) => x.kind === 'set' && x.id === e.id && x.n >= e.n);
@@ -1635,7 +1634,7 @@ export class PhysicsDriver implements WorldDriver {
     this.log.sort((a, b) => a.n - b.n);
     this.checkpoints.dropAfter(e.n);
     this.cpBytes = this.checkpoints.bytes();
-    if (this.n > e.n) this.prevStale = true;
+    if (this.n > e.n) this.advanceFacts.prevStale = true;
     if (this.n > e.n) {
       // the world is past the entry: go back to a checkpoint before it on the next pass
       const best = Math.max(0, this.checkpoints.best(e.n));
@@ -1832,7 +1831,7 @@ export class PhysicsDriver implements WorldDriver {
       const v = this.inputAt(id, n);
       r.cell = v === undefined ? { defined: false, reason: 'explicit' } : { defined: true, value: v };
     }
-    if (this.readsBodies) {
+    if (this.coneFacts.readsBodies) {
       const lists = new Map<ObjRec, unknown[]>();
       for (const m of this.members) {
         if (m.role !== 'body') continue;
@@ -1857,7 +1856,7 @@ export class PhysicsDriver implements WorldDriver {
       const old = this.shapesNow(i);
       if (!w.setStaticShapes(i, sh.shapes)) continue;
       // smoke marks its walls again
-      for (const s of this.smokeMembers) s.grid.staticDirty = true;
+      for (const s of this.smokeMembers) s.grid.markWallsAgain();
       // At the first step there is no step before it: the world was built from the shape at whatever time the figure
       // showed (t = 0 when played, the seek's time when sought), so its move from there is not a speed. It starts at
       // rest, in every case (seek == play).
@@ -1908,7 +1907,7 @@ export class PhysicsDriver implements WorldDriver {
         w.wakeBody(jm.joint.b);
       }
     }
-    if (this.varyingWorld && this.worldRec) {
+    if (this.coneFacts.varyingWorld && this.worldRec) {
       const c = this.worldRec.cell;
       if (c.defined && isWorldValue(c.value)) {
         w.gx = c.value.gx;
@@ -2018,7 +2017,7 @@ export class PhysicsDriver implements WorldDriver {
     const w = this.world as World2;
     const alpha = this.alphaNow;
     // (a look ahead, `sample`, takes fresh arrays and keeps nothing: its cells are the caller's, not the film's)
-    const out = this.sampling ? new BodyOut() : this.outOf(i);
+    const out = this.doing.sampling ? new BodyOut() : this.outOf(i);
     out.beginTouch();
     const tl = this.touchLists[i];
     if (tl !== undefined) {
@@ -2124,7 +2123,7 @@ export class PhysicsDriver implements WorldDriver {
 
   private writeCells(): readonly ObjRec[] {
     const w = this.world as World2;
-    const alpha = this.short ? 1 : this.gridAlpha;
+    const alpha = this.advanceFacts.short ? 1 : this.gridAlpha;
     this.alphaNow = alpha;
     const changed = this.changedBuf;
     changed.reset();
@@ -2419,7 +2418,7 @@ export class PhysicsDriver implements WorldDriver {
       const info = c.cloths[cm.index];
       if (!info) continue;
       const torn = c.tornNow[cm.index] as number;
-      if (torn > 0 && !this.sampling && this.n > this.frontier) {
+      if (torn > 0 && !this.doing.sampling && this.n > this.frontier) {
         const t = Number((this.t0 + this.n / this.rate).toFixed(3));
         this.events.push({ t: this.t0 + this.n / this.rate, kind: 'torn', name: cm.rec.p.name, links: torn });
         this.warnOnce(`torn:${cm.rec.id}`, makeNotice('torn', { name: cm.rec.p.name, t, links: info.torn }, [cm.rec.p.name]));
@@ -2741,7 +2740,7 @@ export class PhysicsDriver implements WorldDriver {
         for (const j of w.joints) if (j.a === i || j.b === i) j.broken = true;
       } else {
         // a wall that burnt away is no longer solid: the grids mark their walls again
-        for (const sm of this.smokeMembers) sm.grid.staticDirty = true;
+        for (const sm of this.smokeMembers) sm.grid.markWallsAgain();
       }
       this.warnOnce(`burnt:${th.name}`, makeNotice('burnt', { name: th.name, t: Number(t.toFixed(3)) }, [th.name]));
     }

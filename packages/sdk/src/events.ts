@@ -150,8 +150,8 @@ function mergeInto(buffer: AppEvent[], e: AppEvent): void {
 export class EventHub {
   private readonly listeners: Listener[] = [];
   private pending: AppEvent[] = [];
-  private microQueued = false;
-  private frameQueued = false;
+  /** Which deliveries are queued: two marks that do not depend on each other. */
+  private readonly queued = { micro: false, frame: false };
   private closed = false;
 
   constructor(private readonly sched: Scheduler = defaultScheduler) {}
@@ -191,14 +191,14 @@ export class EventHub {
   emit(e: AppEvent): void {
     if (this.closed) return;
     this.pending.push(e);
-    if (this.microQueued) return;
-    this.microQueued = true;
+    if (this.queued.micro) return;
+    this.queued.micro = true;
     this.sched.micro(() => this.flush());
   }
 
   /** Delivers what waits now (tests and `destroy` call it; the hub calls it on its microtask). */
   flush(): void {
-    this.microQueued = false;
+    this.queued.micro = false;
     const events = this.pending;
     this.pending = [];
     for (const e of events) {
@@ -217,14 +217,14 @@ export class EventHub {
   }
 
   private queueFrame(): void {
-    if (this.frameQueued) return;
-    this.frameQueued = true;
+    if (this.queued.frame) return;
+    this.queued.frame = true;
     this.sched.frame(() => this.flushFrame());
   }
 
   /** Delivers the coalesced events of the frame. */
   flushFrame(): void {
-    this.frameQueued = false;
+    this.queued.frame = false;
     for (const l of [...this.listeners]) {
       const b = l.buffer;
       if (!b || b.length === 0) continue;

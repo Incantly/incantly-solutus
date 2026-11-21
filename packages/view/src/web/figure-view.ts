@@ -208,16 +208,19 @@ export class FigureView {
   private announceTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedAnnounce: string | null = null;
 
-  private pending = false;
-  private inFrame = false;
-  private syncScheduler = false;
+  /**
+   * The frame loop's marks: a frame is asked for (`pending`), a frame is running (`inFrame`), and the host's scheduler
+   * was seen to run a callback before returning (`syncScheduler`, VIEW-SM-23).
+   */
+  private readonly frameLoop = { pending: false, inFrame: false, syncScheduler: false };
   /** Ids changed by events since the cached layers were painted. */
   private readonly cacheDirtyIds = new Set<ObjId>();
-  /** An object was added or removed since the cached layers were painted. */
-  private cacheStructural = false;
+  /**
+   * The cached layers: an object was added or removed since they were painted (`structural`), they match the scene
+   * (`valid`), and the background must be painted again (`bgDirty`).
+   */
+  private readonly layers = { structural: false, valid: false, bgDirty: true };
   private liveScratch: HTMLCanvasElement | null = null;
-  private bgDirty = true;
-  private cacheValid = false;
   private cacheKey = '';
   private lowerCache: HTMLCanvasElement | null = null;
   private upperCache: HTMLCanvasElement | null = null;
@@ -287,8 +290,8 @@ export class FigureView {
       // A view can be mounted again after `unmount` (VIEW-SM-7): every piece
       // of state that `unmount` or a dead frame request left behind starts over.
       this.destroyed = false;
-      this.pending = false;
-      this.bgDirty = true;
+      this.frameLoop.pending = false;
+      this.layers.bgDirty = true;
       this.lowerCache = null;
       this.upperCache = null;
       this.liveScratch = null;
@@ -488,7 +491,7 @@ export class FigureView {
     }
     this.list.markViewDirtyAll();
     this.markCacheInvalid();
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   }
 
@@ -514,7 +517,7 @@ export class FigureView {
       this.list.markViewDirtyAll();
       this.paintVersion++;
       this.markCacheInvalid();
-      this.bgDirty = true;
+      this.layers.bgDirty = true;
     }
     this.requestFrame();
   }
@@ -531,7 +534,7 @@ export class FigureView {
       this.list.markViewDirtyAll();
       this.paintVersion++;
       this.markCacheInvalid();
-      this.bgDirty = true;
+      this.layers.bgDirty = true;
     } else {
       this.tween = { from: this.view, to: made.value, startMs: performance.now(), durMs: 350 };
     }
@@ -552,19 +555,19 @@ export class FigureView {
 
   setGrid(grid: GridSpec): void {
     this.grid = grid;
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   }
 
   setAxes(axes: AxesSpec): void {
     this.axes = axes;
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   }
 
   setBackground(bg: Rgba | 'transparent'): void {
     this.background = bg;
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   }
 
@@ -574,7 +577,7 @@ export class FigureView {
 
   setTheme(theme: Theme): void {
     this.theme = theme;
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.markCacheInvalid();
     this.list.markViewDirtyAll();
     this.requestFrame();
@@ -604,25 +607,25 @@ export class FigureView {
     // The cached layers stay valid while only the active objects change
     // (design 7.4): remember what changed and let the painter decide (VIEW-SM-22).
     for (const e of events) {
-      if (e.kind === 'add' || e.kind === 'remove') this.cacheStructural = true;
+      if (e.kind === 'add' || e.kind === 'remove') this.layers.structural = true;
       for (const id of e.ids) this.cacheDirtyIds.add(id);
     }
     this.requestFrame();
   }
 
   requestFrame(): void {
-    if (this.pending || this.destroyed) return;
-    this.pending = true;
+    if (this.frameLoop.pending || this.destroyed) return;
+    this.frameLoop.pending = true;
     let returned = false;
     const run = (): void => {
       // A scheduler that runs the callback before returning is synchronous.
-      if (!returned) this.syncScheduler = true;
-      this.pending = false;
+      if (!returned) this.frameLoop.syncScheduler = true;
+      this.frameLoop.pending = false;
       this.frame();
     };
     // A frame that asks for the next one must not run it inside itself: with a
     // synchronous scheduler that recurses for as long as a tween lives (VIEW-SM-23).
-    if (this.inFrame && this.syncScheduler && typeof setTimeout === 'function') {
+    if (this.frameLoop.inFrame && this.frameLoop.syncScheduler && typeof setTimeout === 'function') {
       setTimeout(run, 0);
     } else if (this.opts.scheduleFrame !== undefined) this.opts.scheduleFrame(run);
     else if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
@@ -631,10 +634,10 @@ export class FigureView {
   }
 
   private markCacheInvalid(): void {
-    this.cacheValid = false;
+    this.layers.valid = false;
     this.cacheKey = '';
     this.cacheDirtyIds.clear();
-    this.cacheStructural = false;
+    this.layers.structural = false;
   }
 
   private measure: TextMeasure = (text: string, sizePx: number): { width: number; height: number } => {
@@ -656,11 +659,11 @@ export class FigureView {
   private frame(): void {
     if (this.destroyed || this.view === null || this.root === null) return;
     if (isDegenerateView(this.view)) return;
-    this.inFrame = true;
+    this.frameLoop.inFrame = true;
     try {
       this.frameBody();
     } finally {
-      this.inFrame = false;
+      this.frameLoop.inFrame = false;
     }
   }
 
@@ -674,7 +677,7 @@ export class FigureView {
       this.list.markViewDirtyAll();
       this.paintVersion++;
       this.markCacheInvalid();
-      this.bgDirty = true;
+      this.layers.bgDirty = true;
       if (t >= 1) this.tween = null;
     }
     // Camera tween (interactive ViewFacing / ViewReset ease over 400 ms).
@@ -913,8 +916,8 @@ export class FigureView {
   private paintBackground(): void {
     const s = this.bgSurface;
     const view = this.view;
-    if (s === null || view === null || !this.bgDirty) return;
-    this.bgDirty = false;
+    if (s === null || view === null || !this.layers.bgDirty) return;
+    this.layers.bgDirty = false;
     const w = view.width as number;
     const h = view.height as number;
     const ctx = s.ctx;
@@ -1148,7 +1151,7 @@ export class FigureView {
     // The key is the split membership only. A changed id outside the active
     // set, or an added or removed object, makes the cached layers stale.
     const key = [...active].sort((a, b) => a - b).join(',');
-    let stale = this.cacheStructural;
+    let stale = this.layers.structural;
     if (!stale) {
       for (const id of this.cacheDirtyIds) {
         if (!active.has(id)) {
@@ -1158,10 +1161,10 @@ export class FigureView {
       }
     }
     this.cacheDirtyIds.clear();
-    this.cacheStructural = false;
-    if (stale) this.cacheValid = false;
+    this.layers.structural = false;
+    if (stale) this.layers.valid = false;
     this.ensureCacheCanvases();
-    if (this.cacheValid && key === this.cacheKey && this.lowerCache !== null && this.upperCache !== null &&
+    if (this.layers.valid && key === this.cacheKey && this.lowerCache !== null && this.upperCache !== null &&
       this.lowerSurface !== null && this.upperSurface !== null) {
       const c2d = s.ctx;
       c2d.drawImage(this.lowerCache, 0, 0, view.width as number, view.height as number);
@@ -1199,7 +1202,7 @@ export class FigureView {
           c2d.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
         }
       }
-      this.cacheValid = true;
+      this.layers.valid = true;
       this.cacheKey = key;
       this.paintWidgets(s, ctx);
       return r;
@@ -1678,7 +1681,7 @@ export class FigureView {
             this.list.markViewDirtyAll();
             this.paintVersion++;
             this.markCacheInvalid();
-            this.bgDirty = true;
+            this.layers.bgDirty = true;
             this.requestFrame();
           }
         }
@@ -1706,7 +1709,7 @@ export class FigureView {
       }
       this.paintVersion++;
       this.markCacheInvalid();
-      this.bgDirty = true;
+      this.layers.bgDirty = true;
       this.requestFrame();
       return;
     }
@@ -1983,7 +1986,7 @@ export class FigureView {
     this.list.markViewDirtyAll();
     this.paintVersion++;
     this.markCacheInvalid();
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   };
 
@@ -2008,7 +2011,7 @@ export class FigureView {
       this.list.markViewDirtyAll();
       this.paintVersion++;
       this.markCacheInvalid();
-      this.bgDirty = true;
+      this.layers.bgDirty = true;
       this.requestFrame();
     }
   };
@@ -2071,7 +2074,7 @@ export class FigureView {
           this.list.markPanDirty(dx, dy);
           this.paintVersion++;
           this.markCacheInvalid();
-          this.bgDirty = true;
+          this.layers.bgDirty = true;
           this.requestFrame();
           return;
         }
@@ -2096,7 +2099,7 @@ export class FigureView {
           this.list.markViewDirtyAll();
           this.paintVersion++;
           this.markCacheInvalid();
-          this.bgDirty = true;
+          this.layers.bgDirty = true;
           this.requestFrame();
         }
         return;
@@ -2110,7 +2113,7 @@ export class FigureView {
           this.list.markViewDirtyAll();
           this.paintVersion++;
           this.markCacheInvalid();
-          this.bgDirty = true;
+          this.layers.bgDirty = true;
           this.requestFrame();
         }
         return;
@@ -2978,7 +2981,7 @@ export class FigureView {
     this.list.markViewDirtyAll();
     this.paintVersion++;
     this.markCacheInvalid();
-    this.bgDirty = true;
+    this.layers.bgDirty = true;
     this.requestFrame();
   }
 

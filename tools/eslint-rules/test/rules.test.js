@@ -1,5 +1,6 @@
 /** RuleTester cases for every rule of the `incantly` plugin: code it accepts and code it refuses. */
 import { RuleTester } from 'eslint';
+import { fileURLToPath } from 'node:url';
 import tseslint from 'typescript-eslint';
 import { describe, it } from 'vitest';
 import { rules } from '../index.js';
@@ -128,7 +129,31 @@ tester.run('no-throw-export', rules['no-throw-export'], {
     { code: 'export class A { f() { throw new Error("x"); } }', errors: [{ messageId: 'thrown' }] },
     { code: 'export default function () { throw new Error("x"); }', errors: [{ messageId: 'thrown' }] },
     { code: 'export function f() { try { g(); } catch { throw new Error("x"); } }', errors: [{ messageId: 'thrown' }] },
+    { code: 'export function f(x) { if (typeof x !== "string") throw new RangeError("x"); }', errors: [{ messageId: 'thrown' }] },
+    { code: 'export function f(x) { if (typeof x !== "string") throw new TypeError("x"); }', options: [{ allow: [] }], errors: [{ messageId: 'thrown' }] },
   ],
+});
+
+// inside packages/<name>/src only what the package's entry points reach is a boundary
+const demo = fileURLToPath(new URL('./fixtures/packages/demo/src/', import.meta.url));
+tester.run('no-throw-export at the package boundary', rules['no-throw-export'], {
+  valid: [
+    // a wrong argument type is a programming error (embed-files-export design)
+    'export function f(x) { if (typeof x !== "string") throw new TypeError("f: x must be text"); }',
+    { code: 'export function inner() { throw new Error("x"); }', filename: `${demo}inner.ts` },
+    { code: 'export function hidden() { throw new Error("x"); }', filename: `${demo}named.ts` },
+    { code: 'export function anything() { throw new Error("x"); }', filename: `${demo}engine.ts` },
+  ],
+  invalid: [
+    { code: 'export function pub() { throw new Error("x"); }', filename: `${demo}pub.ts`, errors: [{ messageId: 'thrown' }] },
+    { code: 'export function shown() { throw new Error("x"); }', filename: `${demo}named.ts`, errors: [{ messageId: 'thrown' }] },
+    { code: 'export class Pub { go() { throw new Error("x"); } }', filename: `${demo}pub.ts`, errors: [{ messageId: 'thrown' }] },
+  ],
+});
+
+tester.run('allowed-imports of an internal entry', rules['allowed-imports'], {
+  valid: [{ code: "import { simplifyNode } from '@incantly/symbolic/engine';", options: [{ dev: true }] }, "import { run } from '@incantly/symbolic';", "import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';"],
+  invalid: [{ code: "import { simplifyNode } from '@incantly/symbolic/engine';", errors: [{ messageId: 'internal' }] }],
 });
 
 tester.run('no-ai-credit', rules['no-ai-credit'], {
