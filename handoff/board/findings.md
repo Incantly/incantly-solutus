@@ -120,3 +120,51 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-23.** With `touchDraws: 'always'` a finger that draws in `penNear` and lifts leaves the gate `idle`, not `penNear`; the pen is still in range but the gate forgets it until the next pen event, so the palm grace runs from the last pen sample only. Harmless in `always` mode (touch draws anyway); the pen's `hover` also cancels a finger stroke in progress (`touchDown` `penHover` row), which `always` may not want.
 - **BR-24.** A stored `ink` record's `points` array is shared by every record written from it (BR-12), and a typed array cannot be frozen, so a host that writes into `record.props.points` changes the store and the history (BR-10 again, for arrays that came from the store).
 - **BR-25.** `packages/modes/src/locales/ar.ts` has no `mode.notes.*` entries (nor `mode.graphing3d.*`): not checked what the Arabic tile shows.
+
+## Round 3 (PR #134, reviewed at `b2b4a6f`)
+
+### Fix now
+
+#### BR-26. A cancelled drag leaves part of its work behind (new lint rule)
+
+- **Where:** `core/tools/select.ts` (the arrow end drag), and every tool that writes the store during a gesture.
+- **What:** B19 says a cancel writes the originals back; the arrow comes back but the binding the drag removed does not. Each tool keeps its own list of what to put back, so a record the drag touched indirectly (a binding, a bound arrow, a grouped child) is missed.
+- **Fix:** one gesture API in `core/edit.ts`: `beginGesture(origin)`, `gesture.write(fn)` (each write is merged into one undo step), `gesture.commit()`, `gesture.cancel()`. Cancel puts back every record any write of the gesture changed, from the store's own diffs, so nothing can be missed. Every tool uses it. New lint rule: in `packages/board/src/core/tools/**` a call to `.change(` is an error (`no-restricted-syntax` in `eslint.config.js`, with the message "tools write through a gesture, so a cancel puts back everything"). Test: the tester's failing binding test, and a cancel of a group drag with a bound arrow.
+
+#### BR-27. Front and back reverse a multi-selection
+
+- **Where:** `core/edit.ts` order commands.
+- **What:** `back` of [d, c] gives [c, d]; a selection keeps its own order when it moves forward or back (ruling).
+- **Fix:** keep the relative order. Write it in design 7.4. Test: the tester's failing test.
+
+#### BR-28. Default sizes come from two places
+
+- **Ruling:** a kind's default size is in its `KindDef.defaults`, and the shape tool reads it from there (design 7.2), so a host's own kind gets the same rule. Triangle and diamond 120 × 100, star 110 × 105 are fine as their defaults. Change the three tests to read the kind's defaults, and the tool to use them.
+
+#### BR-29. Lines and arrows show only their own handles
+
+- **Ruling:** a line or an arrow alone shows only its own handles (ends, bend), as the code does; with other shapes in the selection the box with 8 handles and rotate shows. Write it in design 7.4 and ui.md, and change the two tests.
+
+#### BR-30. The toolbar
+
+- **What:** the order is not ui.md's (Hand second, Arrow before Line), and the toolbar wraps onto three rows (`round3-shapes.png`).
+- **Fix:** ui.md's order; triangle, diamond and star in a "More shapes" menu on the rectangle button's group, so the toolbar stays one row on a laptop and scrolls on a phone. The studio test follows ui.md and requires the three extras in the menu. Screenshot.
+
+#### BR-31. Text with maths is cut off at its box
+
+- **Where:** the text kind's auto width (`round3-shapes.png`: "½ bh" clipped).
+- **Fix:** auto width measures the laid-out maths boxes, not the source characters. Test: an auto-width text with `$\frac{1}{2}bh$` has a box at least as wide as its layout.
+
+#### BR-32. A drawn pentagon becomes an ellipse
+
+- **What:** the fit order (line, ellipse, polygon) makes a regular pentagon or hexagon a circle, which a teacher who drew a pentagon does not want.
+- **Fix:** find corners first: a stroke with 3 to 6 clear corners (turn over 45°) is tried as a polygon before the ellipse. Update design 7.3. Test: regular pentagon and hexagon become polygons; a circle stays a circle.
+
+#### BR-33. `IMAGE_MACHINE` is not exported
+
+- **Fix:** export it with the other tables from the package entry; the machine test imports it from there.
+
+### Later
+
+- **BR-34.** Image paste and the Image button's file picker were not tried in a browser; an input method (IME) was not tried in the text editor.
+- **BR-35.** Tiles holding shapes are painted with Canvas 2D and uploaded; a WebGL path for shapes would be faster on big boards (measure in round 6 first).
