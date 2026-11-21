@@ -24,6 +24,12 @@ export type BoardErrorKind =
   | 'nothing_to_undo'
   /** The tool id is not registered. */
   | 'tool_unknown'
+  /** Two actions got the same key; the later one has no key. */
+  | 'shortcut_conflict'
+  /** A custom SVG icon has script, event attributes or outside links; the default icon is used. */
+  | 'icon_invalid'
+  /** A figure card's script fails or its mount fails; the card keeps its picture and shows a small error badge. */
+  | 'figure_failed'
   /** WebGL 2 is not available or its context cannot come back: the board draws with Canvas 2D. */
   | 'render_failed'
   /** A callback threw, or a bug in the board. */
@@ -88,6 +94,24 @@ export function withDetail(error: BoardError, detail: Readonly<Record<string, un
 /** A record that fails a check: names the record and the field. */
 export function recordInvalid(record: string, field: string, message: string, hint?: string): BoardError {
   return boardError('record_invalid', message, { ...(hint !== undefined ? { hint } : {}), detail: { record, field } });
+}
+
+/** Where a board error goes: the board's `onError`. */
+export type ErrorSink = (error: BoardError) => void;
+
+/**
+ * The `onRefused` of a state machine (docs/state-machines.md, how to read): a move the table refuses is told to the
+ * board's `onError` as `internal`, with the machine, the state and the event. `sink` is read when a move is refused, so
+ * the owner may set it after the machine is made.
+ */
+export function refusedMove(machine: string, sink: () => ErrorSink | undefined): (from: string, event: string) => void {
+  return (from, event) => {
+    try {
+      sink()?.(boardError('internal', `The ${machine} machine refused "${event}" in the state "${from}".`, { detail: { machine, state: from, event } }));
+    } catch {
+      // the host's error handler failed; there is nobody left to tell
+    }
+  };
 }
 
 /** The text of a thrown value, for an `internal` error. */

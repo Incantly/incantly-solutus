@@ -47,6 +47,11 @@ export const PROPERTIES: Record<string, PropSpec> = {
 };
 
 /** Colour words accepted as bare names in `color = …`. */
+/** An area appends or replaces a property it owns. The registry is written here, by its owner, never by an importer. */
+export function registerProperty(key: string, spec: PropSpec): void {
+  PROPERTIES[key] = spec;
+}
+
 export const COLOR_WORDS: readonly string[] = [
   'red', 'blue', 'green', 'orange', 'purple', 'black', 'grey', 'gray', 'white', 'teal', 'pink', 'brown', 'yellow', 'cyan', 'magenta',
   'lightred', 'lightblue', 'lightgreen', 'darkred', 'darkblue', 'darkgreen', 'lightgrey', 'darkgrey',
@@ -90,3 +95,8 @@ export const DIRECTIVES: Record<string, readonly string[]> = {
   background: ['@background color'],
   fig: ['@fig n'],
 };
+
+/** An area appends or replaces the usage forms of a directive it owns. */
+export function registerDirective(name: string, forms: readonly string[]): void {
+  DIRECTIVES[name] = forms;
+}

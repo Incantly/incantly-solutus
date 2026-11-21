@@ -9,6 +9,7 @@ import { createHeadlessApp } from './app';
 import type { App, HeadlessOptions } from './app';
 import { apiError, need } from './errors';
 import type { ApiError } from './errors';
+import { frameStyleOf } from './export';
 import type { ExportEnv, ExportOptions, ExportResult } from './export';
 import type { IncantlyFile, LoadResult } from './file';
 import { mountGraph } from './screen/graph-pane';
@@ -225,6 +226,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     },
     zoomButtons: ui.zoomButtons,
     panAndZoom: ui.panAndZoom,
+    // this app's own axes and grid (its mode and its `@axes`/`@grid` lines), the same as its picture's
+    style: () => frameStyleOf(core),
     drag: (name, x, y, done) => {
       if (!ui.dragPoints) return;
       const r = core.dragPoint(name, x, y, done);

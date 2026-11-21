@@ -3,6 +3,8 @@
  * middle button pick it for as long as they last; the wheel and the two-finger pan do not need it.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import type { InputSample } from '../input';
 import type { ToolContext, ToolDef, ToolHandlers } from './def';
@@ -17,7 +19,7 @@ export const HAND_MACHINE: MachineTable<HandState, HandEvent> = {
 
 class HandTool implements ToolHandlers {
   readonly #ctx: ToolContext;
-  readonly #machine = new StateMachine(HAND_MACHINE, 'idle');
+  readonly #machine = new StateMachine(HAND_MACHINE, 'idle', refusedMove('hand', () => this.#ctx.core.store.sink));
   #lastX = 0;
   #lastY = 0;
 
@@ -50,7 +52,7 @@ class HandTool implements ToolHandlers {
   }
 
   onCancel(): void {
-    this.#machine.send('cancel');
+    sendIfAble(this.#machine, 'cancel');
   }
 }
 

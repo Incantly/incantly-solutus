@@ -142,6 +142,11 @@ export const ERROR_KINDS: Readonly<Record<string, KindSpec>> = {
   internal: { code: 'K999', phase: 'commit', recovery: 'skip' },
 };
 
+/** An area adds the English template of a key it owns. */
+export function registerMessageTemplate(key: string, template: string): void {
+  MESSAGE_TEMPLATES[key] = template;
+}
+
 /** English templates; `{name}` is replaced from `params`. The key, not the sentence, is the identity. */
 export const MESSAGE_TEMPLATES: Record<string, string> = {
   'lang.syntax': 'Unexpected {token}. Expected {expected}.',

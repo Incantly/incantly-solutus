@@ -6,7 +6,7 @@
  * that choose a tool.
  */
 import { describe, expect, it } from 'vitest';
-import { BUTTON_ERASER, BUTTON_MIDDLE, LASER_FADE_MS, LASER_MAX_POINTS, defaultTools, groupShapes } from '../../src/index';
+import { BUTTON_ERASER, BUTTON_MIDDLE, LASER_FADE_MS, LASER_MAX_POINTS, inkTools, groupShapes } from '../../src/index';
 import type { ShapeRecord } from '../../src/index';
 import { copyOf, drawPath, line, makeRig, pointCount, pointsOf, sample, strokes } from './ink-helpers';
 import type { Rig } from './ink-helpers';
@@ -596,7 +596,7 @@ describe('hand, wheel and pinch (R3.4, design 9 item 1, B11, B12)', () => {
 
 describe('the tool host (B12) and the keys (ui.md)', () => {
   it('the default tools are pen, highlighter, eraser, laser, lasso and hand', () => {
-    expect([...defaultTools.ids()].sort()).toEqual(['eraser', 'hand', 'highlighter', 'laser', 'lasso', 'pen']);
+    expect([...inkTools.ids()].sort()).toEqual(['eraser', 'hand', 'highlighter', 'laser', 'lasso', 'pen']);
   });
 
   it('a tool id that is not registered is tool_unknown and changes nothing', () => {
@@ -659,7 +659,7 @@ describe('the tool host (B12) and the keys (ui.md)', () => {
   });
 
   it('a host can take a tool out of the list and the key for it does nothing', () => {
-    const rig = makeRig({ tools: defaultTools.without('laser') });
+    const rig = makeRig({ tools: inkTools.without('laser') });
     expect(rig.host.setTool('laser').ok).toBe(false);
     rig.host.key(key('k'));
     expect(rig.host.tool).toBe('pen');

@@ -213,10 +213,13 @@ When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from th
 ## 8. Figure cards
 
 - A figure card stores its script, mode and size, as the Tiptap figure node does (`docs/features/tiptap/design.md` 2). The script is the only source of truth; `picture` is a cache.
-- Every figure card on the current page registers with one `SchedulerHost` (view package) per board. At most 3 are live; the rest show their picture inside the board's normal drawing.
-- Web: a live figure is a `createApp` host element placed over the board canvas and moved with the camera (a CSS transform, no re-layout). While the camera moves fast, live figures draw their last frame as a picture and remount when it stops (150 ms).
+- Every figure card on the current page registers with one `SchedulerHost` (view package) per board. At most 3 are live; the rest show their picture inside the board's normal drawing. A card is given a place only when the layer has one (`makeRoom`); when none is free, even for a card that was asked for the input, it stays a picture until the scheduler's next order. A card whose app is lost (the graphics context went, or the app was destroyed from outside) frees it, shows its picture, and is claimed again when the scheduler still wants it.
+- Web: a live figure is a `createApp` host element placed over the board canvas and moved with the camera (a CSS transform, no re-layout). The host is laid out for the steady zoom (between 0.5 and 3) and scaled by the rest. While the camera moves (a pan or a zoom), live figures show a snapshot of their canvas (the card's picture for 3D) and hide the app; 150 ms after the camera stops the host is sized for the new zoom and the app paints again (`web/figures.ts`, B26 to B28).
+- The layer reads the figure shapes of the current page from the store and keeps one card for each; it tells the scheduler which are in view and near from the camera, so a card on another page is never mounted. A card with no `picture` that is not live gets one made from its script in a headless app, one at a time; a live card writes its picture 500 ms after it first paints. The picture is written with `history: false`, and a change of script or mode clears it in the same undo step.
+- The card toolbar (edit lines, mode, play or pause, delete) is a bar over the selected card; edit lines is a panel with the script that writes through `setFigureScript`, so the live card follows the store like an undo does. A figure card in `readOnly` can be used (drag, play) but not changed.
 - React Native: the same card uses the SDK core with the Skia painter. No other change.
 - Double-click (or Enter) on a card gives it the input: drag points, move sliders. Esc gives the input back to the board.
+- A live card draws the axes and grid its own figure asks for (`@axes`, `@grid`, as the mode's default sets them): the frame style belongs to each app, so a card and its picture look the same and two cards with different `@axes` on one board keep their own.
 
 ## 9. Camera, culling, tiles
 
@@ -253,13 +256,15 @@ const board = createBoard({
 });
 ```
 
-- **Tools** are registered with `ToolDef`: an id, an icon, a label, a key, and a state machine of handlers (`onDown`, `onMove`, `onUp`, `onKey`, `onCancel`) that call the core API. Built-in tools use the same interface; `defaultTools` is a list a host filters.
-- **Toolbar** is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI. The default board view lists the tools in the order of `ui.md` and puts triangle, diamond and star in a More shapes menu on the rectangle's group, so the toolbar is one row.
+- **Tools** are registered with `ToolDef`: an id, an icon, a label, a key, and a state machine of handlers (`onDown`, `onMove`, `onUp`, `onKey`, `onCancel`) that call the core API. Built-in tools use the same interface; `defaultTools` is every built-in tool, in the order of `ui.md`, and a host filters it (`defaultTools.without('star')`); `inkTools` is the ink tools and the hand, for a board that only draws.
+- **Toolbar** ids are tool ids and the buttons `image`, `figure`, `fix`, `undo`, `redo` and `more-shapes`; `ui.labels` shows each name beside its icon, and `toolbar.position` is `top`, `bottom`, `left`, `right` or `none`. Figure is a button that makes a card, not a tool. It is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI. The default board view lists the tools in the order of `ui.md` and puts triangle, diamond and star in a More shapes menu on the rectangle's group, so the toolbar is one row.
 - **Icons**: every built-in icon can be replaced by SVG text (checked: no script, no event attributes, no outside links) or by a factory that returns an element.
-- **Keys**: one map from action to key strings; `mod` is Ctrl or Cmd. A key used twice is reported (`shortcut_conflict`) and the later one is dropped.
+- **Keys**: one map from action to key strings; `mod` is Ctrl or Cmd. A key string is written `mod+shift+alt+key`, the key in lower case, whatever order the host wrote it in (B30). A key used twice is reported (`shortcut_conflict`) and the later one is dropped. The host's entries are read first, in the order it wrote them, so its key beats a default; `false` removes an action's keys. The actions are the tool ids and `undo`, `redo`, `delete`, `selectAll`, `duplicate`, `group`, `ungroup`, `forward`, `backward`, `front`, `back`, `zoomIn`, `zoomOut`, `zoom100`, `zoomFit`, `zoomSelection`, `nextPage`, `prevPage`, `figure` (`core/keymap.ts`, B30).
 - **Menus**: the context menu, page menu and main menu are lists of `MenuItem { id, label, icon?, key?, enabled(target), run(target) }`, built by functions the host can wrap.
 - **Theme**: CSS custom properties on the board element, so the host's styles win; light, dark and high contrast are built in.
-- **Strings**: every visible or spoken string goes through one table, using the app-modes language catalogues.
+- **Strings**: every visible or spoken string goes through one table: the host's `strings`, then its `translate` function (a studio gives the app-modes `I18n` over `board.<key>`), then the English table of `core/strings.ts`, then a tool's own label, then the key itself. A key the English table has is never replaced by a tool's label.
+- **Read only**: `readOnly` keeps the hand and the laser, hides the style bar, the selection bar, the edit buttons and the context menu, and leaves figure cards usable.
+- **Page paper**: a page's `background` (plain, grid, dots, lines) is drawn in each tile under the shapes (`drawBackground2D`), so it costs nothing while panning.
 - **Headless**: without `container`, `createBoard` returns the core only (store, pages, tools, agent actions) for servers, tests and a host's own UI.
 
 ## 11. Agents on the board

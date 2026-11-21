@@ -4,6 +4,9 @@
  * guides to draw; it has no clock and writes nothing to the store. No DOM, no timers.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from './machine';
+import { refusedMove } from './errors';
+import type { ErrorSink } from './errors';
 import type { MachineTable } from '@incantly/kernel';
 import type { GuideLine } from './draw';
 import { boxCx, boxCy } from './math2d';
@@ -42,9 +45,14 @@ interface Pull {
 const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.01;
 
 export class Snapper {
-  readonly #machine = new StateMachine(SNAP_MACHINE, 'idle');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(SNAP_MACHINE, 'idle', refusedMove('snapper', () => this.#report));
   #others: readonly Bounds[] = [];
   #guides: readonly GuideLine[] = [];
+
+  constructor(report?: ErrorSink) {
+    this.#report = report;
+  }
 
   get state(): SnapState {
     return this.#machine.state;
@@ -64,7 +72,7 @@ export class Snapper {
   }
 
   end(): void {
-    if (this.#machine.send('end')) {
+    if (sendIfAble(this.#machine, 'end')) {
       this.#others = [];
       this.#guides = [];
     }

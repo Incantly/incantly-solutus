@@ -11,7 +11,7 @@ import { registerReasonPhrase } from '../../errors/phrases';
 import type { Figure } from '../../graph/figure';
 import { registerPropertyTypes } from '../../graph/props';
 import type { ActionCall, ActionOutcome, CommandRegistry, RuleCall } from '../../graph/registry';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import type { CommandSpec, ParamSpec } from '../../language/table';
 import { playerOf, registerFrameTicker } from '../../clock/player';
 import {
@@ -200,7 +200,7 @@ export function registerAnimation(registry: CommandRegistry): void {
     traceJoin: { kind: 'bool', allowed: 'true or false' },
     rerun: { kind: 'enum', values: ['continue', 'restart'], allowed: 'continue or restart' },
   } as const;
-  for (const [key, spec] of Object.entries(props)) if (!Object.hasOwn(PROPERTIES, key)) PROPERTIES[key] = spec as (typeof PROPERTIES)[string];
+  for (const [key, spec] of Object.entries(props)) if (!Object.hasOwn(PROPERTIES, key)) registerProperty(key, spec as (typeof PROPERTIES)[string]);
   const traceTypes = ['Point', ...SHAPE_TRACE_TYPES];
   registerPropertyTypes('trace', traceTypes);
   registerPropertyTypes('traceWindow', traceTypes);

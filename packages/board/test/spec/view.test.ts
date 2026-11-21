@@ -5,7 +5,7 @@
  * Canvas 2D when WebGL 2 is not there.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mountBoardView } from '../../src/index';
+import { defaultTools, mountBoardView } from '../../src/index';
 import type { BoardError, BoardView } from '../../src/index';
 import { drawPath, installCanvas2d, line, sample } from './ink-helpers';
 import type { FakeCanvas } from './ink-helpers';
@@ -81,7 +81,8 @@ describe('the board on a page', () => {
     expect(v.core.pages.list()).toHaveLength(1);
     expect(container.querySelector('[role="toolbar"]')).not.toBeNull();
     const toolIds = [...container.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool']);
-    expect(toolIds).toEqual(['pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand']);
+    // `defaultTools` is every built-in tool (design 10, R7.2)
+    expect(toolIds).toEqual(defaultTools.ids());
     expect(container.querySelector('output[aria-label="Zoom"]')?.textContent).toBe('100%');
     expect(nameButton().textContent).toContain('Page');
   });

@@ -7,11 +7,12 @@
  * No DOM, no timers.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from './machine';
 import type { MachineTable } from '@incantly/kernel';
 import { dropBindingsOf, followBindings } from './bindings';
 import type { BoardCore } from './board';
 import type { BoardResult } from './errors';
-import { boardError, ok } from './errors';
+import { boardError, ok, refusedMove } from './errors';
 import { keyBetween } from './fractional';
 import { shapeGeometry } from './geometry';
 import type { StylePatch } from './kinds/def';
@@ -62,7 +63,7 @@ export class Gesture {
   readonly #core: BoardCore;
   readonly #origin: Origin;
   readonly #key: string;
-  readonly #machine = new StateMachine(GESTURE_MACHINE, 'open');
+  readonly #machine = new StateMachine(GESTURE_MACHINE, 'open', refusedMove('gesture', () => this.#core.store.sink));
   /** Each record a write changed, as it was before the gesture (`undefined`: the gesture added it). */
   readonly #before = new Map<string, BoardRecord | undefined>();
   #writes = 0;
@@ -105,7 +106,7 @@ export class Gesture {
 
   /** The gesture is finished: its writes stay, and the next write with any key starts a new undo step. */
   commit(): void {
-    if (this.#machine.send('commit')) this.#core.history.seal();
+    if (sendIfAble(this.#machine, 'commit')) this.#core.history.seal();
   }
 
   /** The gesture is dropped: every record any write changed is put back, and the undo step it made is gone. */

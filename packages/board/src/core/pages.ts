@@ -11,7 +11,7 @@ import { boardError, ok } from './errors';
 import type { BoardResult } from './errors';
 import { FIRST_KEY, keyBetween } from './fractional';
 import type { Store } from './store';
-import { isBinding, isCamera, isPage } from './types';
+import { PAGE_BACKGROUNDS, isBinding, isCamera, isPage } from './types';
 import type { BindingRecord, CameraRecord, Diff, Origin, PageBackground, PageRecord, ShapeRecord } from './types';
 
 /** B3: `empty` (no page), `single` (one), `several` (2 up to the limit minus one), `full` (the limit). */
@@ -128,6 +128,19 @@ export class Pages {
       return boardError('record_invalid', `A page name is 1 to ${PAGE_NAME_MAX} characters.`, { detail: { record: id, field: 'name' } });
     }
     const done = this.#store.change(origin, (tx) => tx.update(id, { name }));
+    if (!done.ok) return done;
+    return done.value.value as BoardResult<PageRecord>;
+  }
+
+  /** Sets the page's paper: plain, grid, dots or lines. One undo step. */
+  setBackground(id: string, background: PageBackground, origin: Origin = 'user'): BoardResult<PageRecord> {
+    const page = this.get(id);
+    if (page === undefined) return boardError('bad_argument', `There is no page "${id}".`, { detail: { page: id } });
+    if (!(PAGE_BACKGROUNDS as readonly unknown[]).includes(background)) {
+      return boardError('record_invalid', `A page background is one of ${PAGE_BACKGROUNDS.join(', ')}.`, { detail: { record: id, field: 'background' } });
+    }
+    if (page.background === background) return ok(page);
+    const done = this.#store.change(origin, (tx) => tx.update(id, { background }));
     if (!done.ok) return done;
     return done.value.value as BoardResult<PageRecord>;
   }

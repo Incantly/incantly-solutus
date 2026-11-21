@@ -71,6 +71,11 @@ export interface ToolContext {
   strokeDropped(): void;
   /** Chooses another tool (a shape tool hands back to the select tool when its shape is made). */
   setTool?(id: string): void;
+  /**
+   * A double click or Enter on a shape that has no text of its own (a figure card): the shell may use it. True when it did,
+   * so the key was used.
+   */
+  activate?(id: string): boolean;
 }
 
 export interface ToolHandlers {

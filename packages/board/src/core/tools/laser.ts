@@ -3,6 +3,8 @@
  * has no clock of its own: the time of each sample and the `now` given to `tick` come from the input layer.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import type { TrailView } from '../draw';
 import type { InputSample } from '../input';
@@ -24,7 +26,7 @@ export const LASER_MAX_POINTS = 256;
 
 class LaserTool implements ToolHandlers {
   readonly #ctx: ToolContext;
-  readonly #machine = new StateMachine(LASER_MACHINE, 'idle');
+  readonly #machine = new StateMachine(LASER_MACHINE, 'idle', refusedMove('laser', () => this.#ctx.core.store.sink));
   readonly #xy = new Float32Array(LASER_MAX_POINTS * 2);
   readonly #time = new Float64Array(LASER_MAX_POINTS);
   readonly #age = new Float32Array(LASER_MAX_POINTS);
@@ -54,7 +56,7 @@ class LaserTool implements ToolHandlers {
   }
 
   onCancel(): void {
-    this.#machine.send('cancel');
+    sendIfAble(this.#machine, 'cancel');
   }
 
   tick(now: number): boolean {

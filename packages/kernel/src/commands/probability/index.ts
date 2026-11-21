@@ -6,10 +6,10 @@
  */
 import type { ActionCall, CommandRegistry, CommandRule, RuleCall } from '../../graph/registry';
 import { registerPropertyTypes } from '../../graph/props';
-import { FIELDS, registerCommandRename, registerFieldNames, registerFieldTyper } from '../../language/check';
+import { registerFields, registerCommandRename, registerFieldNames, registerFieldTyper } from '../../language/check';
 import type { CommandRename } from '../../language/check';
 import { registerFieldReader } from '../../language/compile';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import { registerValueText } from '../../language/runtime';
 import type { FunctionValue } from '../../language/runtime';
 import type { BoundArg, CommandForm, CommandSpec, ParamSpec, Refusal } from '../../language/table';
@@ -922,10 +922,10 @@ export function registerProbability(registry: CommandRegistry): void {
     });
   }
   // a Region from Shade carries its probability (design 4.3)
-  FIELDS['Region'] = { ...(FIELDS['Region'] ?? {}), mass: T.Number };
+  registerFields('Region', { mass: T.Number });
   registerFieldReader('Region', (field, value) => (field === 'mass' ? (value as { mass?: number }).mass ?? (value as { area?: number }).area : undefined));
   // the re-roll count of a random object (design 6.3): a style property, saved as `with reroll = k`
-  if (!Object.hasOwn(PROPERTIES, 'reroll')) PROPERTIES['reroll'] = { kind: 'int', min: 0, allowed: 'a whole number from 0' };
+  if (!Object.hasOwn(PROPERTIES, 'reroll')) registerProperty('reroll', { kind: 'int', min: 0, allowed: 'a whole number from 0' });
   registerPropertyTypes('reroll', '*');
   registerValueText((v) => (isDist(v) ? distText(v) : undefined));
   registerValueText((v) => {

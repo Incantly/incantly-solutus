@@ -5,6 +5,7 @@
  * to one `WebPainter` and one `WebInput`. The frame loop (B18) and the page bar (B13) are `*_MACHINE` tables.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../core/machine';
 import type { MachineTable } from '@incantly/kernel';
 import { BoardCore } from '../core/board';
 import type { BoardCoreOptions } from '../core/board';
@@ -15,16 +16,16 @@ import type { OverlayItems, Tile } from '../core/draw';
 import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
 import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
-import { ok } from '../core/errors';
+import { boardError, ok, refusedMove } from '../core/errors';
 import { fixStrokes, strokesToFix } from '../core/fix';
-import { shapeGeometry } from '../core/geometry';
+import { shapeBounds, shapeGeometry, unionBounds } from '../core/geometry';
 import type { InputSink, TouchDraws } from '../core/input';
 import { DASHES, FONT_FAMILIES } from '../core/paint';
 import type { Dash, FontFamily } from '../core/paint';
 import { selectionView } from '../core/selection-view';
 import { cssFontFor, setFontMeasure } from '../core/text';
-import { SHAPE_TOOLS, createOverlayState, defaultStyles, defaultTools } from '../core/tools/index';
-import type { ToolContext, ToolList } from '../core/tools/index';
+import { SHAPE_TOOLS, createOverlayState, defaultStyles, defaultTools, editAction } from '../core/tools/index';
+import type { ToolContext, ToolDef, ToolList } from '../core/tools/index';
 import { ToolHost } from '../core/tools/host';
 import type { StylePatch } from '../core/kinds/def';
 import type { Bounds, ShapeRecord } from '../core/types';
@@ -32,6 +33,20 @@ import { ImageCache } from './images';
 import { WebInput } from './input';
 import { WebPainter } from './painter';
 import { TILE_GUTTER } from './painter-2d';
+import { FigureLayer } from './figures';
+import { defaultIcon } from './ui/icons';
+import { MenuHost } from './ui/menus';
+import type { MenuItem, MenuTarget } from './ui/menus';
+import { MORE_SHAPES, resolveShell, toolsFor } from './ui/shell';
+import type { Shell, ShellOptions } from './ui/shell';
+import { CSS, STYLE_ID } from './ui/styles';
+import { describeKey } from '../core/keymap';
+import { addFigure } from '../core/figures';
+import { pickShape } from '../core/pick';
+import { selectionFor } from '../core/shapes';
+import { saveBoard } from '../core/file';
+import type { PageBackground } from '../core/types';
+import { PAGE_BACKGROUNDS } from '../core/types';
 
 // ---------------------------------------------------------------------------------------------------------------
 // B18: the frame loop
@@ -48,13 +63,14 @@ export const LOOP_MACHINE: MachineTable<LoopState, LoopEvent> = {
 
 /** A frame is asked for from anywhere, runs once on the next animation frame, and one asked for during a frame runs after it. */
 class FrameLoop {
-  readonly #machine = new StateMachine(LOOP_MACHINE, 'idle');
+  readonly #machine: StateMachine<LoopState, LoopEvent>;
   readonly #schedule: (cb: (now: number) => void) => number;
   readonly #cancel: (id: number) => void;
   readonly #body: (now: number) => boolean;
   #handle = 0;
 
-  constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean) {
+  constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean, report?: (error: BoardError) => void) {
+    this.#machine = new StateMachine(LOOP_MACHINE, 'idle', refusedMove('frame loop', () => report));
     this.#schedule = schedule;
     this.#cancel = cancel;
     this.#body = body;
@@ -118,6 +134,10 @@ export interface BoardViewOptions {
   /** The tools; default `defaultTools`. */
   readonly tools?: ToolList;
   readonly touchDraws?: TouchDraws;
+  /** The shell, resolved by `resolveShell` (what `createBoard` does); default the defaults. */
+  readonly shell?: Shell;
+  /** The customisation options, when `shell` is not given. */
+  readonly shellOptions?: ShellOptions;
   /** Draw with Canvas 2D only. */
   readonly canvas2dOnly?: boolean;
   /** Called with errors the view can only report (`render_failed`). */
@@ -142,43 +162,20 @@ export interface BoardView {
   fix(): BoardResult<string[]>;
   /** Adds an image from its bytes at the middle of the view (`asset_invalid` when they are not an image). */
   insertImage(bytes: Uint8Array): BoardResult<undefined>;
+  /** The shell the view was made with: toolbar, keys, strings, parts. */
+  readonly shell: Shell;
+  /** The live figure cards over the canvas. */
+  readonly figures: FigureLayer;
+  /** The menus of the board (main, page, context). */
+  readonly menus: MenuHost;
+  /** Adds a figure card with its middle at the middle of the view and gives it the input. */
+  addFigure(mode?: string): BoardResult<string>;
+  /** Sets the paper of the current page (BR-18): plain, grid, dots or lines. */
+  setBackground(background: PageBackground): BoardResult<undefined>;
+  /** Goes to the next page (`1`) or the previous one (`-1`); false at the end of the list. */
+  stepPage(direction: 1 | -1): boolean;
   dispose(): void;
 }
-
-const STYLE_ID = 'incantly-board-view-style';
-/** The shapes in the "More shapes" menu. */
-const MORE_SHAPES: readonly string[] = ['triangle', 'diamond', 'star'];
-const CSS = `
-.ib-view{position:relative;width:100%;height:100%;min-height:200px;overflow:hidden;background:#fbfbfa;color:#1f2430;font:13px/1.3 system-ui,sans-serif;user-select:none;-webkit-user-select:none}
-.ib-surface{position:absolute;inset:0;outline:none;cursor:crosshair}
-.ib-bar{position:absolute;display:flex;align-items:center;gap:4px;padding:4px;background:#fff;border:1px solid #d5d7dd;border-radius:10px;box-shadow:0 2px 8px rgba(15,23,42,.12)}
-.ib-bar button,.ib-bar select{font:inherit;border:1px solid transparent;border-radius:7px;background:transparent;padding:5px 9px;cursor:pointer;color:inherit}
-.ib-bar button:hover{background:#eef0f4}.ib-bar button[aria-pressed=true]{background:#e0e7ff;border-color:#a5b4fc}
-.ib-bar button:disabled{opacity:.4;cursor:default}
-.ib-tools{left:0;right:0;margin:0 auto;bottom:14px;width:max-content;max-width:calc(100% - 340px);gap:2px;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
-.ib-tools button{flex:none;white-space:nowrap;padding:5px 5px;font-size:12px}
-.ib-tools .ib-sep{flex:none}
-.ib-list.ib-more{left:0;top:auto;bottom:62px;min-width:120px}
-.ib-style{right:12px;top:70px;flex-wrap:wrap;max-width:300px;justify-content:flex-start}
-.ib-style[hidden],.ib-list[hidden]{display:none}
-.ib-sep{width:1px;align-self:stretch;background:#d5d7dd;margin:2px 2px}
-.ib-swatch{width:22px;height:22px;padding:0!important;border-radius:50%!important;border:2px solid #fff!important;box-shadow:0 0 0 1px #c5c8d0}
-.ib-swatch[aria-pressed=true]{box-shadow:0 0 0 2px #4f46e5!important;background-clip:padding-box}
-.ib-pages{left:12px;top:12px}
-.ib-list{position:absolute;left:0;top:100%;margin-top:6px;min-width:170px;background:#fff;border:1px solid #d5d7dd;border-radius:10px;box-shadow:0 6px 18px rgba(15,23,42,.16);padding:4px;display:flex;flex-direction:column}
-.ib-list button{text-align:start}
-.ib-zoom{right:12px;bottom:14px}
-.ib-zoom output{min-width:46px;text-align:center}
-.ib-size{width:90px}
-.ib-actions{left:50%;top:12px;transform:translateX(-50%);flex-wrap:wrap;justify-content:center;max-width:92%}
-.ib-actions[hidden]{display:none}
-.ib-actions button{padding:4px 7px;font-size:12px}
-.ib-swatch-none{background:linear-gradient(135deg,#fff 45%,#dc2626 45%,#dc2626 55%,#fff 55%)}
-.ib-edit{position:absolute;margin:0;padding:4px;border:2px solid #2563eb;border-radius:4px;outline:none;resize:none;overflow:hidden;box-sizing:border-box;background:#fff;color:#1f2430;white-space:pre-wrap;line-height:1.3;z-index:5;transform-origin:center center}
-.ib-edit[hidden]{display:none}
-.ib-fixed{position:absolute;left:50%;top:60px;transform:translateX(-50%);background:#1f2430;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;opacity:.92}
-.ib-fixed[hidden]{display:none}
-`;
 
 const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...kids: (Node | string)[]): HTMLElementTagNameMap[K] => {
   const n = document.createElement(tag);
@@ -222,10 +219,19 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     const style = h('style', { id: STYLE_ID }, CSS);
     doc.head.append(style);
   }
+  const report = (e: BoardError): void => options.onError?.(e);
+  const wantReadOnly = options.shell !== undefined ? options.shell.readOnly : options.shellOptions?.readOnly === true;
+  const tools = toolsFor(options.tools ?? defaultTools, wantReadOnly);
+  const shell =
+    options.shell ??
+    resolveShell({ ...options.shellOptions, ...(options.touchDraws !== undefined ? { pen: { touchDraws: options.touchDraws } } : {}) }, tools, report);
+  const { strings } = shell;
+  const readOnly = shell.readOnly;
 
   const painter = new WebPainter({
     ...(options.canvas2dOnly === true ? { canvas2dOnly: true } : {}),
     onNotice: (e) => options.onError?.(e),
+    onError: report,
     requestFrame: () => loop.request(),
   });
   const overlay = createOverlayState();
@@ -240,8 +246,9 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     requestFrame: () => loop.request(),
     strokeEnded: () => painter.releaseLive(),
     strokeDropped: () => painter.abortLive(),
+    activate: (id) => figures.activate(id),
   };
-  const host = new ToolHost(ctx, options.tools ?? defaultTools, 'pen');
+  const host = new ToolHost(ctx, tools, readOnly ? 'hand' : 'pen', shell.keys);
   installFontMeasure(doc);
   core.index.refresh();
   const images = new ImageCache(core.store, () => {
@@ -251,15 +258,33 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   painter.setImages(images.lookup);
 
   // ---- DOM
-  const root = h('div', { class: 'ib-view', 'data-board-view': '' });
-  const surface = h('div', { class: 'ib-surface', role: 'application', 'aria-label': 'Board', tabindex: '0' });
+  const root = h('div', { class: 'ib-view', 'data-board-view': '', 'data-theme': shell.theme.name, 'data-toolbar': shell.position });
+  for (const [name, value] of Object.entries(shell.theme.vars)) root.style.setProperty(name, value);
+  const surface = h('div', { class: 'ib-surface', role: 'application', 'aria-label': strings.t('board.label'), tabindex: '0' });
   surface.append(painter.element);
-  const toolBar = h('div', { class: 'ib-bar ib-tools', role: 'toolbar', 'aria-label': 'Tools' });
-  const styleBar = h('div', { class: 'ib-bar ib-style', 'aria-label': 'Style' });
-  const pageBar = h('div', { class: 'ib-bar ib-pages', 'aria-label': 'Pages' });
-  const zoomBar = h('div', { class: 'ib-bar ib-zoom', 'aria-label': 'Zoom' });
-  root.append(surface, styleBar, toolBar, pageBar, zoomBar);
+  const toolBar = h('div', { class: 'ib-bar ib-tools', role: 'toolbar', 'aria-label': strings.t('toolbar.label'), 'data-position': shell.position });
+  const styleBar = h('div', { class: 'ib-bar ib-style', 'aria-label': strings.t('style.label') });
+  const pageBar = h('div', { class: 'ib-bar ib-pages', 'aria-label': strings.t('pages.label') });
+  const zoomBar = h('div', { class: 'ib-bar ib-zoom', 'aria-label': strings.t('zoom.label') });
+  root.append(surface);
+  if (shell.ui.styleBar && !readOnly) root.append(styleBar);
+  if (shell.position !== 'none') root.append(toolBar);
+  if (shell.ui.pages) root.append(pageBar);
+  if (shell.ui.zoom) root.append(zoomBar);
   options.container.append(root);
+  // the figure cards sit between the tiles and the overlay, so handles and guides draw over a card
+  const figures = new FigureLayer({
+    core,
+    doc,
+    bars: root,
+    strings,
+    readOnly,
+    onError: report,
+    requestFrame: () => loop.request(),
+    focusBoard: () => surface.focus({ preventScroll: true }),
+  });
+  painter.element.insertBefore(figures.element, painter.element.lastElementChild);
+  const menus = new MenuHost({ root, fns: shell.menus, label: (k) => strings.t(k), onError: report, requestFrame: () => loop.request(), mac: shell.mac });
 
   // ---- the frame
   const sizeOf = (): { w: number; h: number } => ({ w: surface.clientWidth, h: surface.clientHeight });
@@ -282,6 +307,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     list.sort((a, b) => Math.hypot(a.box.minX - cx, a.box.minY - cy) - Math.hypot(b.box.minX - cx, b.box.minY - cy));
     const began = painter.beginFrame(camera, dpr);
     if (!began.ok) return true;
+    const background = core.pages.get(page)?.background ?? 'none';
     let drawn = 0;
     let waiting = 0;
     for (const tile of list) {
@@ -290,7 +316,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
         const box = tileBox(tile.k, tile.tx, tile.ty);
         const grow = TILE_GUTTER / scale;
         const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
-        painter.drawTile(tile, { box: region, items: core.drawList.itemsIn(region, scale) });
+        painter.drawTile(tile, { box: region, items: core.drawList.itemsIn(region, scale), background });
         drawn++;
       } else {
         if (tile.needsDraw) waiting++;
@@ -317,6 +343,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       hint: overlay.hint,
     };
     placeField();
+    if (figures.sync(camera, w, height, now)) more = true;
     painter.drawOverlay(items);
     painter.endFrame();
     zoomOut.value = `${Math.round(camera.zoom * 100)}%`;
@@ -326,12 +353,15 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     root.dataset['tool'] = host.tool;
     root.dataset['editing'] = editor.state;
     root.dataset['tiles'] = String(painter.tiles.size);
+    root.dataset['cards'] = String(figures.cards.size);
+    root.dataset['live'] = String(figures.liveCount);
     return more;
   };
   const loop = new FrameLoop(
     (cb) => window.requestAnimationFrame(cb),
     (id) => window.cancelAnimationFrame(id),
     render,
+    report,
   );
 
   // ---- input
@@ -346,12 +376,14 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     wheel: (w) => host.wheel(w),
     gesture: (g) => host.gesture(g),
   };
-  const input = new WebInput({ element: surface, sink, ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
+  const input = new WebInput({ element: surface, sink, report, ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
 
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
     const page = core.pages.current;
     if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds)) painter.tiles.invalidate(region);
+    // a page's paper changed: every tile shows it
+    if (diff.updated.some((u) => (u.after as { background?: string }).background !== (u.before as { background?: string }).background)) painter.tiles.invalidateAll();
     loop.request();
   });
   let lastPage = core.pages.current;
@@ -369,7 +401,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     overlay.loop = null;
     pageName.textContent = `${core.pages.get(page ?? '')?.name ?? 'Page'} ▾`;
     pageList.hidden = true;
-    pagesState.send('close');
+    sendIfAble(pagesState, 'close');
     loop.request();
   });
   const stopSelection = core.selection.on(() => {
@@ -381,9 +413,45 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   // ---- tool strip and style strip
   const toolButtons = new Map<string, HTMLButtonElement>();
   const shapeToolIds = new Set(SHAPE_TOOLS.map((t) => t.id));
+  const hintFor = (action: string): string => {
+    const k = shell.keys.keysOf(action)[0];
+    return k === undefined ? '' : ` (${describeKey(k, shell.mac)})`;
+  };
+  /** The icon of a tool or action: the host's SVG text or factory, else the built-in one; undefined when there is none (the label shows). */
+  const iconFor = (id: string): HTMLElement | undefined => {
+    const holder = h('span', { class: 'ib-ico', 'aria-hidden': 'true' });
+    const custom = shell.icons.get(id);
+    if (typeof custom === 'function') {
+      try {
+        holder.append(custom(doc));
+        return holder;
+      } catch (e) {
+        report(boardError('icon_invalid', `The icon factory of "${id}" threw: ${e instanceof Error ? e.message : String(e)}.`, { detail: { tool: id } }));
+      }
+    }
+    const svg = typeof custom === 'string' ? custom : defaultIcon(id);
+    if (svg === undefined) return undefined;
+    holder.innerHTML = svg;
+    return holder;
+  };
+  /** A toolbar button: the icon (and the label when the host asks for labels), or the label alone when there is no icon. */
+  const makeButton = (id: string, label: string, title: string, attrs: Record<string, string>, labelled = shell.ui.labels): HTMLButtonElement => {
+    const b = h('button', { type: 'button', title, 'aria-label': label, ...attrs });
+    const icon = iconFor(id);
+    if (icon === undefined) b.append(label);
+    else {
+      b.append(icon);
+      if (labelled) b.append(label);
+    }
+    return b;
+  };
+  const toolLabel = (id: string, fallback: string): string => strings.t(`tool.${id}`, fallback);
   // triangle, diamond and star are in a "More shapes" menu on the rectangle's group, so the strip stays one row (ui.md)
-  const moreMenu = h('div', { class: 'ib-list ib-more', role: 'menu', 'aria-label': 'More shapes', hidden: '' });
-  const moreBtn = h('button', { type: 'button', title: 'More shapes', 'aria-label': 'More shapes', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'more-shapes' }, '▾');
+  const placed = new Set(shell.groups.flat());
+  const moreIds = MORE_SHAPES.filter((id) => host.tools.some((t) => t.id === id) && !placed.has(id));
+  const moreLabel = strings.t('action.moreShapes');
+  const moreMenu = h('div', { class: 'ib-list ib-more', role: 'menu', 'aria-label': moreLabel, hidden: '' });
+  const moreBtn = h('button', { type: 'button', title: moreLabel, 'aria-label': moreLabel, 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'more-shapes' }, '▾');
   /** Opens or closes the menu above its button. The menu's `hidden` is its state: no other field says it. */
   const showMore = (open: boolean): void => {
     moreMenu.hidden = !open;
@@ -392,48 +460,20 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     const at = moreBtn.getBoundingClientRect();
     const box = root.getBoundingClientRect();
     moreMenu.style.left = `${Math.max(0, at.left - box.left)}px`;
+    if (shell.position === 'left' || shell.position === 'right') moreMenu.style.top = `${Math.max(0, at.top - box.top)}px`;
   };
-  const hasMore = host.tools.some((t) => MORE_SHAPES.includes(t.id)) && host.tools.some((t) => t.id === 'rect');
-  for (const def of host.tools) {
-    const extra = hasMore && MORE_SHAPES.includes(def.id);
-    // the shape tools sit in a group of their own
-    if (def.id === SHAPE_TOOLS[0]?.id) toolBar.append(h('span', { class: 'ib-sep' }));
-    const b = h('button', { type: 'button', 'aria-pressed': 'false', title: def.key !== undefined ? `${def.label} (${def.key})` : def.label, 'data-tool': def.id }, def.label);
+  const makeToolButton = (def: ToolDef): HTMLButtonElement => {
+    const label = toolLabel(def.id, def.label);
+    const b = makeButton(def.id, label, `${label}${hintFor(def.id)}`, { 'aria-pressed': 'false', 'data-tool': def.id });
     b.addEventListener('click', () => {
       showMore(false);
       host.setTool(def.id);
     });
-    if (extra) {
-      b.setAttribute('role', 'menuitem');
-      moreMenu.append(b);
-    } else {
-      toolBar.append(b);
-      if (hasMore && def.id === 'rect') toolBar.append(moreBtn);
-    }
     toolButtons.set(def.id, b);
-  }
-  if (hasMore) {
-    moreBtn.addEventListener('click', () => showMore(moreMenu.hasAttribute('hidden')));
-    moreBtn.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') showMore(false);
-    });
-    moreMenu.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      showMore(false);
-      moreBtn.focus();
-    });
-    // a press anywhere else on the board closes the menu
-    root.addEventListener('pointerdown', (e) => {
-      const t = e.target as Node;
-      if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
-    });
-    root.append(moreMenu);
-  }
+    return b;
+  };
   // an image comes from a file; Fix turns the newest stroke (or the selected ones) into a clean shape
-  const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', hidden: '', 'aria-label': 'Choose an image' });
-  const imageBtn = h('button', { type: 'button', title: 'Add an image (or paste one)', 'data-action': 'image' }, 'Image');
-  imageBtn.addEventListener('click', () => fileInput.click());
-  const fixBtn = h('button', { type: 'button', title: 'Fix a rough shape: line, circle, polygon or arrow (or hold the pen still for half a second)', 'data-action': 'fix' }, 'Fix');
+  const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', hidden: '', 'aria-label': strings.t('action.image') });
   const note = h('div', { class: 'ib-fixed', role: 'status', hidden: '' });
   let noteTimer = 0;
   const say = (text: string): void => {
@@ -467,15 +507,30 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     if (file === undefined) return;
     void file.arrayBuffer().then((buf) => addImageBytes(new Uint8Array(buf), viewCentre()));
   });
-  fixBtn.addEventListener('click', () => {
+  const fixNow = (): void => {
     const fixed = fixStrokes(core, strokesToFix(core));
     if (fixed.ok && fixed.value.length > 0) core.selection.set(fixed.value);
-    else say(fixed.ok ? 'No clean shape fits that stroke.' : fixed.message);
+    else say(fixed.ok ? strings.t('note.noFix') : fixed.message);
     loop.request();
-  });
-  root.append(note, fileInput);
-  const undoBtn = h('button', { type: 'button', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo' }, '↶');
-  const redoBtn = h('button', { type: 'button', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo' }, '↷');
+  };
+  /** Adds a figure card at the middle of the view, selects it and asks for the input (it goes live and takes it). */
+  const addFigureHere = (mode?: string): BoardResult<string> => {
+    const made = addFigure(core, { at: viewCentre(), ...(mode !== undefined ? { mode } : {}) });
+    if (!made.ok) {
+      report(made);
+      say(made.message);
+      return made;
+    }
+    core.selection.set([made.value]);
+    host.setTool('select');
+    figures.activate(made.value);
+    loop.request();
+    return made;
+  };
+  const undoLabel = strings.t('action.undo');
+  const redoLabel = strings.t('action.redo');
+  const undoBtn = makeButton('undo', undoLabel, `${undoLabel}${hintFor('undo')}`, { 'data-action': 'undo' });
+  const redoBtn = makeButton('redo', redoLabel, `${redoLabel}${hintFor('redo')}`, { 'data-action': 'redo' });
   undoBtn.addEventListener('click', () => {
     core.history.undo();
     loop.request();
@@ -484,7 +539,66 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     core.history.redo();
     loop.request();
   });
-  toolBar.append(h('span', { class: 'ib-sep' }), imageBtn, fixBtn, h('span', { class: 'ib-sep' }), undoBtn, redoBtn);
+  /** The buttons that are not tools, by the id a toolbar group names. */
+  const actionButton = (id: string): HTMLElement | undefined => {
+    if (id === 'more-shapes') return moreIds.length > 0 ? moreBtn : undefined;
+    if (readOnly) return undefined;
+    if (id === 'undo') return shell.ui.history ? undoBtn : undefined;
+    if (id === 'redo') return shell.ui.history ? redoBtn : undefined;
+    if (id === 'image') {
+      const b = makeButton('image', strings.t('action.image'), strings.t('action.image.title'), { 'data-action': 'image' });
+      b.addEventListener('click', () => fileInput.click());
+      return b;
+    }
+    if (id === 'figure') {
+      const b = makeButton('figure', strings.t('action.figure'), `${strings.t('action.figure.title')}${hintFor('figure')}`, { 'data-action': 'figure' });
+      b.addEventListener('click', () => void addFigureHere());
+      return b;
+    }
+    if (id === 'fix') {
+      const b = makeButton('fix', strings.t('action.fix'), strings.t('action.fix.title'), { 'data-action': 'fix' });
+      b.addEventListener('click', fixNow);
+      return b;
+    }
+    return undefined;
+  };
+  for (const group of shell.groups) {
+    const buttons: HTMLElement[] = [];
+    for (const id of group) {
+      const def = host.tools.find((t) => t.id === id);
+      const b = def !== undefined ? makeToolButton(def) : actionButton(id);
+      if (b !== undefined) buttons.push(b);
+    }
+    if (buttons.length === 0) continue;
+    if (toolBar.childElementCount > 0) toolBar.append(h('span', { class: 'ib-sep' }));
+    toolBar.append(...buttons);
+  }
+  // the shapes of the More menu are tools too, with the same buttons
+  for (const id of moreIds) {
+    const def = host.tools.find((t) => t.id === id);
+    if (def === undefined) continue;
+    const b = makeToolButton(def);
+    b.setAttribute('role', 'menuitem');
+    moreMenu.append(b);
+  }
+  if (moreIds.length > 0) {
+    moreBtn.addEventListener('click', () => showMore(moreMenu.hasAttribute('hidden')));
+    moreBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') showMore(false);
+    });
+    moreMenu.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      showMore(false);
+      moreBtn.focus();
+    });
+    // a press anywhere else on the board closes the menu
+    root.addEventListener('pointerdown', (e) => {
+      const t = e.target as Node;
+      if (!moreMenu.hasAttribute('hidden') && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
+    });
+    root.append(moreMenu);
+  }
+  root.append(note, fileInput);
   const syncHistory = (): void => {
     undoBtn.disabled = !core.history.canUndo;
     redoBtn.disabled = !core.history.canRedo;
@@ -536,12 +650,30 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       kids.push(size);
     } else if (shapeToolIds.has(tool) || (tool === 'select' && core.selection.size > 0)) {
       kids.push(...shapeStyleControls());
+    } else if ((tool === 'select' || tool === 'hand') && core.selection.size === 0) {
+      kids.push(...backgroundControls());
     }
     styleBar.replaceChildren(...kids);
     styleBar.hidden = kids.length === 0;
     for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(id === tool));
     moreBtn.setAttribute('aria-pressed', String(MORE_SHAPES.includes(tool)));
     surface.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
+  };
+
+  /** The page's paper (BR-18): plain, grid, dots or lines. Shown when nothing is selected and the tool has no style of its own. */
+  const backgroundControls = (): (Node | string)[] => {
+    const page = core.pages.current;
+    const current = page === null ? 'none' : (core.pages.get(page)?.background ?? 'none');
+    const kids: (Node | string)[] = [h('span', {}, strings.t('page.background'))];
+    for (const bg of PAGE_BACKGROUNDS) {
+      const b = h('button', { type: 'button', 'data-background': bg, 'aria-pressed': String(bg === current) }, strings.t(`background.${bg}`));
+      b.addEventListener('click', () => {
+        api.setBackground(bg);
+        renderStyle();
+      });
+      kids.push(b);
+    }
+    return kids;
   };
 
   /** Colour, fill, dash, size and font: they set what new shapes are made with and change the selected shapes. */
@@ -604,11 +736,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   renderStyle();
 
   // ---- what to do with the selection
-  const actionBar = h('div', { class: 'ib-bar ib-actions', 'aria-label': 'Selection' });
+  const actionBar = h('div', { class: 'ib-bar ib-actions', 'aria-label': strings.t('selection.label') });
   actionBar.hidden = true;
-  root.append(actionBar);
+  if (shell.ui.selectionBar && !readOnly) root.append(actionBar);
+  /** `Flip H` as the string key `selection.flipH`. */
+  const selKey = (label: string): string => `selection.${label.charAt(0).toLowerCase()}${label.slice(1).replace(/ (\w)/g, (_m, c: string) => c.toUpperCase())}`;
   const act = (label: string, title: string, run: () => void): HTMLButtonElement => {
-    const b = h('button', { type: 'button', title, 'data-action': label.toLowerCase() }, label);
+    const b = h('button', { type: 'button', title, 'data-action': label.toLowerCase() }, strings.t(selKey(label), label));
     b.addEventListener('click', () => {
       run();
       loop.request();
@@ -616,7 +750,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     return b;
   };
   const menu = (label: string, choices: readonly (readonly [string, () => void])[]): HTMLSelectElement => {
-    const sel = h('select', { 'aria-label': label, 'data-action': label.toLowerCase() }, h('option', { value: '' }, label));
+    const shown = strings.t(selKey(label), label);
+    const sel = h('select', { 'aria-label': shown, 'data-action': label.toLowerCase() }, h('option', { value: '' }, shown));
     choices.forEach(([name], i) => sel.append(h('option', { value: String(i) }, name)));
     sel.addEventListener('change', () => {
       const pick = choices[Number(sel.value)];
@@ -811,10 +946,10 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   root.addEventListener('paste', onPaste);
 
   // ---- page bar
-  const pagesState = new StateMachine(PAGEBAR_MACHINE, 'closed');
-  const pageName = h('button', { type: 'button', 'aria-haspopup': 'listbox', 'aria-label': 'Pages' }, `${core.pages.get(core.pages.current ?? '')?.name ?? 'Page'} ▾`);
-  const addBtn = h('button', { type: 'button', title: 'Add a page', 'aria-label': 'Add a page' }, '+');
-  const pageList = h('div', { class: 'ib-list', role: 'listbox', 'aria-label': 'Pages' });
+  const pagesState = new StateMachine(PAGEBAR_MACHINE, 'closed', refusedMove('page bar', () => report));
+  const pageName = h('button', { type: 'button', 'aria-haspopup': 'listbox', 'aria-label': strings.t('pages.label') }, `${core.pages.get(core.pages.current ?? '')?.name ?? 'Page'} ▾`);
+  const addBtn = h('button', { type: 'button', title: strings.t('pages.add'), 'aria-label': strings.t('pages.add') }, '+');
+  const pageList = h('div', { class: 'ib-list', role: 'listbox', 'aria-label': strings.t('pages.label') });
   pageList.hidden = true;
   const fillList = (): void => {
     pageList.replaceChildren(
@@ -829,27 +964,69 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     if (pagesState.state === 'closed' && pagesState.send('open')) {
       fillList();
       pageList.hidden = false;
-    } else if (pagesState.send('close')) {
+    } else if (sendIfAble(pagesState, 'close')) {
       pageList.hidden = true;
     }
   });
   addBtn.addEventListener('click', () => api.addPage());
-  pageBar.append(pageName, addBtn, pageList);
+  // the main menu and the menu of the current page: lists the host can change (B29)
+  const mainBtn = makeButton('menu', strings.t('menu.main'), strings.t('menu.main'), { 'aria-haspopup': 'menu', 'data-action': 'main-menu' }, false);
+  const pageMenuBtn = h('button', { type: 'button', title: strings.t('pages.menu'), 'aria-label': strings.t('pages.menu'), 'aria-haspopup': 'menu', 'data-action': 'page-menu' }, '⋯');
+  menus.addAnchor(mainBtn);
+  menus.addAnchor(pageMenuBtn);
+  mainBtn.addEventListener('click', () => menus.open('main', mainItems(), { kind: 'main' }, mainBtn));
+  pageMenuBtn.addEventListener('click', () => {
+    const page = core.pages.current;
+    if (page !== null) menus.open('page', pageItems(), { kind: 'page', page }, pageMenuBtn);
+  });
+  if (shell.ui.mainMenu && !readOnly) pageBar.append(mainBtn);
+  pageBar.append(pageName, addBtn);
+  if (!readOnly) pageBar.append(pageMenuBtn);
+  pageBar.append(pageList);
   const onKeyEscape = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && pagesState.send('close')) pageList.hidden = true;
+    if (e.key === 'Escape' && sendIfAble(pagesState, 'close')) pageList.hidden = true;
   };
   root.addEventListener('keydown', onKeyEscape);
 
   // ---- zoom bar
-  const zoomOut = h('output', { 'aria-label': 'Zoom' }, '100%');
+  const zoomOut = h('output', { 'aria-label': strings.t('zoom.label') }, '100%');
   const zoomBy = (factor: number): void => {
     const { w, h: height } = sizeOf();
     core.camera?.zoomBy(factor, w / 2, height / 2, performance.now());
     loop.request();
   };
-  const minus = h('button', { type: 'button', title: 'Zoom out', 'aria-label': 'Zoom out' }, '−');
-  const plus = h('button', { type: 'button', title: 'Zoom in', 'aria-label': 'Zoom in' }, '+');
-  const reset = h('button', { type: 'button', title: 'Zoom to 100%', 'aria-label': 'Zoom to 100%' }, '1:1');
+  const minus = h('button', { type: 'button', title: strings.t('zoom.out'), 'aria-label': strings.t('zoom.out') }, '−');
+  const plus = h('button', { type: 'button', title: strings.t('zoom.in'), 'aria-label': strings.t('zoom.in') }, '+');
+  const reset = h('button', { type: 'button', title: strings.t('zoom.reset'), 'aria-label': strings.t('zoom.reset') }, '1:1');
+  const fitBtn = h('button', { type: 'button', title: strings.t('zoom.fit'), 'aria-label': strings.t('zoom.fit'), 'data-action': 'zoom-fit' }, '⤢');
+  const selBtn = h('button', { type: 'button', title: strings.t('zoom.selection'), 'aria-label': strings.t('zoom.selection'), 'data-action': 'zoom-selection' }, '◎');
+  /** Puts the camera so `box` fills the view with a margin; a box with no area keeps the zoom. */
+  const zoomToBox = (box: Bounds | undefined): void => {
+    const camera = core.camera;
+    if (camera === undefined || box === undefined) return;
+    const { w, h: height } = sizeOf();
+    const bw = Math.max(1, box.maxX - box.minX);
+    const bh = Math.max(1, box.maxY - box.minY);
+    const zoom = Math.min(20, Math.max(0.05, Math.min((w - 160) / bw, (height - 200) / bh)));
+    const z = Math.min(zoom, 2);
+    camera.moveTo((box.minX + box.maxX) / 2 - w / z / 2, (box.minY + box.maxY) / 2 - height / z / 2, z, performance.now());
+    loop.request();
+  };
+  const boxOf = (shapes: readonly ShapeRecord[]): Bounds | undefined => {
+    let all: Bounds | undefined;
+    for (const sh of shapes) all = unionBounds(all, shapeBounds(sh, core.store.kinds));
+    return all;
+  };
+  const zoomFit = (): void => {
+    const page = core.pages.current;
+    if (page !== null) zoomToBox(boxOf(core.store.shapesOn(page)));
+  };
+  const zoomSelection = (): void => {
+    const picked = core.selection.ids.map((id) => core.store.get(id)).filter((r): r is ShapeRecord => r !== undefined && r.id.startsWith('shape:'));
+    zoomToBox(boxOf(picked));
+  };
+  fitBtn.addEventListener('click', zoomFit);
+  selBtn.addEventListener('click', zoomSelection);
   minus.addEventListener('click', () => zoomBy(1 / 1.25));
   plus.addEventListener('click', () => zoomBy(1.25));
   reset.addEventListener('click', () => {
@@ -859,7 +1036,116 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     camera.zoomAbout(1, w / 2, height / 2, performance.now());
     loop.request();
   });
-  zoomBar.append(minus, zoomOut, plus, reset);
+  zoomBar.append(minus, zoomOut, plus, reset, fitBtn, selBtn);
+
+  // ---- menus (B29): default items, wrapped by the host's functions when a menu opens
+  const saveFile = (): void => {
+    const text = saveBoard(core.store);
+    if (!text.ok) {
+      report(text);
+      say(text.message);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([text.value], { type: 'application/json' }));
+    const a = h('a', { href: url, download: 'board.incantly-board' });
+    doc.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+  const item = (id: string, label: string, run: (t: MenuTarget) => void, extra: { icon?: string; key?: string; enabled?: (t: MenuTarget) => boolean } = {}): MenuItem => {
+    const keyText = extra.key ?? shell.keys.keysOf(id)[0];
+    return {
+      id,
+      label,
+      ...(extra.icon !== undefined ? { icon: extra.icon } : {}),
+      ...(keyText !== undefined ? { key: keyText } : {}),
+      ...(extra.enabled !== undefined ? { enabled: extra.enabled } : {}),
+      run,
+    };
+  };
+  const mainItems = (): readonly MenuItem[] => [
+    item('undo', strings.t('action.undo'), () => void core.history.undo(), { icon: 'undo', enabled: () => core.history.canUndo }),
+    item('redo', strings.t('action.redo'), () => void core.history.redo(), { icon: 'redo', enabled: () => core.history.canRedo }),
+    item('image', strings.t('action.image'), () => fileInput.click(), { icon: 'image' }),
+    item('figure', strings.t('action.figure'), () => void addFigureHere(), { icon: 'figure' }),
+    item('fix', strings.t('action.fix'), fixNow, { icon: 'fix' }),
+    item('zoomFit', strings.t('menu.zoomFit'), zoomFit),
+    item('save', strings.t('menu.save'), saveFile),
+  ];
+  const pageItems = (): readonly MenuItem[] => {
+    const named = (t: MenuTarget): string => core.pages.get(t.page ?? '')?.name ?? '';
+    return [
+      item(
+        'rename',
+        strings.t('page.rename'),
+        (t) => {
+          const next = doc.defaultView?.prompt(strings.t('page.renamePrompt'), named(t));
+          if (typeof next === 'string' && next !== '' && t.page !== undefined) {
+            const done = core.pages.renamePage(t.page, next);
+            if (!done.ok) report(done);
+          }
+        },
+      ),
+      item('duplicate', strings.t('page.duplicate'), (t) => {
+        const made = t.page === undefined ? undefined : core.pages.duplicatePage(t.page);
+        if (made !== undefined && !made.ok) report(made);
+      }),
+      item(
+        'delete',
+        strings.t('page.delete'),
+        (t) => {
+          const done = t.page === undefined ? undefined : core.pages.removePage(t.page);
+          if (done !== undefined && !done.ok) report(done);
+        },
+        { enabled: () => core.pages.list().length > 1 },
+      ),
+      ...PAGE_BACKGROUNDS.map((bg) =>
+        item(`background.${bg}`, `${strings.t('page.background')}: ${strings.t(`background.${bg}`)}`, (t) => void (t.page !== undefined && core.pages.setBackground(t.page, bg)), {
+          enabled: (t) => core.pages.get(t.page ?? '')?.background !== bg,
+        }),
+      ),
+    ];
+  };
+  const hasSelection = (): boolean => core.selection.size > 0;
+  const contextItems = (): readonly MenuItem[] => [
+    item('duplicate', strings.t('selection.duplicate'), () => void editAction(ctx, 'duplicate'), { enabled: hasSelection }),
+    item('group', strings.t('selection.group'), () => void editAction(ctx, 'group'), { enabled: hasSelection }),
+    item('ungroup', strings.t('selection.ungroup'), () => void editAction(ctx, 'ungroup'), { enabled: hasSelection }),
+    item('lock', strings.t('selection.lock'), () => void setLocked(core, core.selection.ids), { enabled: hasSelection }),
+    item('front', strings.t('selection.front'), () => void editAction(ctx, 'front'), { enabled: hasSelection }),
+    item('back', strings.t('selection.back'), () => void editAction(ctx, 'back'), { enabled: hasSelection }),
+    item('delete', strings.t('selection.delete'), () => void deleteSelected(), { enabled: hasSelection }),
+    item('selectAll', strings.t('menu.selectAll'), () => void editAction(ctx, 'selectAll')),
+    item('figure', strings.t('menu.addFigure'), (t) => void (t.at !== undefined && addFigureAt(t.at)), { icon: 'figure' }),
+    item('zoomFit', strings.t('menu.zoomFit'), zoomFit),
+  ];
+  const deleteSelected = (): void => {
+    const going = [...core.selection.ids];
+    core.selection.clear();
+    deleteShapes(core, going);
+  };
+  const addFigureAt = (at: { x: number; y: number }): void => {
+    const made = addFigure(core, { at });
+    if (!made.ok) {
+      report(made);
+      return;
+    }
+    core.selection.set([made.value]);
+    host.setTool('select');
+    figures.activate(made.value);
+  };
+  surface.addEventListener('contextmenu', (e) => {
+    if (readOnly || core.camera === undefined) return;
+    const box = root.getBoundingClientRect();
+    const sx = e.clientX - box.left;
+    const sy = e.clientY - box.top;
+    const at = core.camera.toPage(sx, sy);
+    const hit = pickShape(core, at.x, at.y, 6 / core.camera.zoom);
+    if (hit !== undefined && !core.selection.ids.includes(hit.id)) core.selection.set(selectionFor(core.store, hit.id));
+    const target: MenuTarget = { kind: core.selection.size > 0 ? 'shape' : 'board', shapes: [...core.selection.ids], at };
+    menus.open('context', contextItems(), target, { x: sx, y: sy });
+  });
 
   // ---- resizing
   let observer: ResizeObserver | undefined;
@@ -876,6 +1162,24 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     host,
     painter,
     element: root,
+    shell,
+    figures,
+    menus,
+    addFigure: (mode) => (readOnly ? boardError('bad_argument', 'This board is read only.') : addFigureHere(mode)),
+    setBackground: (background) => {
+      const page = core.pages.current;
+      if (page === null) return boardError('bad_argument', 'The board has no page.', { detail: { field: 'page' } });
+      const set = core.pages.setBackground(page, background);
+      loop.request();
+      return set.ok ? ok(undefined) : set;
+    },
+    stepPage: (direction) => {
+      const list = core.pages.list();
+      const at = list.findIndex((p) => p.id === core.pages.current);
+      const next = list[at + direction];
+      if (at < 0 || next === undefined) return false;
+      return core.pages.goToPage(next.id).ok;
+    },
     render: (now) => {
       loop.runNow(now);
     },
@@ -917,9 +1221,20 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       root.removeEventListener('paste', onPaste);
       root.removeEventListener('keydown', onKeyEscape);
       painter.dispose();
+      figures.dispose();
+      menus.dispose();
       root.remove();
     },
   };
+  // the actions the key map names and the shell carries out (ui.md, Keys)
+  host.setAction('zoomIn', () => (zoomBy(1.25), true));
+  host.setAction('zoomOut', () => (zoomBy(1 / 1.25), true));
+  host.setAction('zoom100', () => (reset.click(), true));
+  host.setAction('zoomFit', () => (zoomFit(), true));
+  host.setAction('zoomSelection', () => (zoomSelection(), true));
+  host.setAction('nextPage', () => api.stepPage(1));
+  host.setAction('prevPage', () => api.stepPage(-1));
+  host.setAction('figure', () => !readOnly && (void addFigureHere(), true));
   loop.request();
   return ok(api);
 }

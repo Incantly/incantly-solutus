@@ -7,8 +7,8 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { checkRecord, isKeptRaw, markKeptRaw } from './check';
-import { boardError, describeThrown, ok, recordInvalid } from './errors';
-import type { BoardError, BoardResult } from './errors';
+import { boardError, describeThrown, ok, recordInvalid, refusedMove } from './errors';
+import type { BoardError, BoardResult, ErrorSink } from './errors';
 import { KindRegistry } from './kinds/def';
 import { DEFAULT_LIMITS, ORIGINS, RECORD_TYPES, isCamera, isPage, isShape, recordTypeOf } from './types';
 import type { BoardRecord, Diff, Limits, Origin, RecordType, ShapeRecord, Update } from './types';
@@ -93,7 +93,7 @@ function sameRecord(a: BoardRecord, b: BoardRecord): boolean {
 const thousands = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
 class StagedTx implements Tx {
-  readonly #handle = new StateMachine(HANDLE_MACHINE, 'live');
+  readonly #handle = new StateMachine(HANDLE_MACHINE, 'live', refusedMove('transaction handle', () => this.store.sink));
   readonly staged = new Map<string, BoardRecord | null>();
   failure: BoardError | undefined;
 
@@ -182,7 +182,7 @@ export class Store {
   #assetBytes = 0;
   #serial = 0;
 
-  readonly #machine = new StateMachine(TX_MACHINE, 'idle');
+  readonly #machine = new StateMachine(TX_MACHINE, 'idle', refusedMove('store', () => this.sink));
   readonly #queue: Diff[] = [];
   #listeners: readonly StoreListener[] = [];
   readonly #onError: ((error: BoardError) => void) | undefined;
@@ -488,6 +488,9 @@ export class Store {
     }
     this.#machine.send('drained');
   }
+
+  /** The board's `onError`, for the parts of the board that report through the store. */
+  readonly sink: ErrorSink = (error) => this.#report(error);
 
   #report(error: BoardError): void {
     try {

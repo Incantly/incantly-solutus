@@ -1,9 +1,9 @@
 /**
  * Shared set-up for the round-3 spec tests (shapes, select, clipboard, fixing). Only the public API of
- * `packages/board` is used: a headless board with every tool (`boardTools`), shapes written through the store, and
+ * `packages/board` is used: a headless board with every tool (`defaultTools`), shapes written through the store, and
  * pointer input as `InputSample`s with the modifier keys of `InputSample.modifiers`.
  */
-import { MOD_ALT, MOD_SHIFT, bindEnd, boardTools, putNewShape, shapeGeometry } from '../../src/index';
+import { MOD_ALT, MOD_SHIFT, bindEnd, defaultTools, putNewShape, shapeGeometry } from '../../src/index';
 import type { BoardCoreOptions, Bounds, InputSample, ShapeRecord } from '../../src/index';
 import { makeRig, sample } from './ink-helpers';
 import type { Rig } from './ink-helpers';
@@ -15,7 +15,7 @@ export type BoardRig = ReturnType<typeof makeRig>;
 
 /** A board with the select tool and the shape tools, the select tool chosen. */
 export function shapeRig(tool = 'select', core?: BoardCoreOptions): BoardRig {
-  return makeRig({ tools: boardTools, tool, ...(core !== undefined ? { core } : {}) });
+  return makeRig({ tools: defaultTools, tool, ...(core !== undefined ? { core } : {}) });
 }
 
 export const pageOf = (rig: Rig): string => rig.core.pages.current as string;

@@ -4,6 +4,8 @@
  * one nonzero fill of all of them is the union: overlapping pieces of one stroke draw once, even with opacity.
  */
 import { TILE_PX, tileBox } from '../core/draw';
+import { GRID_UNITS } from '../core/snap';
+import type { PageBackground } from '../core/types';
 import type { DrawItem, Tile, TileContent } from '../core/draw';
 import { cssFontFor } from '../core/text';
 import { PATH_CLOSE, PATH_CUBIC, PATH_LINE, PATH_MOVE } from '../core/paint';
@@ -33,6 +35,45 @@ export interface TileRaster {
   /** Puts the shown tiles on the screen. `zoom` is CSS pixels per page unit. */
   compose(tiles: readonly Tile[], camX: number, camY: number, zoom: number, dpr: number): BoardResult<undefined>;
   dispose(): void;
+}
+
+/** The distance between the lines of the `lines` paper, in page units (the grid and dots use `GRID_UNITS`, which snapping follows). */
+export const RULE_UNITS = 32;
+/** Paper finer than this many device pixels is not drawn: it would be a grey wash. */
+const PAPER_MIN_PX = 5;
+const PAPER_COLOR = 'rgba(110,118,135,0.30)';
+
+/**
+ * The page's paper in one tile (BR-18): `grid` lines, `dots` at the grid's crossings, or ruled `lines`, all on multiples of
+ * the spacing in page units, so tiles meet. `scale` device pixels make a page unit and page point `(x0, y0)` is the
+ * context's top-left. Drawn before the items; nothing is drawn when the spacing would be under 5 pixels.
+ */
+export function drawBackground2D(ctx: CanvasRenderingContext2D, background: PageBackground, scale: number, x0: number, y0: number, size = TILE_SIZE): void {
+  if (background === 'none') return;
+  const unit = background === 'lines' ? RULE_UNITS : GRID_UNITS;
+  const step = unit * scale;
+  if (!(step >= PAPER_MIN_PX)) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = PAPER_COLOR;
+  const firstX = Math.ceil(x0 / unit) * unit;
+  const firstY = Math.ceil(y0 / unit) * unit;
+  const endX = x0 + size / scale;
+  const endY = y0 + size / scale;
+  if (background === 'dots') {
+    const r = Math.max(1, Math.min(2.2, step * 0.06));
+    for (let y = firstY; y < endY; y += unit) {
+      for (let x = firstX; x < endX; x += unit) {
+        ctx.beginPath();
+        ctx.arc((x - x0) * scale, (y - y0) * scale, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else {
+    for (let y = firstY; y < endY; y += unit) ctx.fillRect(0, Math.round((y - y0) * scale), size, 1);
+    if (background === 'grid') for (let x = firstX; x < endX; x += unit) ctx.fillRect(Math.round((x - x0) * scale), 0, 1, size);
+  }
+  ctx.restore();
 }
 
 /** One nonzero fill of the triangles `indices[from..to)` of `vertices` (x, y pairs), in the context's current transform. */
@@ -240,6 +281,7 @@ export class CanvasRaster implements TileRaster {
     const y0 = box.minY - TILE_GUTTER / scale;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+    if (content.background !== undefined) drawBackground2D(ctx, content.background, scale, x0, y0);
     drawItems2D(ctx, content.items, scale, x0, y0, this.#images);
     return DONE;
   }

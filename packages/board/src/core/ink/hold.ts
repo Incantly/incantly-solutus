@@ -4,6 +4,9 @@
  * layer's: the `time` of the samples and the `now` of `tick`. No DOM, no timers, no `Date`.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
+import type { ErrorSink } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 
 type HoldState = 'idle' | 'watching' | 'fired';
@@ -24,9 +27,14 @@ export const HOLD_MIN_LENGTH_PX = 40;
 export const HOLD_MIN_POINTS = 8;
 
 export class HoldWatch {
-  readonly #machine = new StateMachine(HOLD_MACHINE, 'idle');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(HOLD_MACHINE, 'idle', refusedMove('hold watch', () => this.#report));
   /** The data of `watching`: where and when the pen last moved, and how long and how many the stroke is. */
   readonly #since = { x: 0, y: 0, time: 0, length: 0, points: 0, lastX: 0, lastY: 0 };
+
+  constructor(report?: ErrorSink) {
+    this.#report = report;
+  }
 
   get state(): HoldState {
     return this.#machine.state;
@@ -48,7 +56,7 @@ export class HoldWatch {
 
   /** The pen reached the screen point `x, y` at `time`. */
   move(x: number, y: number, time: number): void {
-    if (!this.#machine.send('move')) return;
+    if (!sendIfAble(this.#machine, 'move')) return;
     const s = this.#since;
     s.length += Math.hypot(x - s.lastX, y - s.lastY);
     s.lastX = x;
@@ -78,10 +86,10 @@ export class HoldWatch {
   }
 
   end(): void {
-    this.#machine.send('end');
+    sendIfAble(this.#machine, 'end');
   }
 
   cancel(): void {
-    this.#machine.send('cancel');
+    sendIfAble(this.#machine, 'cancel');
   }
 }

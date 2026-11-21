@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BACKEND_MACHINE, BUTTON_ERASER, ERASER_MACHINE, FRAME_MACHINE, GATE_MACHINE, HAND_MACHINE, LASER_MACHINE, LASSO_MACHINE, LIVELAYER_MACHINE, LIVE_MACHINE, LOOP_MACHINE,
-  PAGEBAR_MACHINE, PROBE_MACHINE, PointerGate, TILE_MACHINE, TOOLS_MACHINE, Tile, defaultTools,
+  PAGEBAR_MACHINE, PROBE_MACHINE, PointerGate, TILE_MACHINE, TOOLS_MACHINE, Tile, inkTools,
 } from '../../src/index';
 import type { InputSample } from '../../src/index';
 import { drawPath, line, makeRig, sample, strokes, walk } from './ink-helpers';
@@ -203,9 +203,9 @@ describe('moves with no row are refused by the running code (the "Reachable inva
   });
 
   /** A tool of the default list, made on the context of a board. */
-  const tool = (id: string): { readonly rig: ReturnType<typeof makeRig>; readonly t: ReturnType<NonNullable<ReturnType<typeof defaultTools.get>>['create']> } => {
+  const tool = (id: string): { readonly rig: ReturnType<typeof makeRig>; readonly t: ReturnType<NonNullable<ReturnType<typeof inkTools.get>>['create']> } => {
     const rig = makeRig();
-    const def = defaultTools.get(id);
+    const def = inkTools.get(id);
     if (def === undefined) throw new Error(`no tool ${id}`);
     return { rig, t: def.create(rig.ctx) };
   };

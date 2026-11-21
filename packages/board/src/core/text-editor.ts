@@ -7,7 +7,7 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import type { BoardResult } from './errors';
-import { boardError, DONE } from './errors';
+import { boardError, DONE, refusedMove } from './errors';
 import type { History } from './history';
 import type { Store } from './store';
 import { isShape } from './types';
@@ -35,7 +35,7 @@ interface Session {
 export class TextEditor {
   readonly #store: Store;
   readonly #history: History;
-  readonly #machine = new StateMachine(EDITOR_MACHINE, 'closed');
+  readonly #machine = new StateMachine(EDITOR_MACHINE, 'closed', refusedMove('text editor', () => this.#store.sink));
   readonly #session: Session = { id: '', start: 0, end: 0, serial: 0 };
   #listeners: readonly EditorListener[] = [];
 

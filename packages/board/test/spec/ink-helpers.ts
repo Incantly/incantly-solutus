@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { MachineTable } from '@incantly/kernel';
-import { BoardCore, ToolHost, createOverlayState, defaultStyles, defaultTools } from '../../src/index';
+import { BoardCore, ToolHost, createOverlayState, defaultStyles, inkTools } from '../../src/index';
 import type { BoardCoreOptions, InputSample, OverlayState, ShapeRecord, ToolContext, ToolList, ToolStyles } from '../../src/index';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -55,7 +55,7 @@ export function makeRig(options: RigOptions = {}): Rig & { readonly ctx: ToolCon
       calls.dropped++;
     },
   };
-  const host = new ToolHost(ctx, options.tools ?? defaultTools, options.tool ?? 'pen');
+  const host = new ToolHost(ctx, options.tools ?? inkTools, options.tool ?? 'pen');
   return { core, host, styles, overlay, calls, ctx };
 }
 

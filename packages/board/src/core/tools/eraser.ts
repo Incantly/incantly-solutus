@@ -6,6 +6,8 @@
  * Locked shapes are never erased. The pen's eraser end picks this tool through the tool host.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import { beginGesture } from '../edit';
 import type { Gesture } from '../edit';
@@ -24,7 +26,7 @@ export const ERASER_MACHINE: MachineTable<EraserState, EraserEvent> = {
 
 class EraserTool implements ToolHandlers {
   readonly #ctx: ToolContext;
-  readonly #machine = new StateMachine(ERASER_MACHINE, 'idle');
+  readonly #machine = new StateMachine(ERASER_MACHINE, 'idle', refusedMove('eraser', () => this.#ctx.core.store.sink));
   readonly #ids: string[] = [];
   #lastX = 0;
   #lastY = 0;
@@ -76,7 +78,7 @@ class EraserTool implements ToolHandlers {
   }
 
   onCancel(): void {
-    if (this.#machine.send('cancel')) {
+    if (sendIfAble(this.#machine, 'cancel')) {
       this.#drag.edit?.cancel();
       this.#drag.edit = undefined;
       this.#ctx.core.history.seal();

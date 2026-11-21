@@ -1,4 +1,4 @@
-/** The tools of the board and the lists a host filters (design 10). `defaultTools` is the ink tools and the hand; `boardTools` adds the select tool and the shape tools. */
+/** The tools of the board and the lists a host filters (design 10). `defaultTools` is every built-in tool; `inkTools` is the ink tools and the hand. */
 import { ToolList } from './def';
 import { eraserTool } from './eraser';
 import { handTool } from './hand';
@@ -20,17 +20,17 @@ export { SELECT_MACHINE, selectTool } from './select';
 export {
   SHAPE_TOOLS, SHAPE_TOOL_MACHINE, arrowTool, diamondTool, ellipseTool, frameTool, lineTool, rectTool, starTool, stickyTool, styledDefaults, textTool, triangleTool,
 } from './shape';
-export { editKey } from './keys';
+export { EDIT_ACTIONS, editAction, editKey } from './keys';
 
-/** Every built-in tool; a host takes some away with `without` and adds its own with `with`. */
-export const defaultTools: ToolList = new ToolList([penTool, highlighterTool, eraserTool, laserTool, lassoTool, handTool]);
+/** The ink tools and the hand (the tools of round 2): the list for a board that draws and nothing else. */
+export const inkTools: ToolList = new ToolList([penTool, highlighterTool, eraserTool, laserTool, lassoTool, handTool]);
 
 /**
- * `defaultTools` with the select tool and the shape tools: the list the board view shows, in ui.md's order (Select, Hand,
- * the ink tools, then Rect, Ellipse, Arrow, Line, Text, Sticky, Frame; the board view puts Triangle, Diamond and Star in
- * the More shapes menu). The same tools as `SHAPE_TOOLS`, which is in the order of the shapes' own table.
+ * Every built-in tool, in ui.md's order (Select, Hand, the ink tools, then Rect, Ellipse, Arrow, Line, Text, Sticky,
+ * Frame; the board view puts Triangle, Diamond and Star in the More shapes menu). A host takes some away with `without`
+ * and adds its own with `with`. The same tools as `SHAPE_TOOLS`, which is in the order of the shapes' own table.
  */
-export const boardTools: ToolList = new ToolList([
+export const defaultTools: ToolList = new ToolList([
   selectTool, handTool, penTool, highlighterTool, eraserTool, laserTool, lassoTool,
   rectTool, ellipseTool, arrowTool, lineTool, textTool, stickyTool, frameTool, triangleTool, diamondTool, starTool,
 ]);

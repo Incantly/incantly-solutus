@@ -185,6 +185,11 @@ export const FIELDS: Record<string, Record<string, Ty>> = {
   Region: { value: T.Number, area: T.Number },
 };
 
+/** An area adds fields to a type (kept beside the ones the type already has). */
+export function registerFields(type: string, fields: Readonly<Record<string, Ty>>): void {
+  FIELDS[type] = { ...(FIELDS[type] ?? {}), ...fields };
+}
+
 interface Frame {
   readonly vars: Map<string, { slot: number; ty: Ty; unit?: 'angle' }>;
 }

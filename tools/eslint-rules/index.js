@@ -4,6 +4,7 @@
  */
 import { noAiCredit, noThrowExport } from './code.js';
 import { allowedImports } from './imports.js';
+import { noImportedMutation, stateRefusalReported } from './purity.js';
 import { noFlagSoup, noShadowNull, noStaleAfterAwait, tableRefuses, tableRequired, transitionOnly, unionType } from './state.js';
 
 export const rules = {
@@ -17,6 +18,8 @@ export const rules = {
   'allowed-imports': allowedImports,
   'no-throw-export': noThrowExport,
   'no-ai-credit': noAiCredit,
+  'no-imported-mutation': noImportedMutation,
+  'state-refusal-reported': stateRefusalReported,
 };
 
 export default { meta: { name: 'eslint-plugin-incantly' }, rules };

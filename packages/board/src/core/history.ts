@@ -6,7 +6,7 @@
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
-import { boardError, ok } from './errors';
+import { boardError, ok, refusedMove } from './errors';
 import type { BoardResult } from './errors';
 import type { Store } from './store';
 import type { BoardRecord, Diff, Origin } from './types';
@@ -62,7 +62,7 @@ export type HistoryListener = () => void;
 
 export class History {
   readonly #store: Store;
-  readonly #machine = new StateMachine(HISTORY_MACHINE, 'recording');
+  readonly #machine = new StateMachine(HISTORY_MACHINE, 'recording', refusedMove('history', () => this.#store.sink));
   readonly #undo: Step[] = [];
   readonly #redo: Step[] = [];
   readonly #maxSteps: number;
