@@ -7,4 +7,4 @@
 - [x] 5. Strength per folder in `eslint.config.js` (R4)
 - [x] 6. Tiptap passes every rule as errors; TT-R9 checked (not a bug; a test holds it) (R5)
 - [x] 7. `AGENTS.md`: a rule is not done until it is a lint rule or a check
-- [ ] 8. Later batch: fix the 94 warnings in older code (state rules 29, `no-throw-export` 65), then make them errors everywhere
+- [ ] 8. Later batch: fix the 94 warnings in older code (state rules 24, `no-throw-export` 70), then make them errors everywhere
