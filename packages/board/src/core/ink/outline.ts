@@ -95,6 +95,13 @@ function arcStep(r: number, tolerance: number): number {
   return step < 0.15 ? 0.15 : step > 0.9 ? 0.9 : step;
 }
 
+/**
+ * The tolerance past which an arc has its largest step (0.9 radians) at every radius a stroke of `size` can have (a nib is at
+ * most 0.8 `size` in radius, with tilt), so any larger tolerance gives the same triangles. A stroke that is small on screen
+ * has the same outline at every zoom step that far out, and a cache can keep one.
+ */
+export const saturatedTolerance = (size: number): number => 0.1 * 0.5 * size * (1 + TILT_WIDEN);
+
 /** Turns points into triangles, reusing its arrays; read the result before the next `build`. */
 export class Outliner {
   #vx = new Float32Array(512);
@@ -560,15 +567,18 @@ export class OutlineCache {
   /** The outline of the stroke held by `owner` (its points array), built once per stride, size, nib and tolerance. */
   get(owner: object, points: Float32Array, stride: Stride, opts: OutlineOptions): Outline {
     const known = this.#built.get(owner);
-    if (known !== undefined && known.stride === stride && known.size === opts.size && known.nib === opts.nib && known.tolerance === opts.tolerance) return known.outline;
-    this.#outliner.build(points, Math.floor(points.length / stride), stride, opts);
+    // a tolerance past the one that gives every arc its largest step makes the same triangles: one outline serves them all
+    const tolerance = Math.min(opts.tolerance, saturatedTolerance(opts.size));
+    if (known !== undefined && known.stride === stride && known.size === opts.size && known.nib === opts.nib && known.tolerance === tolerance) return known.outline;
+    this.#outliner.build(points, Math.floor(points.length / stride), stride, { ...opts, tolerance });
     const outline = this.#outliner.snapshot();
-    this.#built.set(owner, { stride, size: opts.size, nib: opts.nib, tolerance: opts.tolerance, outline });
+    this.#built.set(owner, { stride, size: opts.size, nib: opts.nib, tolerance, outline });
     return outline;
   }
 
   /** True when the stroke has an outline for this tolerance (for tests and the painter's statistics). */
   has(owner: object, tolerance: number): boolean {
-    return this.#built.get(owner)?.tolerance === tolerance;
+    const known = this.#built.get(owner);
+    return known !== undefined && known.tolerance === Math.min(tolerance, saturatedTolerance(known.size));
   }
 }

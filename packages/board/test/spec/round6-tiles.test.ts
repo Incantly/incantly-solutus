@@ -71,10 +71,50 @@ describe('a tile is drawn in order on the GPU (design 9 item 4, BR-35)', () => {
     expect(probe.log.filter((e) => e.what.startsWith('2d:'))).toEqual([]);
   });
 
-  it('a tile with strokes, a shape and the paper draws them in page order: paper, stroke, shape, stroke', () => {
+  it('BR-73: a rect, an ellipse and a sticky note are triangles in the same draw call as the strokes: the paper is the only layer, and no Canvas 2D call paints a shape', () => {
     const rig = shapeRig('pen');
     drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
     add(rig, 'rect', 220, 40, { w: 120, h: 80 });
+    add(rig, 'ellipse', 60, 200, { w: 100, h: 60 });
+    drawPath(rig, line(30, 300, 300, 320, 12), {}, 1000);
+    const items = rig.core.drawList.itemsIn(BOX, 1);
+    expect(items.map((i) => i.k)).toEqual(['ink', 'shape', 'shape', 'ink']);
+    drawInFrame(theTile(), { box: BOX, items, background: 'grid' });
+    expect(tileOrder(probe)).toEqual(['layer', 'strokes']);
+    const shapeCalls = probe.log.filter((e) => e.what === '2d:fill' || e.what === '2d:stroke');
+    expect(shapeCalls).toEqual([]);
+    expect(probe.log.filter((e) => e.what === 'gl:draw' && (e.count ?? 0) > QUAD_INDICES && e.into === 'target')).toHaveLength(1);
+  });
+
+  it('BR-73: a picture between two strokes splits the triangles in two draw calls, and a rect beside it does not', () => {
+    const rig = shapeRig('pen');
+    drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
+    add(rig, 'rect', 220, 40, { w: 120, h: 80 });
+    add(rig, 'image', 40, 200, { asset: 'asset:a', w: 120, h: 80 });
+    drawPath(rig, line(30, 300, 300, 320, 12), {}, 1000);
+    drawInFrame(theTile(), { box: BOX, items: rig.core.drawList.itemsIn(BOX, 1) });
+    expect(tileOrder(probe)).toEqual(['strokes', 'layer', 'strokes']);
+  });
+
+  it('BR-73: text is quads from the glyph atlas in the same draw call as the strokes: no layer, one atlas copy for each distinct piece of text', () => {
+    const rig = shapeRig('pen');
+    drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
+    add(rig, 'text', 220, 40, { text: 'Area' });
+    add(rig, 'text', 220, 140, { text: 'Area' });
+    add(rig, 'sticky', 40, 200, { text: 'note' });
+    drawPath(rig, line(30, 300, 300, 320, 12), {}, 1000);
+    const items = rig.core.drawList.itemsIn(BOX, 1);
+    expect(items.filter((i) => i.k === 'shape')).toHaveLength(3);
+    drawInFrame(theTile(), { box: BOX, items });
+    expect(tileOrder(probe)).toEqual(['strokes']);
+    expect(probe.log.filter((e) => e.what === '2d:fillText')).toHaveLength(2);
+    expect(probe.log.filter((e) => e.what === 'gl:draw' && (e.count ?? 0) > QUAD_INDICES && e.into === 'target')).toHaveLength(1);
+  });
+
+  it('a tile with strokes, a picture and the paper draws them in page order: paper, stroke, shape, stroke', () => {
+    const rig = shapeRig('pen');
+    drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
+    add(rig, 'image', 220, 40, { asset: 'asset:a', w: 120, h: 80 });
     drawPath(rig, line(30, 200, 300, 220, 12), {}, 1000);
     const items = rig.core.drawList.itemsIn(BOX, 1);
     expect(items.map((i) => i.k)).toEqual(['ink', 'shape', 'ink']);
@@ -82,34 +122,34 @@ describe('a tile is drawn in order on the GPU (design 9 item 4, BR-35)', () => {
     expect(tileOrder(probe)).toEqual(['layer', 'strokes', 'layer', 'strokes']);
   });
 
-  it('the paper is one layer of lines and the shapes are another: the shapes\' layer holds no paper lines', () => {
+  it('the paper is one layer of lines and a picture is another: the picture\'s layer holds no paper lines', () => {
     const rig = shapeRig('pen');
     drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
-    add(rig, 'rect', 220, 40, { w: 120, h: 80 });
+    add(rig, 'image', 220, 40, { asset: 'asset:a', w: 120, h: 80 });
     drawInFrame(theTile(), { box: BOX, items: rig.core.drawList.itemsIn(BOX, 1), background: 'grid' });
     const layers: string[][] = [[]];
     for (const e of probe.log) {
       if (e.what === 'gl:upload') layers.push([]);
       else if (e.what.startsWith('2d:')) (layers[layers.length - 1] as string[]).push(e.what);
     }
-    // two uploads: paper, then the rect; whatever 2D painted after the second upload does not exist
+    // two uploads: paper, then the picture; whatever 2D painted after the second upload does not exist
     expect(layers).toHaveLength(3);
     expect(layers[0]).toContain('2d:fillRect');
-    expect(layers[1]).not.toContain('2d:fillRect');
-    expect(layers[1]?.some((w) => w === '2d:fill' || w === '2d:stroke')).toBe(true);
+    expect(layers[1]?.filter((w) => w === '2d:fillRect')).toHaveLength(1); // the grey box of a picture, no paper lines
+    expect(layers[1]).toContain('2d:strokeRect');
     expect(layers[2]).toEqual([]);
   });
 
-  it('a shape before a stroke is drawn before it, and a stroke before a shape after it', () => {
+  it('a picture before a stroke is drawn before it, and a stroke before a picture after it', () => {
     const rig = shapeRig('pen');
-    add(rig, 'rect', 220, 40, { w: 120, h: 80 });
+    add(rig, 'image', 220, 40, { asset: 'asset:a', w: 120, h: 80 });
     drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
     drawInFrame(theTile(), { box: BOX, items: rig.core.drawList.itemsIn(BOX, 1) });
     expect(tileOrder(probe)).toEqual(['layer', 'strokes']);
 
     const rig2 = shapeRig('pen');
     drawPath(rig2, line(20, 20, 200, 120, 12), {}, 0);
-    add(rig2, 'rect', 220, 40, { w: 120, h: 80 });
+    add(rig2, 'image', 220, 40, { asset: 'asset:a', w: 120, h: 80 });
     const second = tilesOf(new TileCache(), 400, 300)[0] as Tile;
     drawInFrame(second, { box: BOX, items: rig2.core.drawList.itemsIn(BOX, 1) });
     expect(tileOrder(probe)).toEqual(['strokes', 'layer']);

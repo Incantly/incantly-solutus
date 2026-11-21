@@ -6,7 +6,7 @@
  */
 import { vi } from 'vitest';
 
-/** One thing that happened: `gl:draw` (indexed draw call, with its index count), `gl:upload` (a picture copied into a texture), `gl:blit` (a copy to the screen) or `2d:<method>`. */
+/** One thing that happened: `gl:draw` (indexed draw call, with its index count), `gl:upload` (a whole tile layer copied into a texture), `gl:atlas` (a piece of text copied into the glyph atlas), `gl:blit` (a copy to the screen) or `2d:<method>`. */
 export interface GlEvent {
   readonly what: string;
   /** The number of indices of a `gl:draw`. */
@@ -66,8 +66,9 @@ function fakeGl(log: GlEvent[]): WebGL2RenderingContext {
           };
         }
         if (p === 'texSubImage2D') {
-          return () => {
-            log.push({ what: 'gl:upload' });
+          // a whole tile layer is a picture 516 pixels square; the text atlas takes small ones, a piece of text at a time
+          return (_t: number, _l: number, _x: number, _y: number, _f: number, _ty: number, source: { width?: number }) => {
+            log.push({ what: (source.width ?? 0) >= 516 ? 'gl:upload' : 'gl:atlas' });
           };
         }
         if (p === 'blitFramebuffer') {
@@ -102,6 +103,8 @@ export function installGpu(): GpuProbe {
       {
         get: (_t, name) => {
           if (typeof name !== 'string') return undefined;
+          // a piece of text is 20 pixels wide and 13 tall, as far as the glyph atlas asks
+          if (name === 'measureText') return () => ({ width: 20, actualBoundingBoxLeft: 0, actualBoundingBoxRight: 20, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 3 });
           return (..._args: unknown[]): unknown => {
             if (PAINTING.has(name)) log.push({ what: `2d:${name}` });
             return undefined;

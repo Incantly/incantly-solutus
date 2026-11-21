@@ -10,6 +10,11 @@ import { WebGL2Backend, createDrawStats } from '@incantly/view';
 import type { Arena, Batch, DrawStats, FrameCtx, GpuBackend, Program, Target } from '@incantly/view';
 import { TILE_PX, tileBox, tileSpan } from '../core/draw';
 import type { DrawItem, Tile, TileContent } from '../core/draw';
+import { GlyphAtlas, ATLAS_SIZE, WHITE_UV } from './painter-atlas';
+import type { GlyphSlot } from './painter-atlas';
+import { meshOf } from '../core/shape-mesh';
+import type { ShapeMesh } from '../core/shape-mesh';
+import type { GlyphPart, ShapeItem } from '../core/paint';
 import { boardError, DONE, ok } from '../core/errors';
 import type { BoardResult } from '../core/errors';
 import type { PageBackground } from '../core/types';
@@ -21,17 +26,22 @@ const INK_VERTEX = [
   'layout(location=0) in vec2 aPos;',
   'layout(location=1) in float aZ;',
   'layout(location=2) in vec4 aCol;',
+  'layout(location=3) in vec2 aUv;',
   'uniform vec4 uXf;',
   'out vec4 vCol;',
-  'void main(){ gl_Position = vec4(aPos * uXf.xy + uXf.zw, aZ, 1.0); vCol = aCol; }',
+  'out vec2 vUv;',
+  'void main(){ gl_Position = vec4(aPos * uXf.xy + uXf.zw, aZ, 1.0); vCol = aCol; vUv = aUv; }',
 ].join('\n');
 
 const INK_FRAGMENT = [
   '#version 300 es',
   'precision mediump float;',
+  'uniform sampler2D uAtlas;',
   'in vec4 vCol;',
+  'in vec2 vUv;',
   'out vec4 oCol;',
-  'void main(){ oCol = vec4(vCol.rgb * vCol.a, vCol.a); }',
+  '// triangles sample the atlas\'s white block, text samples its own white-on-clear picture: one draw call for both',
+  'void main(){ oCol = vec4(vCol.rgb * vCol.a, vCol.a) * texture(uAtlas, vUv); }',
 ].join('\n');
 
 const QUAD_VERTEX = [
@@ -51,8 +61,8 @@ const QUAD_FRAGMENT = [
   'void main(){ oCol = texture(uTex, vUv); }',
 ].join('\n');
 
-/** Numbers in one ink vertex: x, y, depth, r, g, b, a. */
-const INK_FLOATS = 7;
+/** Numbers in one ink vertex: x, y, depth, r, g, b, a, u, v. */
+const INK_FLOATS = 9;
 const INK_ARENA_BYTES = 8 * 1024 * 1024;
 const QUAD_ARENA_BYTES = 4 * 1024;
 
@@ -86,6 +96,11 @@ export class GlRaster implements TileRaster {
   #paper: HTMLCanvasElement | null = null;
   #paperCtx: CanvasRenderingContext2D | null = null;
   readonly #layer: Target;
+  /** The text of the shapes, one picture of each piece, in one texture the stroke program samples. */
+  readonly #atlas: GlyphAtlas;
+  /** The atlas places of the text runs of the shape being written: filled by `#meshOf`, read at once by `#writeMesh`. */
+  readonly #slots: (GlyphSlot | null)[] = [];
+  readonly #inkTextures: Record<string, Target> = {};
   #images: ImageLookup = () => null;
   /** The four corners of a tile's quad, its index list and its batch: one set, written again for every tile of a frame, so composing makes no garbage. */
   readonly #quadData = new Float32Array(16);
@@ -97,7 +112,7 @@ export class GlRaster implements TileRaster {
   /** Draw calls of the last frame, for the painter's statistics. */
   drawCalls = 0;
 
-  private constructor(gl: WebGL2RenderingContext, backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target, layer: Target) {
+  private constructor(gl: WebGL2RenderingContext, backend: WebGL2Backend, ink: Program, quad: Program, inkArena: Arena, quadArena: Arena, scratch: Target, layer: Target, atlas: Target) {
     this.#gl = gl;
     this.#backend = backend;
     this.#ink = ink;
@@ -106,6 +121,40 @@ export class GlRaster implements TileRaster {
     this.#quadArena = quadArena;
     this.#scratch = scratch;
     this.#layer = layer;
+    this.#inkTextures['uAtlas'] = atlas;
+    this.#atlas = new GlyphAtlas({ upload: (source, x, y) => this.#upload(atlas, source, x, y), fillWhite: (x, y, size) => this.#fillWhite(atlas, x, y, size) });
+  }
+
+  /** Writes opaque white pixels into a square of a target's texture. */
+  #fillWhite(target: Target, x: number, y: number, size: number): boolean {
+    const texture = (target as unknown as { colorTex?: WebGLTexture }).colorTex;
+    if (texture === undefined) return false;
+    const gl = this.#gl;
+    try {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, size, size, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(size * size * 4).fill(255));
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Copies a canvas into a texture of a target, premultiplied, with its top-left at `x, y`. */
+  #upload(target: Target, source: HTMLCanvasElement, x: number, y: number): boolean {
+    const texture = (target as unknown as { colorTex?: WebGLTexture }).colorTex;
+    if (texture === undefined) return false;
+    const gl = this.#gl;
+    try {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** WebGL 2 on `canvas`, or `render_failed`. */
@@ -113,12 +162,12 @@ export class GlRaster implements TileRaster {
     const gl = tryContext(canvas);
     if (gl === null || typeof gl.drawElements !== 'function') return failed('no context', 'Use a browser that has WebGL 2.');
     const backend = new WebGL2Backend(gl);
-    const ink = backend.createProgram({ vertex: INK_VERTEX, fragment: INK_FRAGMENT, uniforms: ['uXf'] });
+    const ink = backend.createProgram({ vertex: INK_VERTEX, fragment: INK_FRAGMENT, uniforms: ['uXf', 'uAtlas'] });
     if (!ink.ok) return failed('the ink shader');
     const quad = backend.createProgram({ vertex: QUAD_VERTEX, fragment: QUAD_FRAGMENT, uniforms: ['uTex'] });
     if (!quad.ok) return failed('the tile shader');
     const inkArena = backend.createArena(
-      { attributes: [{ name: 'aPos', size: 2 }, { name: 'aZ', size: 1 }, { name: 'aCol', size: 4 }], strideBytes: INK_FLOATS * 4 },
+      { attributes: [{ name: 'aPos', size: 2 }, { name: 'aZ', size: 1 }, { name: 'aCol', size: 4 }, { name: 'aUv', size: 2 }], strideBytes: INK_FLOATS * 4 },
       INK_ARENA_BYTES,
     );
     if (!inkArena.ok) return failed('the stroke buffer');
@@ -130,7 +179,9 @@ export class GlRaster implements TileRaster {
     // call after it would go to the canvas, leaving the tile blank (BR-72)
     const layer = backend.createTarget({ width: TILE_SIZE, height: TILE_SIZE, samples: 1, depth: false, float: false });
     if (!layer.ok) return failed('a tile layer');
-    return ok(new GlRaster(gl, backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value, layer.value));
+    const atlas = backend.createTarget({ width: ATLAS_SIZE, height: ATLAS_SIZE, samples: 1, depth: false, float: false });
+    if (!atlas.ok) return failed('the text atlas');
+    return ok(new GlRaster(gl, backend, ink.value, quad.value, inkArena.value, quadArena.value, scratch.value, layer.value, atlas.value));
   }
 
   get backend(): GpuBackend {
@@ -245,6 +296,7 @@ export class GlRaster implements TileRaster {
   render(tile: Tile, content: TileContent): BoardResult<undefined> {
     const own = this.#targetOf(tile);
     if (!own.ok) return own;
+    this.#atlas.beginTile();
     const scale = Math.pow(2, tile.k);
     const box = tileBox(tile.k, tile.tx, tile.ty);
     const x0 = box.minX - TILE_GUTTER / scale;
@@ -268,13 +320,31 @@ export class GlRaster implements TileRaster {
       const item = items[j];
       if (item === undefined) continue;
       if (item.k === 'shape') {
-        // a run of shapes: the strokes before it are drawn first, so the order of the items is kept
+        const mesh = this.#gpuMesh(item, scale);
+        if (mesh !== null) {
+          // a shape of paths and text is triangles and quads too: they go in the same draw call as the strokes round it
+          if (mesh.maxVertices > maxVerts || mesh.maxIndices > maxIndices) continue;
+          if (vcount + mesh.maxVertices > maxVerts || icount + mesh.maxIndices > maxIndices) {
+            const sent = this.#flush(frame.value, vcount, icount, uniforms);
+            if (!sent.ok) return sent;
+            vcount = 0;
+            icount = 0;
+          }
+          this.#room(vcount + mesh.maxVertices, icount + mesh.maxIndices);
+          const z = 2 * (1 - (j + 1) / (n + 1)) - 1;
+          const written = this.#writeMesh(mesh, item, scale, z, 2 / (n + 1), vcount, icount, item.x - x0, item.y - y0);
+          vcount += written.vertices;
+          icount += written.indices;
+          continue;
+        }
+        // a run of shapes Canvas 2D has to draw (pictures, shapes inside a frame): the triangles before it are drawn first, so
+        // the order of the items is kept
         const sent = this.#flush(frame.value, vcount, icount, uniforms);
         if (!sent.ok) return sent;
         vcount = 0;
         icount = 0;
         let end = j + 1;
-        while (end < n && (items[end] as DrawItem).k === 'shape') end++;
+        while (end < n && (items[end] as DrawItem).k === 'shape' && this.#gpuMesh(items[end] as ShapeItem, scale) === null) end++;
         const painted = this.#paintLayer(frame.value, scale, x0, y0, undefined, items.slice(j, end));
         if (!painted.ok) return painted;
         j = end - 1;
@@ -309,6 +379,8 @@ export class GlRaster implements TileRaster {
         vb[at + 4] = item.g;
         vb[at + 5] = item.b;
         vb[at + 6] = item.a;
+        vb[at + 7] = WHITE_UV;
+        vb[at + 8] = WHITE_UV;
       }
       const ib = this.#ibuf;
       for (let i = 0; i < idx.length; i++) ib[icount + i] = (idx[i] as number) + vcount;
@@ -319,6 +391,116 @@ export class GlRaster implements TileRaster {
     if (!sent.ok) return sent;
     const resolved = this.#backend.resolveInto(frame.value, tile.handle as Target);
     return resolved.ok ? DONE : failed('resolving a tile');
+  }
+
+  /**
+   * The mesh a shape is drawn with on the GPU, with the atlas places of its text left in `#slots`, or null when Canvas 2D
+   * has to draw it (a picture, a frame's clip, a path the tessellator cannot fill, text the atlas has no room for).
+   */
+  #gpuMesh(item: ShapeItem, scale: number): ShapeMesh | null {
+    if (item.clip !== null) return null;
+    const mesh = meshOf(item.parts, scale);
+    if (mesh === null) return null;
+    const slots = this.#slots;
+    slots.length = mesh.runs;
+    for (let run = 0; run < mesh.runs; run++) {
+      const glyph = mesh.glyphs[run] as GlyphPart | null;
+      if (glyph === null) {
+        slots[run] = null;
+        continue;
+      }
+      const slot = this.#atlas.slot(glyph, scale);
+      if (slot === null) return null;
+      slots[run] = slot;
+    }
+    return mesh;
+  }
+
+  /**
+   * Writes the runs of a shape's mesh into the CPU buffers at `vcount` and `icount`, moved and turned as Canvas 2D would
+   * (about the pivot, then to the tile). Each run has its own depth, later runs nearer, all inside the shape's slot between
+   * its neighbours in the draw order, so the fill and the line of one shape blend in order and each blends once.
+   */
+  #writeMesh(mesh: ShapeMesh, item: ShapeItem, scale: number, z: number, slot: number, vcount: number, icount: number, ox: number, oy: number): { vertices: number; indices: number } {
+    const vb = this.#vbuf;
+    const ib = this.#ibuf;
+    const turned = item.rotation !== 0;
+    const cos = turned ? Math.cos(item.rotation) : 1;
+    const sin = turned ? Math.sin(item.rotation) : 0;
+    const px = item.px;
+    const py = item.py;
+    let mv = 0;
+    let mi = 0;
+    let v = vcount;
+    let i = icount;
+    for (let run = 0; run < mesh.runs; run++) {
+      const depth = z - (slot * run) / mesh.runs;
+      const r = mesh.colors[run * 4] as number;
+      const g = mesh.colors[run * 4 + 1] as number;
+      const b = mesh.colors[run * 4 + 2] as number;
+      const a = (mesh.colors[run * 4 + 3] as number) * item.a;
+      const glyph = mesh.glyphs[run] as GlyphPart | null;
+      if (glyph !== null) {
+        const place = this.#slots[run] as GlyphSlot;
+        let x = glyph.x;
+        let y = glyph.y;
+        if (!turned) {
+          // upright text sits on whole device pixels, as the font's own smoothing expects
+          x += (Math.round((x + ox) * scale) / scale) - (x + ox);
+          y += (Math.round((y + oy) * scale) / scale) - (y + oy);
+        }
+        const x0 = x - place.ox / scale;
+        const y0 = y - place.oy / scale;
+        const x1 = x0 + place.w / scale;
+        const y1 = y0 + place.h / scale;
+        for (let c = 0; c < 4; c++) {
+          const cx = c % 2 === 0 ? x0 : x1;
+          const cy = c < 2 ? y0 : y1;
+          const at = (v + c) * INK_FLOATS;
+          vb[at] = (turned ? px + (cx - px) * cos - (cy - py) * sin : cx) + ox;
+          vb[at + 1] = (turned ? py + (cx - px) * sin + (cy - py) * cos : cy) + oy;
+          vb[at + 2] = depth;
+          vb[at + 3] = r;
+          vb[at + 4] = g;
+          vb[at + 5] = b;
+          vb[at + 6] = a;
+          vb[at + 7] = c % 2 === 0 ? place.u0 : place.u1;
+          vb[at + 8] = c < 2 ? place.v0 : place.v1;
+        }
+        ib[i] = v;
+        ib[i + 1] = v + 1;
+        ib[i + 2] = v + 2;
+        ib[i + 3] = v + 2;
+        ib[i + 4] = v + 1;
+        ib[i + 5] = v + 3;
+        v += 4;
+        i += 6;
+        continue;
+      }
+      const v1 = mesh.vertexEnds[run] as number;
+      const i1 = mesh.indexEnds[run] as number;
+      const base = v - mv;
+      for (let k = mv; k < v1; k++) {
+        const at = (base + k) * INK_FLOATS;
+        const vx = mesh.vertices[k * 2] as number;
+        const vy = mesh.vertices[k * 2 + 1] as number;
+        vb[at] = (turned ? px + (vx - px) * cos - (vy - py) * sin : vx) + ox;
+        vb[at + 1] = (turned ? py + (vx - px) * sin + (vy - py) * cos : vy) + oy;
+        vb[at + 2] = depth;
+        vb[at + 3] = r;
+        vb[at + 4] = g;
+        vb[at + 5] = b;
+        vb[at + 6] = a;
+        vb[at + 7] = WHITE_UV;
+        vb[at + 8] = WHITE_UV;
+      }
+      for (let k = mi; k < i1; k++) ib[i + k - mi] = (mesh.indices[k] as number) + v;
+      v += v1 - mv;
+      i += i1 - mi;
+      mv = v1;
+      mi = i1;
+    }
+    return { vertices: v - vcount, indices: i - icount };
   }
 
   /** Grows the CPU buffers to hold `v` vertices and `i` indices. */
@@ -356,6 +538,7 @@ export class GlRaster implements TileRaster {
       mode: 'triangles',
       instances: 1,
       uniforms,
+      textures: this.#inkTextures,
       scissor: null,
       depthTest: true,
       depthFunc: 'less',

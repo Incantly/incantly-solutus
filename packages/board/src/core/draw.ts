@@ -316,6 +316,12 @@ export class DrawList {
   readonly outlines: OutlineCache;
   readonly #ids: string[] = [];
   readonly #parts = new WeakMap<object, { generation: number; byLod: Partial<Record<Lod, readonly Part[]>> }>();
+  /**
+   * The draw item of a stored shape at the last scale it was asked for, with the text measure it was made under. A stored
+   * record never changes (an edit is a new record), so the item stays right while the scale and the measure stay the same;
+   * a shape inside a group or a frame is not kept, because its clip is the frame's record, not its own.
+   */
+  readonly #items = new WeakMap<object, { scale: number; generation: number; item: DrawItem | undefined }>();
 
   constructor(index: PageIndex, outlines: OutlineCache = new OutlineCache()) {
     this.#index = index;
@@ -347,6 +353,16 @@ export class DrawList {
 
   /** One shape as a draw item, or undefined when it is not drawn (unknown kind, too small to see). */
   itemOf(shape: ShapeRecord, scale: number): DrawItem | undefined {
+    if (shape.parent !== null) return this.#makeItem(shape, scale);
+    const generation = measureGeneration();
+    const known = this.#items.get(shape);
+    if (known !== undefined && known.scale === scale && known.generation === generation) return known.item;
+    const item = this.#makeItem(shape, scale);
+    this.#items.set(shape, { scale, generation, item });
+    return item;
+  }
+
+  #makeItem(shape: ShapeRecord, scale: number): DrawItem | undefined {
     const kinds = this.#index.kinds;
     const geometry = shapeGeometry(shape, kinds);
     if (geometry === undefined) return undefined;
