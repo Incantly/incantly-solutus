@@ -135,6 +135,59 @@ tester.run('state-no-stale-after-await', rules['state-no-stale-after-await'], {
   ],
 });
 
+tester.run('state-no-shadow-null', rules['state-no-shadow-null'], {
+  valid: [
+    // cleared when the machine leaves the state
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null = null;
+      begin(p: string) { if (!this.#m.send('begin')) return; this.#page = p; }
+      end() { this.#m.send('end'); this.#page = null; } }`,
+    // cleared with undefined, in another method
+    `class A { m = new StateMachine(A_MACHINE, 'idle'); page: string | undefined;
+      begin(p: string) { this.m.send('begin'); this.page = p; }
+      reset() { this.page = undefined; } }`,
+    // a nullable field set in a method that makes no begin-like move
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #label: string | null = null;
+      end() { this.#m.send('end'); this.#label = 'done'; } }`,
+    // no machine in the class
+    `class A { #page: string | null = null; begin(p: string) { this.#page = p; } }`,
+    // a field that is not nullable
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page = ''; begin(p: string) { this.#m.send('begin'); this.#page = p; } }`,
+    // the constructor only starts the field
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null; constructor() { this.#page = 'x'; this.#m.send('begin'); } }`,
+    // the data lives with the state
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #drawing: { page: string } | null = null;
+      begin(p: string) { this.#m.send('begin'); this.#drawing = { page: p }; }
+      end() { this.#m.send('end'); this.#drawing = void 0; } }`,
+  ],
+  invalid: [
+    {
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null = null;
+        begin(p: string) { this.#m.send('begin'); this.#page = p; }
+        end() { this.#m.send('end'); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); target: Node | undefined;
+        start(n: Node) { if (this.m.send('start')) this.target = n; } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // set inside a callback of the beginning method, cleared only in the constructor
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); id: number | null = null;
+        constructor() { this.id = null; }
+        down(x: number) { this.m.send('down'); items.forEach(() => { this.id = x; }); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // two fields, only one cleared
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #a: string | null = null; #b: number | null = null;
+        begin(a: string, b: number) { this.#m.send('begin'); this.#a = a; this.#b = b; }
+        end() { this.#m.send('end'); this.#a = null; } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+  ],
+});
+
 tester.run('allowed-imports', rules['allowed-imports'], {
   valid: [
     "import { a } from './a';",

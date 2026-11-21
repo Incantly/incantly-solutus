@@ -13,6 +13,7 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 5. A `*_MACHINE` table whose rows are all the same identifier, or all object literals with the same events and targets, SHALL be refused: a table that refuses nothing is a value, so it is derived or written with only the moves that may happen (`incantly/state-table-refuses`).
 6. A local copy of a state field made before an `await` SHALL NOT be read after it (`incantly/state-no-stale-after-await`).
 7. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
+8. In a class that holds a `StateMachine`, a field typed `X | null` or `X | undefined` that a method sets to a value when it sends a begin-like move (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) SHALL be set back to `null` or `undefined` somewhere in the class: it holds part of the state, so it is cleared when the machine leaves the state, or kept in the state's data (`incantly/state-no-shadow-null`).
 
 ### R2. Package rules (AGENTS.md)
 
