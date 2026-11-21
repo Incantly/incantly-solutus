@@ -606,15 +606,25 @@ describe("the kind's own handles (ui.md: an arrow's bend, a line's points)", () 
     expect(own.map((h) => [h.x, h.y])).toEqual([[100, 100], [200, 100], [200, 180]]);
   });
 
-  // design 7.4: "Selected shapes show handles: 8 resize handles, one rotate handle, and the kind's own handles"
-  it.each(['arrow', 'line'] as const)('a %s also shows the 8 resize handles and the rotate handle', (kind) => {
+  // design 7.4 (round 3 ruling BR-29): a line or an arrow alone shows only its own handles; with other shapes, the box
+  it.each(['arrow', 'line'] as const)('a %s alone shows only its own handles: no resize handles and no rotate handle', (kind) => {
     const rig = shapeRig();
     const a = kind === 'arrow' ? add(rig, 'arrow', 100, 100, { start: [0, 0], end: [200, 60] }) : add(rig, 'line', 100, 100, { points: [0, 0, 200, 60] });
     rig.core.selection.set([a.id]);
     const hs = handles(rig);
+    expect(hs.filter((h) => h.kind === 'resize')).toHaveLength(0);
+    expect(hs.filter((h) => h.kind === 'rotate')).toHaveLength(0);
+    expect(hs.filter((h) => h.kind === 'kind').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(['arrow', 'line'] as const)('a %s selected with another shape shows the box with 8 resize handles and the rotate handle', (kind) => {
+    const rig = shapeRig();
+    const a = kind === 'arrow' ? add(rig, 'arrow', 100, 100, { start: [0, 0], end: [200, 60] }) : add(rig, 'line', 100, 100, { points: [0, 0, 200, 60] });
+    const r = add(rig, 'rect', 400, 300);
+    rig.core.selection.set([a.id, r.id]);
+    const hs = handles(rig);
     expect(hs.filter((h) => h.kind === 'resize')).toHaveLength(8);
     expect(hs.filter((h) => h.kind === 'rotate')).toHaveLength(1);
-    expect(hs.filter((h) => h.kind === 'kind').length).toBeGreaterThanOrEqual(2);
   });
 
   it("dragging an arrow's end handle moves the end; the start stays; one undo step", () => {

@@ -88,6 +88,14 @@ export default defineConfig([
     },
   },
   {
+    // a tool writes only through a gesture (`beginGesture` in `core/edit.ts`), which keeps what every write changed,
+    // so a cancel puts back everything; a direct `.change(` call would leave part of a drag behind
+    files: ['packages/board/src/core/tools/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', { selector: "CallExpression[callee.property.name='change']", message: 'tools write through a gesture, so a cancel puts back everything' }],
+    },
+  },
+  {
     // the helper that the state rules point to
     files: ['packages/kernel/src/contracts/state-machine.ts'],
     rules: stateRules('off'),

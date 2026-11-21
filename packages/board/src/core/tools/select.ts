@@ -1,15 +1,16 @@
 /**
  * The select tool (docs/state-machines.md B19): click and box select, move, resize with 8 handles, rotate, the kind's
- * own handles (an arrow's ends and bend, a line's points), snap guides, and the hand-off to the text editor. Each
- * gesture writes one transaction per move with one merge key and is sealed into one undo step when the pointer comes up.
- * Arrow bindings follow in the same transaction (`core/bindings.ts`). No DOM, no timers.
+ * own handles (an arrow's ends and bend, a line's points), snap guides, and the hand-off to the text editor. Every write
+ * of a gesture goes through one `Gesture` (`core/edit.ts`, B25): one undo step when the pointer comes up, and a cancel
+ * puts back every record any write changed, bindings included. Arrow bindings follow in the same transaction
+ * (`core/bindings.ts`). No DOM, no timers.
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { bindEnd, bindTargetAt, unbindEnd } from '../bindings';
 import type { ArrowEnd } from '../bindings';
-import { layoutBox, patchShapes, settleParents, turnShapes, withMembers } from '../edit';
-import type { ShapePatch } from '../edit';
+import { beginGesture, layoutBox, patchShapes, settleParents, turnShapes, withMembers } from '../edit';
+import type { Gesture as EditGesture, ShapePatch } from '../edit';
 import { shapeGeometry } from '../geometry';
 import { MOD_ALT, MOD_SHIFT } from '../input';
 import type { InputSample } from '../input';
@@ -64,22 +65,21 @@ interface Gesture {
   startAngle: number;
   mods: number;
   wasSelected: boolean;
-  writes: number;
-  serial: number;
+  /** The writes of the gesture, begun with the first one; a cancel puts them all back. */
+  edit: EditGesture | undefined;
   /** The shape an arrow end would stick to ('' for none). */
   target: string;
 }
 
-const emptyGesture = (serial: number): Gesture => ({
-  hit: '', handle: '', sx: 0, sy: 0, px: 0, py: 0, originals: [], selected: [], frame: undefined, startBox: undefined, startAngle: 0, mods: 0, wasSelected: false, writes: 0, serial, target: '',
+const emptyGesture = (): Gesture => ({
+  hit: '', handle: '', sx: 0, sy: 0, px: 0, py: 0, originals: [], selected: [], frame: undefined, startBox: undefined, startAngle: 0, mods: 0, wasSelected: false, edit: undefined, target: '',
 });
 
 class SelectTool implements ToolHandlers {
   readonly #ctx: ToolContext;
   readonly #machine = new StateMachine(SELECT_MACHINE, 'idle');
   readonly #snapper = new Snapper();
-  #gesture: Gesture = emptyGesture(0);
-  #serial = 0;
+  #gesture: Gesture = emptyGesture();
   /** The last click that was not a drag, for double clicks. */
   readonly #click = { time: -1e9, x: 0, y: 0, id: '' };
 
@@ -107,7 +107,7 @@ class SelectTool implements ToolHandlers {
     if (!this.#machine.is('idle')) return;
     const p = camera.toPage(s.x, s.y);
     const mods = s.modifiers ?? 0;
-    const g = emptyGesture(++this.#serial);
+    const g = emptyGesture();
     g.sx = s.x;
     g.sy = s.y;
     g.px = p.x;
@@ -221,10 +221,15 @@ class SelectTool implements ToolHandlers {
     return page?.background === 'grid' || page?.background === 'dots' ? GRID_UNITS : null;
   }
 
-  #write(patches: ReadonlyMap<string, ShapePatch>): void {
+  /** The gesture the writes of this press go through; it begins with the first write. */
+  #edits(): EditGesture {
     const g = this.#gesture;
-    const done = patchShapes(this.#ctx.core, patches, { mergeKey: `select:${g.serial}` });
-    if (done.ok) g.writes++;
+    g.edit ??= beginGesture(this.#ctx.core);
+    return g.edit;
+  }
+
+  #write(patches: ReadonlyMap<string, ShapePatch>): void {
+    patchShapes(this.#ctx.core, patches, { gesture: this.#edits() });
   }
 
   #drag(x: number, y: number, zoom: number): void {
@@ -342,8 +347,7 @@ class SelectTool implements ToolHandlers {
       const base = f.single?.rotation ?? 0;
       delta = Math.round((base + delta) / ROTATE_STEP) * ROTATE_STEP - base;
     }
-    const done = turnShapes(this.#ctx.core, g.originals, delta, f.cx, f.cy, { mergeKey: `select:${g.serial}` });
-    if (done.ok) g.writes++;
+    turnShapes(this.#ctx.core, g.originals, delta, f.cx, f.cy, { gesture: this.#edits() });
   }
 
   /** A handle of the kind moves to the pointer. An arrow's end looks for a shape to stick to. */
@@ -357,9 +361,9 @@ class SelectTool implements ToolHandlers {
     if (def?.moveHandle === undefined || geometry === undefined) return;
     const id = g.handle.slice(2);
     const isEnd = original.kind === 'arrow' && (id === 'start' || id === 'end');
-    if (isEnd && g.writes === 0) {
+    if (isEnd && this.#edits().writes === 0) {
       // the end leaves the shape it was stuck to as soon as it moves
-      core.store.change('user', (tx) => void unbindEnd(tx, core.store, original.id, id as ArrowEnd), { mergeKey: `select:${g.serial}` });
+      this.#edits().write((tx) => void unbindEnd(tx, core.store, original.id, id as ArrowEnd));
     }
     const local = geometry.toLocal(x, y);
     const props = def.moveHandle(original, id, local.x, local.y) as Record<string, unknown>;
@@ -409,7 +413,7 @@ class SelectTool implements ToolHandlers {
       this.#clicked(s, g);
     } else if (this.#machine.is('dragging')) {
       this.#machine.send('up');
-      settleParents(core, g.selected.map((sh) => sh.id), { mergeKey: `select:${g.serial}` });
+      if (g.edit !== undefined) settleParents(core, g.selected.map((sh) => sh.id), { gesture: g.edit });
     } else if (this.#machine.is('handling')) {
       this.#machine.send('up');
       this.#drop(g, p.x, p.y);
@@ -453,16 +457,17 @@ class SelectTool implements ToolHandlers {
   #drop(g: Gesture, x: number, y: number): void {
     const { core } = this.#ctx;
     const original = g.selected[0];
-    if (original === undefined || original.kind !== 'arrow' || !g.handle.startsWith('k:') || g.writes === 0) return;
+    if (original === undefined || original.kind !== 'arrow' || !g.handle.startsWith('k:') || g.edit === undefined || g.edit.writes === 0) return;
     const end = g.handle.slice(2);
     if (end !== 'start' && end !== 'end') return;
     if (g.target === '') return;
-    core.store.change('user', (tx) => void bindEnd(tx, core.store, original.id, end, g.target, { x, y }), { mergeKey: `select:${g.serial}` });
+    g.edit.write((tx) => void bindEnd(tx, core.store, original.id, end, g.target, { x, y }));
   }
 
-  /** Common end of a gesture: guides and hints go, the history is sealed. */
+  /** Common end of a press: the gesture is committed (one undo step), guides and hints go, the history is sealed. */
   #finish(): void {
     const { core, overlay } = this.#ctx;
+    this.#gesture.edit?.commit();
     this.#snapper.end();
     overlay.guides = [];
     overlay.marquee = null;
@@ -473,19 +478,10 @@ class SelectTool implements ToolHandlers {
 
   onCancel(): void {
     const g = this.#gesture;
-    const { core } = this.#ctx;
     if (this.#machine.is('idle') || this.#machine.is('editing')) return;
     this.#machine.send('cancel');
-    if (g.writes > 0) {
-      // the shapes go back as they were; the merged step then holds no change and is dropped
-      core.store.change(
-        'user',
-        (tx) => {
-          for (const o of g.originals) tx.put(o);
-        },
-        { mergeKey: `select:${g.serial}` },
-      );
-    }
+    // every record the gesture changed goes back as it was, and its undo step is dropped
+    g.edit?.cancel();
     this.#finish();
   }
 }

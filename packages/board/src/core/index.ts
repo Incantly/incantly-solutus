@@ -30,7 +30,8 @@ export type { MovingSides } from './snap';
 export { bindEnd, bindTargetAt, bindingProps, bindingsOfArrow, bindingsOnTarget, boundTarget, dropBindingsOf, followArrow, followBindings, unbindEnd } from './bindings';
 export type { ArrowEnd, BindingProps } from './bindings';
 export {
-  alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, layoutBox, orderShapes, patchShapes, setLocked, settleParents, styleShapes, translateShapes, turnShapes, ungroupShapes, withMembers,
+  GESTURE_MACHINE, Gesture, alignShapes, beginGesture, deleteShapes, distributeShapes, flipShapes, groupShapes, layoutBox, orderShapes, patchShapes, setLocked, settleParents, styleShapes, translateShapes, turnShapes,
+  ungroupShapes, withMembers,
 } from './edit';
 export type { AlignHow, OrderHow, ShapePatch, WriteOptions } from './edit';
 export { frameOf, frameCorners, handleAt, handlesOf, selectionView } from './selection-view';

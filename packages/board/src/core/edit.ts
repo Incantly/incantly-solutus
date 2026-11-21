@@ -2,8 +2,12 @@
  * The editing commands of the board (design 7.4): move, resize and turn writes, delete, align, distribute, order,
  * group, ungroup, lock, flip, style. Each command is one transaction, so it is one undo step, and every write to a
  * shape also moves the arrows stuck to it (`core/bindings.ts`). Locked shapes are never changed except by `setLocked`.
- * Commands take the ids of the shapes to change; a group or frame brings its members along. No DOM, no timers.
+ * Commands take the ids of the shapes to change; a group or frame brings its members along. A drag writes its commands
+ * through a `Gesture` (`beginGesture`), which keeps what every write changed so a cancel can put it all back (B25).
+ * No DOM, no timers.
  */
+import { StateMachine } from '@incantly/kernel';
+import type { MachineTable } from '@incantly/kernel';
 import { dropBindingsOf, followBindings } from './bindings';
 import type { BoardCore } from './board';
 import type { BoardResult } from './errors';
@@ -13,8 +17,8 @@ import { shapeGeometry } from './geometry';
 import type { StylePatch } from './kinds/def';
 import { boxCx, boxCy, rotateAbout, wrapAngle } from './math2d';
 import { bottomKey, descendantsOf, expandGroups, frameAt, keyOnTop, shapeOf, stackOf, txShape } from './shapes';
-import type { Origin, ShapeRecord } from './types';
-import type { Bounds } from './types';
+import type { Store, Tx } from './store';
+import type { BoardRecord, Bounds, Origin, ShapeRecord } from './types';
 
 /** A change to one shape. `props` is merged into the shape's props (the kind checks the result). */
 export interface ShapePatch {
@@ -31,6 +35,110 @@ export interface WriteOptions {
   readonly origin?: Origin;
   /** Writes in a row with the same key are one undo step (a drag). */
   readonly mergeKey?: string;
+  /** The gesture the write belongs to: it supplies the origin and the merge key, and a cancel puts the write back. */
+  readonly gesture?: Gesture;
+}
+
+type GestureState = 'open' | 'committed' | 'cancelled';
+type GestureEvent = 'write' | 'commit' | 'cancel';
+
+/** B25: a gesture takes writes until it is committed or cancelled; both end it, and a later write is refused. */
+export const GESTURE_MACHINE: MachineTable<GestureState, GestureEvent> = {
+  open: { write: 'open', commit: 'committed', cancel: 'cancelled' },
+  committed: {},
+  cancelled: {},
+};
+
+/** One gesture count for each store, so every gesture of a board has a merge key of its own. */
+const gestureCount = new WeakMap<Store, number>();
+
+/**
+ * The writes of one pointer gesture (a drag, a resize, a stroke of the shape tool). Every write is one store
+ * transaction with the gesture's merge key, so the whole gesture is one undo step. The gesture keeps what each record
+ * was before its first write, read from the store's own diffs, so `cancel` puts back every record any write changed:
+ * the shapes, the bindings they dragged, the arrows that followed them. A tool never has to list what to restore.
+ */
+export class Gesture {
+  readonly #core: BoardCore;
+  readonly #origin: Origin;
+  readonly #key: string;
+  readonly #machine = new StateMachine(GESTURE_MACHINE, 'open');
+  /** Each record a write changed, as it was before the gesture (`undefined`: the gesture added it). */
+  readonly #before = new Map<string, BoardRecord | undefined>();
+  #writes = 0;
+
+  constructor(core: BoardCore, origin: Origin) {
+    this.#core = core;
+    this.#origin = origin;
+    const n = (gestureCount.get(core.store) ?? 0) + 1;
+    gestureCount.set(core.store, n);
+    this.#key = `gesture:${n}`;
+  }
+
+  /** The merge key of every write of this gesture. */
+  get mergeKey(): string {
+    return this.#key;
+  }
+
+  /** The gesture's own state: `open`, `committed` or `cancelled`. */
+  get state(): string {
+    return this.#machine.state;
+  }
+
+  /** The writes that were accepted so far. */
+  get writes(): number {
+    return this.#writes;
+  }
+
+  /** Runs `fn` as one transaction of this gesture. A refused write changes nothing and is not counted. */
+  write<T>(fn: (tx: Tx) => T): BoardResult<T> {
+    if (!this.#machine.send('write')) return boardError('bad_argument', 'This gesture has ended; begin another with beginGesture().', { detail: { field: 'gesture' } });
+    const done = this.#core.store.change(this.#origin, fn, { mergeKey: this.#key });
+    if (!done.ok) return done;
+    const { diff } = done.value;
+    for (const r of diff.added) if (!this.#before.has(r.id)) this.#before.set(r.id, undefined);
+    for (const u of diff.updated) if (!this.#before.has(u.before.id)) this.#before.set(u.before.id, u.before);
+    for (const r of diff.removed) if (!this.#before.has(r.id)) this.#before.set(r.id, r);
+    this.#writes++;
+    return ok(done.value.value);
+  }
+
+  /** The gesture is finished: its writes stay, and the next write with any key starts a new undo step. */
+  commit(): void {
+    if (this.#machine.send('commit')) this.#core.history.seal();
+  }
+
+  /** The gesture is dropped: every record any write changed is put back, and the undo step it made is gone. */
+  cancel(): void {
+    if (!this.#machine.send('cancel')) return;
+    if (this.#before.size > 0) {
+      const before = this.#before;
+      // the same merge key, so the step holds no change and the history drops it
+      this.#core.store.change(
+        this.#origin,
+        (tx) => {
+          for (const [id, record] of before) {
+            if (record !== undefined) tx.put(record);
+            else if (tx.get(id) !== undefined) tx.remove(id);
+          }
+        },
+        { mergeKey: this.#key, allowUnknownKinds: true },
+      );
+    }
+    this.#core.history.seal();
+  }
+}
+
+/** Starts a gesture on the board. Write through it, then `commit` or `cancel`. */
+export function beginGesture(core: BoardCore, origin: Origin = 'user'): Gesture {
+  return new Gesture(core, origin);
+}
+
+/** One write of a command: through its gesture when it has one, else one transaction with its own origin and merge key. */
+function writeVia<T>(core: BoardCore, options: WriteOptions, fn: (tx: Tx) => T): BoardResult<T> {
+  if (options.gesture !== undefined) return options.gesture.write(fn);
+  const done = core.store.change(options.origin ?? 'user', fn, options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {});
+  return done.ok ? ok(done.value.value) : done;
 }
 
 /** The shapes among `ids` that are on the board, with a frame's or group's members, each once. */
@@ -69,8 +177,9 @@ export function patchShapes(core: BoardCore, patches: ReadonlyMap<string, ShapeP
   if (patches.size === 0) return ok(undefined);
   const { store } = core;
   const changed = new Set<string>();
-  const written = store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       for (const [id, patch] of patches) {
         const shape = txShape(tx, id);
@@ -86,7 +195,6 @@ export function patchShapes(core: BoardCore, patches: ReadonlyMap<string, ShapeP
       }
       followBindings(tx, store, changed);
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(undefined) : written;
 }
@@ -105,8 +213,9 @@ export function settleParents(core: BoardCore, ids: readonly string[], options: 
   if (page === null) return ok(undefined);
   const { store } = core;
   const members = descendantsOf(store, page, ids);
-  const written = store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       for (const id of ids) {
         const s = txShape(tx, id);
@@ -128,7 +237,6 @@ export function settleParents(core: BoardCore, ids: readonly string[], options: 
         tx.update(id, patch);
       }
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(undefined) : written;
 }
@@ -143,13 +251,13 @@ export function deleteShapes(core: BoardCore, ids: readonly string[], options: W
     if (kids.length > 0 && kids.every((k) => going.has(k.id))) going.add(s.id);
   }
   if (going.size === 0) return ok(undefined);
-  const written = core.store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       dropBindingsOf(tx, core.store, going);
       for (const id of going) tx.remove(id);
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(undefined) : written;
 }
@@ -216,11 +324,15 @@ export function orderShapes(core: BoardCore, ids: readonly string[], how: OrderH
   const stack = stackOf(store, page);
   const picked = stack.filter((s) => chosen.has(s.id) && !s.locked);
   if (picked.length === 0) return ok(undefined);
-  const written = store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       let list = stack.filter((s) => !chosen.has(s.id) || s.locked);
-      for (const s of picked) {
+      // the shapes are placed one at a time, and a selection keeps its own order (design 7.4): the ones that go up are
+      // placed from the lowest, the ones that go down from the highest, and a shape never goes past one placed before it
+      const placed = new Set<string>();
+      for (const s of how === 'front' || how === 'forward' ? picked : [...picked].reverse()) {
         // place the shape in the stack without the chosen shapes, by its place among the others
         let at: number;
         const bounds = layoutBox(core, s);
@@ -242,15 +354,17 @@ export function orderShapes(core: BoardCore, ids: readonly string[], how: OrderH
           else {
             const i = list.findIndex((o) => o.id === hit.id);
             at = how === 'forward' ? i + 1 : i;
+            while (how === 'forward' && placed.has(list[at]?.id ?? '')) at++;
+            while (how === 'backward' && placed.has(list[at - 1]?.id ?? '')) at--;
           }
         }
+        placed.add(s.id);
         const key = keyBetween(list[at - 1]?.index ?? null, list[at]?.index ?? null);
         if (!key.ok) continue;
         tx.update(s.id, { index: key.value });
         list = [...list.slice(0, at), { ...s, index: key.value }, ...list.slice(at)];
       }
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(undefined) : written;
 }
@@ -283,8 +397,9 @@ export function groupShapes(core: BoardCore, ids: readonly string[], options: Wr
   if (page === null || units.size < 2) return ok(leaves);
   const parents = new Set([...units.values()].map((u) => u.parent));
   const parent = parents.size === 1 ? ([...parents][0] ?? null) : null;
-  const written = store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       const key = keyOnTop(store, page);
       if (!key.ok) return;
@@ -292,7 +407,6 @@ export function groupShapes(core: BoardCore, ids: readonly string[], options: Wr
       tx.put({ id, page, kind: 'group', x: 0, y: 0, rotation: 0, parent, index: key.value, locked: false, opacity: 1, props: {}, meta: {} });
       for (const u of units.values()) tx.update(u.id, { parent: id });
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(leaves) : written;
 }
@@ -309,15 +423,15 @@ export function ungroupShapes(core: BoardCore, ids: readonly string[], options: 
     if (root.kind === 'group') groups.set(root.id, root);
   }
   if (groups.size === 0) return ok(leaves);
-  const written = store.change(
-    options.origin ?? 'user',
+  const written = writeVia(
+    core,
+    options,
     (tx) => {
       for (const g of groups.values()) {
         for (const kid of store.shapesOn(g.page)) if (kid.parent === g.id) tx.update(kid.id, { parent: g.parent });
         tx.remove(g.id);
       }
     },
-    options.mergeKey !== undefined ? { mergeKey: options.mergeKey } : {},
   );
   return written.ok ? ok(leaves) : written;
 }

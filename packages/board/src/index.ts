@@ -6,3 +6,4 @@ export { BACKEND_MACHINE, FRAME_MACHINE, LIVELAYER_MACHINE, LIVE_LAG, WebPainter
 export type { PainterStats, WebPainterOptions } from './web/painter';
 export { LOOP_MACHINE, PAGEBAR_MACHINE, mountBoardView } from './web/board-view';
 export type { BoardView, BoardViewOptions } from './web/board-view';
+export { IMAGE_MACHINE } from './web/images';

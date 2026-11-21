@@ -2,11 +2,13 @@
  * The shape tools (docs/state-machines.md B20): rect, ellipse, triangle, diamond, star, frame, line, arrow, text and
  * sticky. Drag to make the shape, click for the default size; Shift makes a square or a circle (or snaps a line to
  * steps of 15 degrees); Alt makes the shape from its middle. The shape is written on the first move past the slop and
- * updated by each move with one merge key, so it is one undo step. One table serves every tool; each tool is one
- * instance with its own state.
+ * updated by each move through one gesture (`core/edit.ts`, B25), so it is one undo step and a cancel removes it. One
+ * table serves every tool; each tool is one instance with its own state.
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
+import { beginGesture } from '../edit';
+import type { Gesture as EditGesture } from '../edit';
 import { shapeGeometry } from '../geometry';
 import { MOD_ALT, MOD_SHIFT } from '../input';
 import type { InputSample } from '../input';
@@ -33,22 +35,22 @@ interface ShapeToolSpec {
   readonly key: string;
   readonly kind: string;
   readonly layout: Layout;
-  /** The size of a shape made by a click (a line's length for `line`). */
+  /** The size of a shape made by a click, for the layouts whose kind has no size of its own (a line's length for `line`, a note). A box takes the size of its kind's defaults. */
   readonly w: number;
   readonly h: number;
 }
 
 const SPECS: readonly ShapeToolSpec[] = [
-  { id: 'rect', label: 'Rectangle', key: 'r', kind: 'rect', layout: 'box', w: 120, h: 80 },
-  { id: 'ellipse', label: 'Ellipse', key: 'o', kind: 'ellipse', layout: 'box', w: 120, h: 80 },
-  { id: 'triangle', label: 'Triangle', key: 'shift+t', kind: 'triangle', layout: 'box', w: 120, h: 100 },
-  { id: 'diamond', label: 'Diamond', key: 'd', kind: 'diamond', layout: 'box', w: 120, h: 100 },
-  { id: 'star', label: 'Star', key: 'shift+s', kind: 'star', layout: 'box', w: 110, h: 105 },
+  { id: 'rect', label: 'Rectangle', key: 'r', kind: 'rect', layout: 'box', w: 0, h: 0 },
+  { id: 'ellipse', label: 'Ellipse', key: 'o', kind: 'ellipse', layout: 'box', w: 0, h: 0 },
+  { id: 'triangle', label: 'Triangle', key: 'shift+t', kind: 'triangle', layout: 'box', w: 0, h: 0 },
+  { id: 'diamond', label: 'Diamond', key: 'd', kind: 'diamond', layout: 'box', w: 0, h: 0 },
+  { id: 'star', label: 'Star', key: 'shift+s', kind: 'star', layout: 'box', w: 0, h: 0 },
   { id: 'line', label: 'Line', key: 'shift+l', kind: 'line', layout: 'line', w: 120, h: 0 },
   { id: 'arrow', label: 'Arrow', key: 'a', kind: 'arrow', layout: 'line', w: 120, h: 0 },
   { id: 'text', label: 'Text', key: 't', kind: 'text', layout: 'text', w: 0, h: 0 },
   { id: 'sticky', label: 'Sticky note', key: 'n', kind: 'sticky', layout: 'note', w: 200, h: 200 },
-  { id: 'frame', label: 'Frame', key: 'f', kind: 'frame', layout: 'box', w: 400, h: 300 },
+  { id: 'frame', label: 'Frame', key: 'f', kind: 'frame', layout: 'box', w: 0, h: 0 },
 ];
 
 /** The pointer moves this many screen pixels before a press is a drag. */
@@ -62,7 +64,8 @@ interface Gesture {
   sx: number;
   sy: number;
   id: string;
-  serial: number;
+  /** The writes of the gesture; a cancel puts them all back. */
+  edit: EditGesture | undefined;
 }
 
 /** The props a new shape of the kind starts with: the kind's defaults with the style bar's choices on top. */
@@ -79,8 +82,7 @@ class ShapeTool implements ToolHandlers {
   readonly #ctx: ToolContext;
   readonly #spec: ShapeToolSpec;
   readonly #machine = new StateMachine(SHAPE_TOOL_MACHINE, 'idle');
-  #gesture: Gesture = { px: 0, py: 0, sx: 0, sy: 0, id: '', serial: 0 };
-  #serial = 0;
+  #gesture: Gesture = { px: 0, py: 0, sx: 0, sy: 0, id: '', edit: undefined };
 
   constructor(ctx: ToolContext, spec: ShapeToolSpec) {
     this.#ctx = ctx;
@@ -98,7 +100,7 @@ class ShapeTool implements ToolHandlers {
     if (core.editor.state !== 'closed') core.editor.commit();
     if (!this.#machine.send('down')) return;
     const p = camera.toPage(s.x, s.y);
-    this.#gesture = { px: p.x, py: p.y, sx: s.x, sy: s.y, id: '', serial: ++this.#serial };
+    this.#gesture = { px: p.x, py: p.y, sx: s.x, sy: s.y, id: '', edit: undefined };
     core.selection.clear();
   }
 
@@ -123,7 +125,8 @@ class ShapeTool implements ToolHandlers {
     else this.#click(p.x, p.y);
     const id = this.#gesture.id;
     this.#machine.send('up');
-    this.#gesture = { ...this.#gesture, id: '' };
+    this.#gesture.edit?.commit();
+    this.#gesture = { ...this.#gesture, id: '', edit: undefined };
     this.#ctx.core.history.seal();
     if (id !== '') this.#done(id);
     this.#ctx.requestFrame();
@@ -132,11 +135,9 @@ class ShapeTool implements ToolHandlers {
   onCancel(): void {
     const g = this.#gesture;
     if (!this.#machine.send('cancel')) return;
-    if (g.id !== '') {
-      // the shape that was started goes; its merged step then holds no change and is dropped
-      this.#ctx.core.store.change('user', (tx) => void tx.remove(g.id), { mergeKey: `make:${g.serial}` });
-      this.#gesture = { ...g, id: '' };
-    }
+    // everything the gesture wrote goes, and its undo step with it
+    g.edit?.cancel();
+    this.#gesture = { ...g, id: '', edit: undefined };
     this.#ctx.core.history.seal();
     this.#ctx.requestFrame();
   }
@@ -190,7 +191,11 @@ class ShapeTool implements ToolHandlers {
     } else if (spec.layout === 'note') {
       this.#put({ x: x - spec.w / 2, y: y - spec.h / 2, props: {} });
     } else {
-      this.#put({ x: x - spec.w / 2, y: y - spec.h / 2, props: { w: spec.w, h: spec.h } });
+      // the size is the kind's own: a host's kind in a shape tool gets the same rule (design 7.2); 120 by 80 when it has none
+      const d = this.#ctx.core.store.kinds.get(spec.kind)?.defaults as { w?: unknown; h?: unknown } | undefined;
+      const w = typeof d?.w === 'number' ? d.w : 120;
+      const h = typeof d?.h === 'number' ? d.h : 80;
+      this.#put({ x: x - w / 2, y: y - h / 2, props: { w, h } });
     }
   }
 
@@ -206,26 +211,24 @@ class ShapeTool implements ToolHandlers {
     const page = core.pages.current;
     if (page === null) return;
     const spec = this.#spec;
-    const result = core.store.change(
-      'user',
-      (tx: Tx) => {
-        if (g.id !== '') {
-          tx.update(g.id, { x: l.x, y: l.y, props: l.props });
-          return undefined;
-        }
-        const made = putNewShape(tx, core.store, { kind: spec.kind, page, x: l.x, y: l.y, props: { ...styledDefaults(this.#ctx, spec.kind), ...l.props } });
-        return made.ok ? made.value : undefined;
-      },
-      { mergeKey: `make:${g.serial}` },
-    );
+    const edit = g.edit ?? beginGesture(core);
+    g.edit = edit;
+    const result = edit.write((tx: Tx) => {
+      if (g.id !== '') {
+        tx.update(g.id, { x: l.x, y: l.y, props: l.props });
+        return undefined;
+      }
+      const made = putNewShape(tx, core.store, { kind: spec.kind, page, x: l.x, y: l.y, props: { ...styledDefaults(this.#ctx, spec.kind), ...l.props } });
+      return made.ok ? made.value : undefined;
+    });
     if (!result.ok) return;
-    const made = result.value.value as ShapeRecord | undefined;
+    const made = result.value as ShapeRecord | undefined;
     if (made !== undefined) {
       this.#gesture = { ...g, id: made.id };
       // a shape made inside a frame belongs to it
       const geometry = shapeGeometry(made, core.store.kinds);
       const frame = geometry === undefined ? undefined : frameAt(core.store, core.store.kinds, page, geometry.pageCx, geometry.pageCy, new Set([made.id]));
-      if (frame !== undefined) core.store.change('user', (tx) => void tx.update(made.id, { parent: frame.id }), { mergeKey: `make:${g.serial}` });
+      if (frame !== undefined) edit.write((tx) => void tx.update(made.id, { parent: frame.id }));
     }
   }
 }

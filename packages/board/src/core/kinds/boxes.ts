@@ -31,6 +31,16 @@ export interface BoxProps {
 
 export const BOX_DEFAULTS: BoxProps = Object.freeze({ w: 120, h: 80, fill: 'none', stroke: '#1f2430', dash: 'solid', size: 3, label: '', font: 'sans' });
 
+/** The size a shape of the kind has when it is made by a click (design 7.2); the kinds not listed use `BOX_DEFAULTS`. */
+const BOX_SIZES: Readonly<Record<string, { readonly w: number; readonly h: number }>> = {
+  triangle: { w: 120, h: 100 },
+  diamond: { w: 120, h: 100 },
+  star: { w: 110, h: 105 },
+};
+
+/** The props a new shape of the box kind starts with: `BOX_DEFAULTS` with the kind's own size. */
+const defaultsOf = (kind: string): BoxProps => Object.freeze({ ...BOX_DEFAULTS, ...(BOX_SIZES[kind] ?? {}) });
+
 /** The text size of a label inside a shape, in page units. */
 export const LABEL_PX = 18;
 /** The space between a shape's edge and its label. */
@@ -89,8 +99,9 @@ function styled(props: BoxProps, style: Parameters<NonNullable<KindDef<BoxProps>
 export function checkBox(props: unknown, what: string): BoardResult<BoxProps> {
   const p = bagOf(props, what);
   if (failed(p)) return p;
-  const w = readNumber(p, 'w', BOX_DEFAULTS.w, DIM_MIN, DIM_MAX);
-  const h = readNumber(p, 'h', BOX_DEFAULTS.h, DIM_MIN, DIM_MAX);
+  const own = defaultsOf(what);
+  const w = readNumber(p, 'w', own.w, DIM_MIN, DIM_MAX);
+  const h = readNumber(p, 'h', own.h, DIM_MIN, DIM_MAX);
   const fill = readFill(p, 'fill', BOX_DEFAULTS.fill);
   const stroke = readColor(p, 'stroke', BOX_DEFAULTS.stroke);
   const dash = readEnum(p, 'dash', BOX_DEFAULTS.dash, DASHES);
@@ -111,7 +122,7 @@ function boxKind(kind: BoxKind): KindDef<BoxProps> {
   const outline = OUTLINES[kind];
   return {
     kind,
-    defaults: BOX_DEFAULTS,
+    defaults: defaultsOf(kind),
     check: (props) => checkBox(props, kind),
     geometry(shape: ShapeRecord<string, BoxProps>): KindGeometry {
       const { w, h, fill, size, label } = shape.props;

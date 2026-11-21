@@ -1,12 +1,12 @@
 /**
  * The round-3 tables (docs/state-machines.md, "board", B19 to B24): every row of every `*_MACHINE` table is exact, every
  * move the document does not list has no row, and the running code refuses the moves with no row without changing what
- * the board holds. B24 is in `web/images.ts`, which the package entry does not export; its table is imported from there.
+ * the board holds. B24 is in `web/images.ts`; its table is exported from the package entry with the others.
  */
 import { describe, expect, it } from 'vitest';
-import { EDITOR_MACHINE, HOLD_MACHINE, SELECT_MACHINE, SHAPE_TOOL_MACHINE, SNAP_MACHINE, frameOf, handlesOf, rectTool, selectTool } from '../../src/index';
+import { EDITOR_MACHINE, HOLD_MACHINE, IMAGE_MACHINE, SELECT_MACHINE, SHAPE_TOOL_MACHINE, SNAP_MACHINE, frameOf, handlesOf, rectTool, selectTool } from '../../src/index';
 import type { ToolHandlers } from '../../src/index';
-import { IMAGE_MACHINE, ImageEntry } from '../../src/web/images';
+import { ImageEntry } from '../../src/web/images';
 import { dump } from './helpers';
 import { sample, walk } from './ink-helpers';
 import { add, key, pageOf, shapeRig, shapesOf } from './shape-helpers';
