@@ -131,6 +131,8 @@ export interface NewShape {
   readonly rotation?: number;
   readonly parent?: string | null;
   readonly index?: string;
+  /** The host's own data on the shape (the agent marks what it made with `madeBy`). */
+  readonly meta?: Readonly<Record<string, unknown>>;
 }
 
 /** Adds a shape of a kind, with the kind's defaults under `props`, on top of the page. Returns the stored record. */
@@ -155,7 +157,7 @@ export function putNewShape(tx: Tx, store: Store, spec: NewShape): BoardResult<S
     locked: false,
     opacity: 1,
     props: { ...(def.defaults as object), ...spec.props },
-    meta: {},
+    meta: spec.meta ?? {},
   });
   if (!put.ok) return put;
   return ok(put.value as ShapeRecord);

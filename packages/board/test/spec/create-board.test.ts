@@ -151,7 +151,7 @@ describe('toolbar (design 10; ui.md Layout; errors.md tool_unknown)', () => {
     expect(rowIds(board)).toEqual([
       'select', 'hand', 'pen', 'highlighter', 'eraser', 'laser', 'lasso',
       'rect', 'more-shapes', 'ellipse', 'arrow', 'line', 'text', 'sticky', 'frame',
-      'image', 'figure', 'fix', 'undo', 'redo',
+      'image', 'figure', 'fix', 'ask', 'undo', 'redo',
     ]);
     for (const id of ['triangle', 'diamond', 'star']) {
       const b = toolButton(board, id);

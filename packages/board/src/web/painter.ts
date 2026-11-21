@@ -1,8 +1,9 @@
 /**
- * `BoardPainter` on the web (design 3, 6.3, 9): layer 4. Three canvases stack in one element: the tiles (WebGL 2 on the
+ * `BoardPainter` on the web (design 3, 6.3, 8, 9): layer 4. Four canvases stack in one element: the tiles (WebGL 2 on the
  * view package's back-end, Canvas 2D as the backup), the live layer (a 2D canvas that asks for `desynchronized`, where
- * the stroke being drawn grows), and the overlay (selection, lasso, laser, the eraser's ring, the tail of the stroke and
- * its predicted samples). The tile cache is the core's `TileCache` (512 device pixel tiles at power-of-two zoom steps,
+ * the stroke being drawn grows), the top layer (the shapes that are above a figure card, drawn over the card layer that
+ * sits between the tiles and the live layer), and the overlay (selection, lasso, laser, the eraser's ring, the tail of
+ * the stroke and its predicted samples). The tile cache is the core's `TileCache` (512 device pixel tiles at power-of-two zoom steps,
  * least recently used, capped); this file keeps the pictures. States: the back-end (B15), the frame (B16) and the live
  * layer (B17) are `*_MACHINE` tables in docs/state-machines.md. Every call returns a `BoardResult`; nothing throws.
  */
@@ -60,6 +61,12 @@ export interface WebPainterOptions {
   readonly onError?: (error: BoardError) => void;
 }
 
+/** A shape drawn over figure cards: its draw item, and the card outlines (page units, `[x0, y0, …]`) it shows inside. */
+export interface OverCardItem {
+  readonly item: DrawItem;
+  readonly clip: readonly (readonly number[])[];
+}
+
 export interface PainterStats {
   readonly backend: BackendState;
   /** Tiles drawn since the painter was made. */
@@ -77,7 +84,7 @@ const cssOf = (c: HTMLCanvasElement): void => {
 };
 
 export class WebPainter implements BoardPainter {
-  /** The element to put in the page: three stacked canvases. */
+  /** The element to put in the page: the stacked canvases. */
   readonly element: HTMLDivElement;
   readonly tiles: TileCache;
   readonly #options: WebPainterOptions;
@@ -87,8 +94,12 @@ export class WebPainter implements BoardPainter {
   #tileCanvas: HTMLCanvasElement;
   readonly #liveCanvas: HTMLCanvasElement;
   readonly #overlayCanvas: HTMLCanvasElement;
+  readonly #topCanvas: HTMLCanvasElement;
   readonly #live: CanvasRenderingContext2D | null;
   readonly #overlay: CanvasRenderingContext2D | null;
+  readonly #top: CanvasRenderingContext2D | null;
+  /** True while the top layer holds a picture, so an empty frame clears it once and then costs nothing. */
+  #topDrawn = false;
   #raster: TileRaster | null = null;
   /** Where image shapes get their pictures; handed to every raster the painter opens. */
   #images: ImageLookup = () => null;
@@ -117,11 +128,14 @@ export class WebPainter implements BoardPainter {
     this.#tileCanvas = document.createElement('canvas');
     this.#liveCanvas = document.createElement('canvas');
     this.#overlayCanvas = document.createElement('canvas');
-    for (const c of [this.#tileCanvas, this.#liveCanvas, this.#overlayCanvas]) cssOf(c);
+    this.#topCanvas = document.createElement('canvas');
+    for (const c of [this.#tileCanvas, this.#liveCanvas, this.#topCanvas, this.#overlayCanvas]) cssOf(c);
     this.#liveCanvas.style.pointerEvents = 'none';
+    this.#topCanvas.style.pointerEvents = 'none';
     this.#overlayCanvas.style.pointerEvents = 'none';
-    this.element.append(this.#tileCanvas, this.#liveCanvas, this.#overlayCanvas);
+    this.element.append(this.#tileCanvas, this.#liveCanvas, this.#topCanvas, this.#overlayCanvas);
     this.#live = this.#context(this.#liveCanvas, { alpha: true, desynchronized: true });
+    this.#top = this.#context(this.#topCanvas, { alpha: true });
     this.#overlay = this.#context(this.#overlayCanvas, { alpha: true });
     this.#openRaster();
   }
@@ -132,6 +146,14 @@ export class WebPainter implements BoardPainter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Puts the card layer in the stack: above the tiles, below the live stroke, the top layer and the overlay, so ink and
+   * arrows drawn over a card show over it and handles and guides over both.
+   */
+  mountCards(layer: HTMLElement): void {
+    this.#tileCanvas.after(layer);
   }
 
   /** Sets where the pictures of image shapes come from; tiles that hold images are drawn again by the caller when one arrives. */
@@ -244,7 +266,7 @@ export class WebPainter implements BoardPainter {
 
   #applySize(): void {
     const { w, h, devW, devH } = this.size;
-    for (const c of [this.#tileCanvas, this.#liveCanvas, this.#overlayCanvas]) {
+    for (const c of [this.#tileCanvas, this.#liveCanvas, this.#topCanvas, this.#overlayCanvas]) {
       c.width = devW;
       c.height = devH;
       c.style.width = `${w}px`;
@@ -253,6 +275,7 @@ export class WebPainter implements BoardPainter {
     // changing a canvas's size empties it: the live layer starts again from the stroke's first group
     this.ink.drawn = 0;
     this.ink.serial = -1;
+    this.#topDrawn = false;
     const raster = this.#raster?.resize(devW, devH);
     if (raster !== undefined && !raster.ok) this.#fallBack(raster);
   }
@@ -298,6 +321,40 @@ export class WebPainter implements BoardPainter {
   drawItems(items: readonly DrawItem[]): BoardResult<undefined> {
     if (!this.#frameState.is('drawing')) return this.#outside('drawItems');
     this.#extra.push(...items);
+    return DONE;
+  }
+
+  /**
+   * Draws the shapes that are above a figure card on the top layer, each clipped to the outlines (page units) of the
+   * cards it is above, so it shows over the card and nowhere else. The layer is drawn again every frame; an empty list
+   * clears it.
+   */
+  drawOverCards(entries: readonly OverCardItem[]): BoardResult<undefined> {
+    if (!this.#frameState.is('drawing')) return this.#outside('drawOverCards');
+    const ctx = this.#top;
+    if (ctx === null) return DONE;
+    if (entries.length === 0 && !this.#topDrawn) return DONE;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.#topCanvas.width, this.#topCanvas.height);
+    this.#topDrawn = entries.length > 0;
+    const { dpr, zoom, x: camX, y: camY } = this.frame;
+    const k = zoom * dpr;
+    for (const entry of entries) {
+      ctx.save();
+      ctx.beginPath();
+      for (const poly of entry.clip) {
+        for (let i = 0; i + 1 < poly.length; i += 2) {
+          const x = ((poly[i] as number) - camX) * k;
+          const y = ((poly[i + 1] as number) - camY) * k;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+      }
+      ctx.clip();
+      drawItems2D(ctx, [entry.item], k, camX, camY, this.#images);
+      ctx.restore();
+    }
     return DONE;
   }
 

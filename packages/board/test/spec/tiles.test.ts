@@ -346,7 +346,7 @@ describe('the painter (design 3, 6.3; errors.md render_failed; B15, B16, B17)', 
     expect(painter.backend).toBe('canvas2d');
     expect(notices).toHaveLength(1);
     expect(notices[0]?.kind).toBe('render_failed');
-    expect(painter.element.querySelectorAll('canvas').length).toBe(3);
+    expect(painter.element.querySelectorAll('canvas').length).toBe(4);
     painter.dispose();
   });
 

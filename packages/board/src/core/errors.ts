@@ -32,6 +32,12 @@ export type BoardErrorKind =
   | 'figure_failed'
   /** WebGL 2 is not available or its context cannot come back: the board draws with Canvas 2D. */
   | 'render_failed'
+  /** No agent transport, or the server refused or could not be reached. */
+  | 'agent_unavailable'
+  /** The agent stopped or failed partway: what it made stays. */
+  | 'agent_partial'
+  /** An agent action names a shape that is gone, a locked shape, one the model did not make, or breaks a limit. */
+  | 'agent_refused'
   /** A callback threw, or a bug in the board. */
   | 'internal';
 

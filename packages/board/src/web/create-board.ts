@@ -13,6 +13,8 @@ import type { Limits } from '../core/types';
 import { ToolHost } from '../core/tools/host';
 import { defaultTools, createOverlayState, defaultStyles } from '../core/tools/index';
 import type { ToolContext, ToolList } from '../core/tools/index';
+import { createAgentKit } from './agent';
+import type { AgentKit, AgentOption } from './agent';
 import { mountBoardView } from './board-view';
 import type { BoardView } from './board-view';
 import { resolveShell, toolsFor } from './ui/shell';
@@ -31,6 +33,8 @@ export interface BoardOptions extends ShellOptions {
   readonly onError?: (error: BoardError) => void;
   /** Draw with Canvas 2D only. */
   readonly canvas2dOnly?: boolean;
+  /** The agent (design 11): `{ transport }` or `{ server }`; without it the Ask tool says the agent is unavailable. */
+  readonly agent?: AgentOption;
 }
 
 export interface Board {
@@ -46,15 +50,18 @@ export interface Board {
   readonly tool: string;
   /** Chooses a tool. `tool_unknown` (also sent to `onError`) when the id is not in the tool list. */
   setTool(id: string): BoardResult<undefined>;
+  /** The agent: the runner of the board tools (`board_read`, `board`), the service, the circle to ask. Headless boards have it too. */
+  readonly agent: AgentKit;
   /** The whole board as the text of a `.incantly-board` file. */
   save(): BoardResult<string>;
   dispose(): void;
 }
 
 /** A tool context with no screen: no camera drawing, no frames. The tools still run on the core. */
-function headlessContext(core: BoardCore): ToolContext {
+function headlessContext(core: BoardCore, kit: AgentKit): ToolContext {
   return {
     core,
+    circle: kit.circle,
     styles: defaultStyles(),
     overlay: createOverlayState(),
     camera: () => core.camera,
@@ -90,8 +97,9 @@ export function createBoard(options: BoardOptions = {}): BoardResult<Board> {
     core = made.value;
   }
   if (options.container === undefined) {
-    const host = new ToolHost(headlessContext(core), tools, options.readOnly === true ? 'hand' : 'pen', shell.keys);
-    return ok(boardOf(core, host, shell, undefined, report, () => core.dispose()));
+    const kit = createAgentKit(core, options.agent, { onError: report });
+    const host = new ToolHost(headlessContext(core, kit), tools, options.readOnly === true ? 'hand' : 'pen', shell.keys);
+    return ok(boardOf(core, host, shell, undefined, kit, report, () => core.dispose()));
   }
   const mounted = mountBoardView({
     container: options.container,
@@ -99,23 +107,25 @@ export function createBoard(options: BoardOptions = {}): BoardResult<Board> {
     tools,
     shell,
     onError: report,
+    ...(options.agent !== undefined ? { agent: options.agent } : {}),
     ...(options.canvas2dOnly === true ? { canvas2dOnly: true } : {}),
   });
   if (!mounted.ok) return mounted;
   const view = mounted.value;
-  return ok(boardOf(core, view.host, shell, view, report, () => {
+  return ok(boardOf(core, view.host, shell, view, view.agent, report, () => {
     view.dispose();
     core.dispose();
   }));
 }
 
-function boardOf(core: BoardCore, host: ToolHost, shell: Shell, view: BoardView | undefined, report: (e: BoardError) => void, end: () => void): Board {
+function boardOf(core: BoardCore, host: ToolHost, shell: Shell, view: BoardView | undefined, agent: AgentKit, report: (e: BoardError) => void, end: () => void): Board {
   return {
     core,
     host,
     shell,
     view,
     element: view?.element,
+    agent,
     get tool(): string {
       return host.tool;
     },

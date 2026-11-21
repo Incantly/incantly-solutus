@@ -1501,7 +1501,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 
 ## board
 
-Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends the agent job and circle to ask. Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. A machine is made with its third argument, `onRefused` (`incantly/state-refusal-reported`): a move the table refuses is reported to the board's `onError` as `internal`, with `detail.machine`, `detail.state` and `detail.event` (`refusedMove` in `core/errors.ts`); a call that may come in any state asks first (`sendIfAble` in `core/machine.ts`), so a report always means a bug. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends B31 to B35 (agent runner, agent job, circle to ask, hand animation, agent panel). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. A machine is made with its third argument, `onRefused` (`incantly/state-refusal-reported`): a move the table refuses is reported to the board's `onError` as `internal`, with `detail.machine`, `detail.state` and `detail.event` (`refusedMove` in `core/errors.ts`); a call that may come in any state asks first (`sendIfAble` in `core/machine.ts`), so a report always means a bug. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
 
 Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
 
@@ -1709,7 +1709,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 ### B12. Tool host (which tool is in force)
 
 - **Where:** `core/tools/host.ts` `ToolHost`, `TOOLS_MACHINE`. The chosen tool (`current`) is data; the machine says whether it is the chosen tool or a temporary one that answers input.
-- **States:** `chosen` (the chosen tool answers), `eraserEnd` (a pen's eraser end is down: the eraser answers), `handHeld` (Space is held, or the middle button is down: the hand answers).
+- **States:** `chosen` (the chosen tool answers), `eraserEnd` (a pen's eraser end is down: the eraser answers), `handHeld` (Space is held, or the middle button is down: the hand answers), `askHeld` (the pen's barrel button is down: the Ask tool answers, round 5).
 - **Invariants:** a tool is switched only while no pointer is down (`setTool` while a stroke is in progress cancels it first); the pen's eraser end (button bit 32) enters `eraserEnd` on its `down` and leaves on `up`, then the chosen tool answers again; a held Space or a middle button gives the hand; one temporary tool at a time (`eraserEnd` and `handHeld` do not nest); an unknown tool id is refused with `tool_unknown`.
 - **Transitions:**
 
@@ -1719,8 +1719,10 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 | `chosen` | `handDown` | Space is held, or the middle button is down | `handHeld` | the chosen tool is cancelled |
 | `eraserEnd` | `eraserUp` | | `chosen` | |
 | `handHeld` | `handUp` | | `chosen` | |
+| `chosen` | `askDown` | the sample has the barrel bit and the Ask tool is in the list | `askHeld` | the chosen tool is cancelled |
+| `askHeld` | `askUp` | | `chosen` | |
 
-- **Reachable invalid states or transitions:** `handDown` in `eraserEnd` and `eraserDown` in `handHeld` have no row, so a second temporary tool does not start while one is in force.
+- **Reachable invalid states or transitions:** `handDown` in `eraserEnd` and `eraserDown` in `handHeld` have no row, so a second temporary tool does not start while one is in force; the same for `askDown` in `eraserEnd` and `handHeld`.
 
 ### B13. Page bar
 
@@ -1787,7 +1789,7 @@ Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`,
 
 - **Where:** `web/painter.ts` `LiveLayer`, `LIVELAYER_MACHINE`. Independent marks of the layer (how many points are already drawn, the stroke's colour and opacity) are one named record, `ink`.
 - **States:** `clear` (nothing on the live canvas), `inking` (a stroke grows on it), `holding` (the stroke ended; the canvas still shows it until the tile that now holds the stroke is drawn).
-- **Invariants:** the canvas asks for `desynchronized`; each frame draws only the segments added since the last frame, with one segment of overlap so no seam shows; the tail not yet final (the last 3 points) and the predicted samples go to the overlay and are cleared each frame; the stroke's opacity is the canvas's CSS opacity, so overlapping segments of one stroke do not darken; `holding` ends in the frame that draws the tile (`settle`), so the stroke is never missing for a frame and never drawn twice.
+- **Invariants:** the canvas asks for `desynchronized`; each frame draws only the segments added since the last frame, with one segment of overlap so no seam shows; the tail not yet final (the last 3 points) and the predicted samples go to the overlay and are cleared each frame; the stroke's opacity is the canvas's CSS opacity, so overlapping segments of one stroke do not darken; `holding` ends in the frame that draws the tile (`settle`), so the stroke is never missing for a frame and never drawn twice. The live canvas sits above the figure cards (BR-55), so a stroke drawn over a card shows while it grows. The top layer that holds the shapes above a card is not a state: it is cleared and drawn again every frame from the shapes (`drawOverCards`).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -1827,7 +1829,7 @@ Written before the code of round 3 (`core/tools/select.ts`, `core/tools/shape.ts
 
 - **Where:** `core/tools/select.ts` `SelectTool`, `SELECT_MACHINE`.
 - **States:** `idle`; `pointing` (the pointer is down on a shape or on empty page and has not moved past the slop of 4 screen pixels); `dragging` (the selection moves); `resizing` (one of the 8 resize handles is held); `rotating` (the rotate handle is held); `handling` (a handle of the kind, such as an arrow's end or bend or a line's point, is held); `brushing` (a box is dragged on empty page to select what it meets); `editing` (the text editor of B21 is open on a shape of this board).
-- **Invariants:** what the pointer went down on is in `gesture` (`hit`, `handle`, `start`, `originals`), reset by every `down` and never read in `idle`; a drag, a resize, a rotation and a handle drag write one transaction for each move through one gesture (B25, begun with the first write), and the gesture is committed on `up`, so each press is one undo step; the shapes moved are the selection and everything inside a selected frame or group; a locked shape is selected but never changed; the arrows bound to a changed shape follow it in the same transaction (`core/bindings.ts`); a shape dropped inside a frame is parented to it, one dragged out of its frame is not; the selection is not in the store and is not an undo step; a click on a shape of a group selects the whole group; Shift toggles the shape in the selection; `editing` starts when the text editor opens (a double click on a shape with text, Enter, or a new text shape) and ends when it closes (a click outside, Esc); a `down` while `editing` closes the editor first; the snap guides (B22) are shown only in `dragging` and `resizing`.
+- **Invariants:** what the pointer went down on is in `gesture` (`hit`, `handle`, `start`, `originals`), reset by every `down` and never read in `idle`; a drag, a resize, a rotation and a handle drag write one transaction for each move through one gesture (B25, begun with the first write), and the gesture is committed on `up`, so each press is one undo step; the shapes moved are the selection and everything inside a selected frame or group; a locked shape is selected but never changed; the arrows bound to a changed shape follow it in the same transaction (`core/bindings.ts`), also the arrow whose binding the transaction has just put, and a bound end stops `ARROW_GAP` (8 units) short of its target's outline, so the head shows beside the target (BR-55); a shape dropped inside a frame is parented to it, one dragged out of its frame is not; the selection is not in the store and is not an undo step; a click on a shape of a group selects the whole group; Shift toggles the shape in the selection; `editing` starts when the text editor opens (a double click on a shape with text, Enter, or a new text shape) and ends when it closes (a click outside, Esc); a `down` while `editing` closes the editor first; the snap guides (B22) are shown only in `dragging` and `resizing`.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -2047,6 +2049,104 @@ Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts
 | `sealed` | `rebind` | | `building` | the table is cleared |
 
 - **Reachable invalid states or transitions:** `bind` in `sealed` and `seal` in `sealed` have no row (the sealed map is read only).
+
+### Round 5 (branch `feat/board-5`: agents on the board)
+
+Written before the code of round 5 (`core/agent.ts`, `core/agent-service.ts`, `core/agent-hand.ts`, `core/circle.ts`, `core/tools/ask.ts`, `web/agent-*.ts`, `web/ui/agent-panel.ts`). The runner (B31) writes the model's actions through one gesture for each call; the job (B32) is one request to the server and its answer; circle to ask (B33) is the user's side of a request; the hand animation (B34) is what the live layer shows while an action is being drawn; the panel (B35) is the screen's side. Every table below refuses at least one move, and a refused move is reported (`internal`). Data that is not a state sits in a named record or a list that is emptied when the machine leaves the state; no nullable field holds part of a state.
+
+### B31. Agent runner
+
+- **Where:** `core/agent.ts` `BoardAgent`, `RUNNER_MACHINE`. One runner for each board; `board_read` needs no state and is a plain method.
+- **States:** `idle` (no `board` call is running); `running` (a call is applying its actions, in one gesture with origin `model`); `stopping` (`stop` was called: the action in hand is ended and the rest of the call is not run).
+- **Invariants:** calls run one after the other (a call that arrives while one runs waits for it); each call has one gesture (B25), or the job's gesture when the job (B32) gives one, and every action of it is one `gesture.write` (one store transaction, B1), so a failed action changes nothing and the next action still runs; a call with its own gesture commits it when it ends, even when it was stopped, so what was made stays and is one undo step; the job commits its gesture when the job ends; `$last` is the id of the shape the previous action made (an arrow does not count, so a label can follow it), kept from one call to the next (a streamed answer is several calls), and forgotten when a `page` action changes the page or a new request begins (`forget`); the shapes the runner makes carry `meta.madeBy: 'model'`; `edit`, `move` and `delete` of a shape without that mark are refused with `agent_refused` unless the call allows it; an action that was stopped before it ran is reported `agent_partial`; the epoch (a count that `stop` raises) tells a call that was stopped from one that was not, so a call that begins after a stop is not stopped by it; a hand-style action waits for the hand animation (B34) and, when it is stopped part of the way, stores what was drawn so far; a `limit` from the store is reported as `agent_refused`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `run` | the call is valid (1 to 20 actions) | `running` | gesture begun |
+| `running` | `done` | the last action ended | `idle` | gesture committed |
+| `running` | `stop` | | `stopping` | the epoch is raised; the hand animation is cancelled |
+| `stopping` | `done` | the action in hand ended | `idle` | gesture committed; unrun actions reported `agent_partial` |
+
+- **Reachable invalid states or transitions:** `run` in `running` or `stopping` has no row (a second call waits on the queue and begins in `idle`); `stop` in `idle` and in `stopping` has no row (asked first with `can`).
+
+### B32. Agent job
+
+- **Where:** `core/agent-service.ts` `AgentJob`, `JOB_MACHINE`; `AgentService` keeps the jobs, the newest last, and the conversation.
+- **States:** `ready` (made, nothing sent); `waiting` (the request is out and no answer has come); `working` (at least one answer of actions has come); `done` (the server said `done`); `stopped` (the user pressed Stop); `failed` (the server or the network failed, or the answer was not understood); `replaced` (a newer request took over). The last four are final.
+- **Invariants:** a job is one request and has one gesture (B25, origin `model`) that every runner call of its answer writes through, committed when the job ends, so the whole answer is one undo step; a newer request aborts the older one at once (`replace`, its signal is aborted) and the older answer is not applied any more, what it made stays; Stop aborts the signal, ends the animation and the runner call that is applying actions (B31), and the job is `stopped`; the ids of what a job made are kept with the job; an answer is applied one event at a time, in order, each `actions` event as one runner call; a final job takes no more events; without a transport `ask` returns `agent_unavailable` and makes no job; a job that ended before `done` with something made gives `agent_partial` (what was made stays; the notice lists what failed), one that ended with nothing made gives `agent_unavailable` when it failed and `agent_partial` when it was stopped or replaced; the server's own `error` event ends the job `failed` with the server's message.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `ready` | `start` | | `waiting` | the request is sent |
+| `waiting` | `actions` | the event holds a list | `working` | applied by the runner |
+| `waiting` | `done` | | `done` | |
+| `working` | `actions` | | `working` | applied by the runner |
+| `working` | `done` | | `done` | |
+| `waiting`, `working` | `stop` | | `stopped` | signal aborted, the runner stopped |
+| `waiting`, `working` | `fail` | an `error` event, a thrown transport, a bad line | `failed` | `onError` gets the error |
+| `waiting`, `working` | `replace` | a newer request | `replaced` | signal aborted |
+
+- **Reachable invalid states or transitions:** every event in `done`, `stopped`, `failed` and `replaced` has no row (a late event of an aborted stream is dropped, and the loop asks first with `can`); `actions` and `done` in `ready` have no row; `start` anywhere but `ready` has no row.
+
+### B33. Circle to ask
+
+- **Where:** `core/circle.ts` `CircleAsk`, `CIRCLE_MACHINE`; the Ask tool (`core/tools/ask.ts`) and the pen's barrel button only feed it points.
+- **States:** `idle` (nothing circled); `drawing` (the loop is being drawn); `choosing` (the loop is closed, the items are found and the suggestions are shown); `asking` (a suggestion was picked and its request is out).
+- **Invariants:** the loop is kept in page units in one array that is emptied when the machine goes to `idle`; a loop of fewer than 3 points goes back to `idle`; the items are found when the loop closes (shapes whose middle is inside, ink with more than half its points inside, as the lasso does), at most 60, in reading order; the suggestions are made at once from the item kinds, with no server (design 11.1), and always end with `ask`; a loop with nothing in it has only `ask`; the pen's barrel button held gives the Ask tool for that stroke (B12 `askHeld`); `pick` builds the request of agent.md 3 and gives it to the service; a new loop while `choosing` or `asking` replaces the old one (the service aborts the older request, B32); `dismiss` (Esc, a press elsewhere) goes back to `idle`; the pick `ask` is refused until its text is not empty; the loop, the items and the suggestions are emptied when the machine leaves `choosing` and `asking`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `drawing` | loop begun |
+| `drawing` | `move` | | `drawing` | a point added |
+| `drawing` | `up` | 3 or more points | `choosing` | items found, suggestions made |
+| `drawing` | `cancel` | | `idle` | loop emptied |
+| `choosing` | `pick` | a suggestion of the list, and text for `ask` | `asking` | the request goes to the service |
+| `choosing` | `down` | | `drawing` | the old loop, items and suggestions are dropped |
+| `choosing` | `dismiss` | | `idle` | emptied |
+| `asking` | `finish` | the job ended | `idle` | emptied |
+| `asking` | `down` | | `drawing` | the older request is aborted by the service |
+| `asking` | `dismiss` | | `idle` | emptied; the job is not stopped (Stop is the panel's) |
+
+- **Reachable invalid states or transitions:** `pick` in `idle`, `drawing` and `asking` has no row; `up` and `move` in `idle`, `choosing` and `asking` have no row (a stray pointer event is asked first with `can`); `finish` in any state but `asking` has no row.
+
+### B34. Hand animation
+
+- **Where:** `core/agent-hand.ts` `HandAnimation`, `ANIMATION_MACHINE`; the web layer (`web/agent-hand.ts`) gives it the frame time and draws what it says on the live layer.
+- **States:** `idle` (nothing is being drawn by the hand); `playing` (one action is being drawn); `landing` (the drawing is done and stored, and the hand's picture stays one frame, until the tile that holds the stored shape is drawn, so the shape does not blink).
+- **Invariants:** the animation has no clock: the time of every frame is given to `step`; the rate is 400 characters a second (`HAND_CPS`), a stroke counts one character for every 4 page units of its length (`STROKE_UNITS_PER_CHAR`), and no action takes more than 3 seconds; with reduced motion nothing is begun and the shape is stored at once; one animation at a time (a second `begin` is refused, the runner waits); `progress` is from 0 to 1 and never goes back; `cancel` gives the progress reached, so a stopped stroke stores what was drawn so far; the plan is a record that is not in the store, read only, and each frame is made from it, never by writing the store.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | a plan with something to draw | `playing` | the first frame's time is kept |
+| `playing` | `step` | progress below 1 | `playing` | a frame is made |
+| `playing` | `finish` | progress reached 1 | `landing` | the runner is told |
+| `playing` | `cancel` | Stop, a newer request | `landing` | the progress reached is given |
+| `landing` | `settle` | the next frame | `idle` | the hand's picture is dropped |
+
+- **Reachable invalid states or transitions:** `begin` in `playing` and `landing` has no row; `step` in `idle` and `landing` has no row (asked first with `can`: a frame with nothing playing is a plain frame); `cancel` in `idle` and `landing` has no row.
+
+### B35. Agent panel
+
+- **Where:** `web/ui/agent-panel.ts` `AgentPanel`, `PANEL_MACHINE`.
+- **States:** `closed` (only the small Agent button shows); `open` (the conversation and the box to talk show; nothing is running); `busy` (a request is running: the Stop button shows, the box is off, and the hand icon shows where the agent draws).
+- **Invariants:** the panel exists only when the board has an agent (a transport or a server); the conversation is read from the service's list, so the panel keeps no copy; the hand icon's place is a record `{ x, y }` in page units (the last place the runner told) and the icon shows only while `busy`, so no flag says whether it shows; Stop stops the job through the service (B32), at once, and the panel goes back to `open`; the panel opens by itself when a new request begins (a circle was picked), so the answer is seen (the panel counts the requests it has seen, so a job that goes on while the panel is shut does not open it again); without a transport the panel says the agent is unavailable and has no box.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | | `open` | the panel shows |
+| `closed` | `begin` | a request began (a circle was picked) | `busy` | the panel shows, the hand icon appears |
+| `open` | `close` | | `closed` | |
+| `open` | `begin` | a request began (a message, or a circle) | `busy` | the hand icon appears |
+| `busy` | `end` | the job ended (done, stopped, failed, replaced) | `open` | the hand icon goes |
+| `busy` | `close` | | `closed` | the job goes on |
+| `closed` | `end` | | `closed` | a job that ended while the panel was shut |
+
+- **Reachable invalid states or transitions:** `begin` in `busy` has no row (a newer request that replaces the running one keeps the panel `busy`: the panel asks first and does not send `begin`); `close` in `closed` has no row; `open` in `open` and `busy` has no row; `end` in `open` has no row.
 
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 

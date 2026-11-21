@@ -5,6 +5,7 @@
  */
 import type { Camera } from '../camera';
 import type { BoardCore } from '../board';
+import type { CircleAsk } from '../circle';
 import type { GuideLine, OverlayItems, TrailView } from '../draw';
 import type { Bounds } from '../types';
 import type { InputSample, KeyInput } from '../input';
@@ -76,6 +77,10 @@ export interface ToolContext {
    * so the key was used.
    */
   activate?(id: string): boolean;
+  /** Circle to ask (round 5): the Ask tool feeds it points. Without it the Ask tool says there is no agent. */
+  readonly circle?: CircleAsk;
+  /** Shows the user a short note (the board's status line). */
+  say?(text: string): void;
 }
 
 export interface ToolHandlers {

@@ -90,11 +90,13 @@ walk('B11 HAND_MACHINE', HAND_MACHINE, ['idle', 'panning'], ['down', 'move', 'up
 ]);
 
 // B12 tool host
-walk('B12 TOOLS_MACHINE', TOOLS_MACHINE, ['chosen', 'eraserEnd', 'handHeld'], ['eraserDown', 'eraserUp', 'handDown', 'handUp'], [
+walk('B12 TOOLS_MACHINE', TOOLS_MACHINE, ['chosen', 'eraserEnd', 'handHeld', 'askHeld'], ['eraserDown', 'eraserUp', 'handDown', 'handUp', 'askDown', 'askUp'], [
   ['chosen', 'eraserDown', 'eraserEnd'],
   ['chosen', 'handDown', 'handHeld'],
+  ['chosen', 'askDown', 'askHeld'],
   ['eraserEnd', 'eraserUp', 'chosen'],
   ['handHeld', 'handUp', 'chosen'],
+  ['askHeld', 'askUp', 'chosen'],
 ]);
 
 // B13 page bar

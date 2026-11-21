@@ -21,7 +21,7 @@ All errors use the shape of the SDK and the Tiptap extension, `{ ok: false, kind
 | `figure_failed` | A figure card's script fails or its mount fails | The card's picture and a small error badge, as Tiptap figures | The card's lines panel |
 | `agent_unavailable` | No agent transport, or the server refused | The Ask box shows the reason | The user draws by hand |
 | `agent_partial` | The agent stopped or failed partway | What it made stays; a notice lists what failed | Retry or undo |
-| `agent_refused` | An agent action names a shape that is gone, a locked shape, or breaks a limit | Nothing for that action | The action's result carries the error; the agent fixes its next action |
+| `agent_refused` | An agent action names a shape that is gone or on another page, a locked shape, a shape the model did not make (without the user's leave), or breaks a limit; or a call has more than 20 actions | Nothing for that action | The action's result carries the error; the agent fixes its next action |
 
 A success can carry notices in `notices` (the Result of `docs/features/errors/design.md`): `{ severity, kind, message, detail }`. Round 1 has one, `record_kept_raw`, from `loadBoard`; `detail.records` lists `{ record, field, why }` for each shape kept raw. `meta.invalid` is reserved on a kept shape: the load writes it, and a host's own `meta.invalid` on such a shape is replaced.
 

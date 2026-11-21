@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  alignShapes, bindEnd, bindingProps, bindingsOfArrow, bindingsOnTarget, boundTarget, deleteShapes, flipShapes, groupShapes, shapeGeometry, translateShapes, unbindEnd,
+  ARROW_GAP, alignShapes, bindEnd, bindingProps, bindingsOfArrow, bindingsOnTarget, boundTarget, deleteShapes, flipShapes, groupShapes, shapeGeometry, translateShapes, unbindEnd,
 } from '../../src/index';
 import type { ShapeRecord } from '../../src/index';
 import { dump } from './helpers';
@@ -75,15 +75,38 @@ describe('sticking an arrow end to a shape', () => {
     expect(props.find((p) => p?.end === 'start')?.anchor).toEqual([0.5, 0.5]);
   });
 
-  it('the ends sit on the outline of the shapes they are stuck to, on the line between them', () => {
+  it('the ends sit ARROW_GAP (8 units) short of the outline of the shapes they are stuck to, on the line between them', () => {
     const rig = shapeRig();
     const { arrow } = pair(rig);
     const s = endOf(rig, arrow.id, 'start');
     const e = endOf(rig, arrow.id, 'end');
-    expect(s.x).toBeCloseTo(200, 4);
+    expect(ARROW_GAP).toBe(8);
+    expect(s.x).toBeCloseTo(200 + ARROW_GAP, 4);
     expect(s.y).toBeCloseTo(130, 4);
-    expect(e.x).toBeCloseTo(400, 4);
+    expect(e.x).toBeCloseTo(400 - ARROW_GAP, 4);
     expect(e.y).toBeCloseTo(130, 4);
+  });
+
+  it('an arrow put with its ends stuck in one transaction is already on its ends: the head shows beside the shape', () => {
+    const rig = shapeRig();
+    const a = solid(rig, 100, 100);
+    const b = solid(rig, 400, 100);
+    // the arrow is made with both ends at the shapes' middles, as the agent's `arrow` action does
+    const arrow = add(rig, 'arrow', 150, 130, { start: [0, 0], end: [300, 0] });
+    const done = rig.core.store.change('user', (tx) => [bindEnd(tx, rig.core.store, arrow.id, 'start', a.id, { x: 150, y: 130 }), bindEnd(tx, rig.core.store, arrow.id, 'end', b.id, { x: 450, y: 130 })]);
+    expect(done.ok && done.value.value.every((r) => r.ok)).toBe(true);
+    expect(endOf(rig, arrow.id, 'start').x).toBeCloseTo(200 + ARROW_GAP, 4);
+    expect(endOf(rig, arrow.id, 'end').x).toBeCloseTo(400 - ARROW_GAP, 4);
+  });
+
+  it('an end never stops short by more than half the way when the other end is close to the outline', () => {
+    const rig = shapeRig();
+    const b = solid(rig, 210, 100);
+    const arrow = add(rig, 'arrow', 205, 130, { start: [0, 0], end: [60, 0] });
+    rig.core.store.change('user', (tx) => bindEnd(tx, rig.core.store, arrow.id, 'end', b.id, { x: 260, y: 130 }));
+    const e = endOf(rig, arrow.id, 'end');
+    expect(e.x).toBeCloseTo(207.5, 4);
+    expect(e.x).toBeGreaterThan(endOf(rig, arrow.id, 'start').x);
   });
 
   it('an end that is not stuck stays where it was put', () => {
@@ -152,10 +175,10 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     expect(s.y).toBeGreaterThan(200);
     expect(s.y).toBeLessThan(260);
     expect(s.x).toBeGreaterThan(100);
-    expect(s.x).toBeLessThanOrEqual(200 + 1e-6);
+    expect(s.x).toBeLessThanOrEqual(200 + ARROW_GAP + 1e-6);
     expect(get(rig, a.id).y).toBe(200);
     // the end is on the outline of A
-    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, 2)).toBe(true);
+    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, ARROW_GAP + 2)).toBe(true);
   });
 
   it('undo gives back the shape and the arrow together; redo moves both again', () => {
@@ -205,8 +228,8 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     drag(rig, [200, 130], [260, 130], 0, 8, 1000);
     expect(get(rig, a.id).props).toMatchObject({ w: 160 });
     const s = endOf(rig, arrow.id, 'start');
-    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, 2)).toBe(true);
-    expect(s.x).toBeCloseTo(260, 3);
+    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, ARROW_GAP + 2)).toBe(true);
+    expect(s.x).toBeCloseTo(260 + ARROW_GAP, 3);
   });
 
   it('turning a shape keeps the end on its outline', () => {
@@ -219,7 +242,7 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     drag(rig, [150, 100 - 26], [250, 130], 0, 12, 1000);
     expect(get(rig, a.id).rotation).toBeCloseTo(Math.PI / 2, 5);
     const s = endOf(rig, arrow.id, 'start');
-    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, 3)).toBe(true);
+    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, ARROW_GAP + 2)).toBe(true);
   });
 
   it('aligning and flipping stuck shapes carry the arrows (every write to a shape moves its arrows)', () => {
@@ -229,12 +252,12 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     alignShapes(rig.core, [a.id, b.id, c.id], 'bottom');
     for (const [s, id] of [['start', a.id], ['end', b.id]] as const) {
       const p = endOf(rig, arrow.id, s);
-      expect(shapeGeometry(get(rig, id), rig.core.store.kinds)?.hit(p.x, p.y, 3), `${s} after align`).toBe(true);
+      expect(shapeGeometry(get(rig, id), rig.core.store.kinds)?.hit(p.x, p.y, ARROW_GAP + 2), `${s} after align`).toBe(true);
     }
     flipShapes(rig.core, [a.id, b.id, c.id], 'x');
     for (const [s, id] of [['start', a.id], ['end', b.id]] as const) {
       const p = endOf(rig, arrow.id, s);
-      expect(shapeGeometry(get(rig, id), rig.core.store.kinds)?.hit(p.x, p.y, 3), `${s} after flip`).toBe(true);
+      expect(shapeGeometry(get(rig, id), rig.core.store.kinds)?.hit(p.x, p.y, ARROW_GAP + 2), `${s} after flip`).toBe(true);
     }
   });
 
@@ -246,7 +269,7 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     translateShapes(rig.core, [a.id], 0, 50);
     for (const id of [arrow.id, second.id]) {
       const p = endOf(rig, id, id === arrow.id ? 'start' : 'end');
-      expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(p.x, p.y, 3), id).toBe(true);
+      expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(p.x, p.y, ARROW_GAP + 2), id).toBe(true);
     }
   });
 
@@ -268,7 +291,7 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     rig.core.store.change('user', (tx) => void bindEnd(tx, rig.core.store, arrow.id, 'end', inner.id, { x: 150, y: 130 }));
     translateShapes(rig.core, [f.id], 0, 200);
     const p = endOf(rig, arrow.id, 'end');
-    expect(shapeGeometry(get(rig, inner.id), rig.core.store.kinds)?.hit(p.x, p.y, 3)).toBe(true);
+    expect(shapeGeometry(get(rig, inner.id), rig.core.store.kinds)?.hit(p.x, p.y, ARROW_GAP + 2)).toBe(true);
     expect(p.y).toBeGreaterThan(300);
   });
 
@@ -278,7 +301,7 @@ describe('the arrow follows the shape (B19: in the same transaction)', () => {
     rig.core.selection.set([a.id]);
     rig.host.key({ key: 'ArrowDown', down: true, shift: true, alt: false, mod: false, repeat: false });
     const s = endOf(rig, arrow.id, 'start');
-    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, 3)).toBe(true);
+    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, ARROW_GAP + 2)).toBe(true);
     expect(get(rig, a.id).y).toBe(110);
   });
 });
@@ -331,7 +354,7 @@ describe('deleting and undoing', () => {
     expect(get(rig, a.id).y).toBe(100);
     translateShapes(rig.core, [a.id], 0, 60);
     const s = endOf(rig, arrow.id, 'start');
-    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, 3)).toBe(true);
+    expect(shapeGeometry(get(rig, a.id), rig.core.store.kinds)?.hit(s.x, s.y, ARROW_GAP + 2)).toBe(true);
   });
 });
 
@@ -365,7 +388,7 @@ describe("dragging an arrow's ends with the select tool (B19: handling)", () => 
     expect(boundTarget(rig.core.store, arrow.id, 'end')).toBe(c.id);
     expect(rig.core.history.undoSteps).toBe(steps + 1);
     const p = endOf(rig, arrow.id, 'end');
-    expect(shapeGeometry(get(rig, c.id), rig.core.store.kinds)?.hit(p.x, p.y, 3)).toBe(true);
+    expect(shapeGeometry(get(rig, c.id), rig.core.store.kinds)?.hit(p.x, p.y, ARROW_GAP + 2)).toBe(true);
     rig.core.history.undo();
     expect(boundTarget(rig.core.store, arrow.id, 'end')).toBeUndefined();
     expect(endOf(rig, arrow.id, 'end')).toEqual({ x: 200, y: 300 });

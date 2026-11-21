@@ -25,14 +25,19 @@ type BoardAction =
   | { op: 'move'; id: string; at: Place } | { op: 'edit'; id: string; text: string } | { op: 'delete'; id: string }
   | { op: 'camera'; target: Target | 'all' } | { op: 'page'; to: string | 'new' | 'next' | 'previous'; name?: string };
 
-type Target = string | Box;                                         // a shape id, or an area
+type Box = [x: number, y: number, w: number, h: number];            // page units
+type Target = string | Box;                                         // a shape id, `$last`, or an area
 type Place = { x: number; y: number } | { near: Target; side: 'right' | 'left' | 'above' | 'below' } | 'free';
 ```
 
-- `Place` with `near` is the normal way: the board finds a free spot on that side and never covers other shapes. `'free'` picks the nearest empty spot in view.
-- `stroke` and `write` with `style: 'hand'` animate on the live layer (about 400 characters a second) and are stored as normal ink. With reduced motion they appear at once.
+- `Place` with `near` is the normal way: the board finds a free spot on that side and never covers other shapes. `'free'` picks the nearest empty spot in view: it looks at every empty strip between the shapes' boxes, the one nearest the middle of the view first, and only when no strip holds the thing (with a margin of 40 units from the edge of the view) does it go below all content.
+- `stroke` and `write` with `style: 'hand'` animate on the live layer (about 400 characters a second). A `stroke` is stored as ink; a hand-style `write` is stored as a text shape in the hand font, since there is no stroke font (BR-59). With reduced motion they appear at once.
 - `figure` makes a figure card and runs its lines through the teacher's `draw`, so line errors come back in the kernel's format.
-- An action that fails changes nothing and does not stop the actions after it, as with `draw` lines.
+- An action that fails changes nothing and does not stop the actions after it, as with `draw` lines. A refusal (`agent_refused`) is a shape that is gone or on another page, a locked shape, a shape the model did not make (below), a limit, or more than 20 actions in the call.
+- `Place` `{ x, y }` is where the thing's box begins. `mark` has no `Place`: it goes round, under or over its target (`circle` is an ellipse, `underline` a line, `highlight` a translucent rectangle, `box` a rectangle, in red or yellow). `point` is the laser over the target's box for a moment and stores nothing. `arrow` with a `label` also writes the label above the arrow's middle. `edit` of a figure card takes its lines as `text` (one a line) and runs them again; `edit` of other shapes sets their text (a label, a sticky note's text, a frame's name).
+- Everything the model makes carries `meta.madeBy: 'model'`. `edit`, `move` and `delete` of a shape without that mark are refused (`agent_refused`, `detail.reason: 'not_model'`) unless the request allows it: the panel's "Let the agent change my work" box, or a circle's `slider` and `animate` choices.
+- `$last` is the shape the previous action made. An arrow does not count, so a label can follow it; it carries over from one `board` call to the next of the same answer and goes when a `page` action changes the page or a new request begins.
+- A hand-style `write` is stored as a text shape in the hand font, not as ink (no stroke font; BR-59): its characters appear as if written, and a stopped one is stored as far as it got. A `stroke` is stored as ink. An `arrow` between shapes sticks to both and its ends stop 8 units short of their outlines, so the head shows beside a card, not under it.
 
 ## 3. Circle to ask
 
@@ -48,7 +53,11 @@ The board sends the server one request:
 }
 ```
 
-`choice` is the suggestion the user picked (`graph`, `formula`, `solve`, `steps`, `measure`, `explain`, `animate`, `slider`, or `ask` with a `text`). `picture` is sent only when the model reads pictures (design 16). The answer is a stream of `board` actions, normally one `figure` placed `near` the circle and one `arrow` from the circle to it.
+`choice` is the suggestion the user picked (`graph`, `formula`, `solve`, `steps`, `measure`, `geometry`, `explain`, `animate`, `slider`, or `ask` with a `text`). `box` is `[x, y, w, h]`. The request also holds `more` (items the circle holds beyond the 60 listed) and `circle` (the loop's area, `[x, y, w, h]`, so the answer can be placed `near` it). `picture` is sent only when the board's `agent.vision` option is on, which is for a model that reads pictures (design 16); it is off by default. The answer is a stream of `board` actions, normally one `figure` placed `near` the circle and one `arrow` from the circle to it.
+
+What the user says to the talking agent is `{ "kind": "talk", "text": "…", "items": […], "more": 0, "page": "page:1", "allowEdit": false }`: the board in view comes with it, as `board_read` gives it. `allowEdit` is always there: `false` unless the user ticked "Let the agent change my work", then `true` (BR-56).
+
+The answer is NDJSON, one event a line: `{ "actions": [...] }` (one `board` call, applied at once), then `{ "done": true }`, or `{ "error": { "kind", "message" } }`. A whole answer is one gesture, so one undo takes it all back. Stop ends the job at once and what was drawn stays; a newer request aborts the older one.
 
 ## 4. Rules for the model
 

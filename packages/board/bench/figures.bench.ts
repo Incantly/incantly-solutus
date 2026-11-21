@@ -21,7 +21,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerHost } from '@incantly/view';
-import { BoardCore, FigureLayer, Strings, TileCache, addFigure, keysBetween, tileBox } from '../src/index';
+import { BoardCore, FigureLayer, Strings, TileCache, addFigure, keysBetween, overCardItems, tileBox } from '../src/index';
 import type { BoardResult, Tile } from '../src/index';
 
 const W = 1280;
@@ -56,10 +56,10 @@ function makeCore(): BoardCore {
   return made.value;
 }
 
-/** Ink strokes of `points` points each in a grid (60 units apart, 100 columns), put in one transaction without history. */
-function putStrokes(core: BoardCore, count: number, points: number): void {
+/** Ink strokes of `points` points each in a grid (60 units apart, 100 columns), put in one transaction without history, above `above` in the order when it is given. */
+function putStrokes(core: BoardCore, count: number, points: number, above: string | null = null, prefix = 'i'): void {
   const page = core.pages.current as string;
-  const idx = must(keysBetween(null, null, count));
+  const idx = must(keysBetween(above, null, count));
   must(
     core.store.change(
       'host',
@@ -73,7 +73,7 @@ function putStrokes(core: BoardCore, count: number, points: number): void {
           }
           must(
             tx.put({
-              id: `shape:i${i}`, page, kind: 'ink', x: (i % 100) * 60, y: Math.floor(i / 100) * 50, rotation: 0, parent: null, index: idx[i] as string, locked: false, opacity: 1,
+              id: `shape:${prefix}${i}`, page, kind: 'ink', x: (i % 100) * 60, y: Math.floor(i / 100) * 50, rotation: 0, parent: null, index: idx[i] as string, locked: false, opacity: 1,
               props: { points: pts, stride: 3, nib: 'pen', size: 3, color: '#1f2430', opacity: 1 }, meta: {},
             }),
           );
@@ -187,6 +187,34 @@ describe('board figure cards, design 13 (round 4)', () => {
     expect(layer.liveCount).toBe(3);
     expect(b.p95).toBeLessThan(8);
     expect(l.p95).toBeLessThan(4);
+    layer.dispose();
+    host.remove();
+  }, 120_000);
+
+  it('finding what is drawn over 3 shown cards, with 2,000 strokes made after them, is under 2 ms a frame', async () => {
+    const core = makeCore();
+    const camera = core.camera as NonNullable<BoardCore['camera']>;
+    camera.moveTo(0, 0, 1, 0);
+    const made = [[300, 200], [760, 220], [520, 520]].map(([x, y]) => must(addFigure(core, { at: { x: x as number, y: y as number }, script: '# incantly 1\na = 1' })));
+    const top = made.map((id) => (core.store.get(id) as { index: string }).index).sort().pop() as string;
+    putStrokes(core, 2000, 16, top, 'o');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const layer = makeLayer(core, host);
+    layer.sync(camera, W, H, performance.now());
+    expect(layer.covering).toHaveLength(3);
+    const FRAMES = 300;
+    const times = new Float64Array(FRAMES);
+    let items = 0;
+    for (let f = 0; f < FRAMES; f++) {
+      const a = performance.now();
+      items = overCardItems(core, layer.covering, 1).length;
+      times[f] = performance.now() - a;
+    }
+    const s = stats(times);
+    reportRow('shapes over 3 shown cards, 2,000 strokes above them, per frame', s.mean, 'ms', 2, `   p95 ${s.p95.toFixed(3)}  max ${s.max.toFixed(3)}  strokes over ${items}`);
+    expect(items).toBeGreaterThan(20);
+    expect(s.p95).toBeLessThan(2);
     layer.dispose();
     host.remove();
   }, 120_000);
