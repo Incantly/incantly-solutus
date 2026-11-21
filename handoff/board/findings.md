@@ -224,3 +224,41 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-52.** The default key map of the tools (`core/tools/keys.ts` `defaultMap`) is one module-level `KeyMap` with no error sink, so a refused move in it is not reported. It is only read, so no move is refused today.
 - **BR-53.** The Tiptap figure keeps its app in `lost` after a lost graphics context and takes it back on `webglcontextrestored`; the board's card frees the app and claims again (BR-47). The two behave differently; pick one and write it in both designs.
 - **BR-54.** A refused move of a machine is now reported as `internal`, so calls that may come in any state (cancel with nothing going on, `release` of a card with no input) ask first (`sendIfAble` in `core/machine.ts`). Other machines in `packages/view`, `packages/ui` and `packages/sdk` still make refused moves silently; the rule `state-refusal-reported` covers only `packages/board`, `packages/tiptap` and `tools`.
+
+## Round 5 (PR #136, reviewed at `5300a3f`)
+
+No new kind of hidden state was found in this round: the five new tables (B31 to B35) refuse moves and report refusals, and nothing shadows them. So this round adds no lint rule.
+
+### Fix now
+
+#### BR-55. Ink and arrows are hidden under live cards
+
+- **Where:** `web/figures.ts` (the card layer is a DOM layer above the board's canvas), the painter.
+- **What:** the arrow from the circle to its answer card has its head under the card (`round5-card-arrow.png`); any ink, arrow or text drawn over a live card is hidden, though it is above the card in the page's order.
+- **Fix:**
+  1. A third canvas above the card layer (`pointer-events: none`) draws, each frame the board draws, the shapes whose order is above a card and whose box touches a live card; the tiles leave them out only where a live card covers them, so nothing is drawn twice on screen. A card's picture (not live) stays in the board's own drawing, in order.
+  2. A bound arrow's end stops at its target's outline plus a gap of 8 units, so the head shows beside the card, not on it.
+  - Tests: a stroke and an arrow over a live card are drawn on the top layer; one under it is not; an arrow bound to a card ends 8 units from its edge. Screenshot.
+
+#### BR-56. The talk request drops `allowEdit: false`
+
+- **Fix:** the request body always has `allowEdit` (agent.md 3). Test: the tester's failing test; restore the strict check in `agent-panel.test.ts`.
+
+#### BR-57. `'free'` misses an empty strip in view
+
+- **Where:** `core/agent-place.ts` `freeSpot`.
+- **Fix:** search the view for the nearest spot the box fits in (scan rows and columns of the empty areas between the shapes' boxes, nearest to the view's centre first) before falling back below the view. Test: the tester's failing test. Bench row `'free'` with 2,000 shapes stays under 4 ms.
+
+#### BR-58. A click on a toolbar button leaves an ink dot
+
+- **Where:** `web/input.ts`: pointer events from the shell's buttons reach the board.
+- **Fix:** the input layer takes only events whose target is the board's canvas or its card layer; events from the shell, menus, panels and bars are not board input. Test: a pointer down and up on a toolbar button with the pen chosen adds no shape.
+
+#### BR-59. Hand-style writing is text, not ink
+
+- **Ruling:** with no stroke font, hand-style `write` is stored as a text shape in the hand font, revealed as if written; `stroke` is stored as ink. Write this in agent.md 2 and design 11.2.
+
+### Later
+
+- **BR-60.** Shape fixing works one stroke at a time; a triangle drawn in three strokes is not recognised.
+- **BR-61.** The `agent.vision` picture has not been tried with a model (no server yet).
