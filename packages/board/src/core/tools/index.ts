@@ -5,7 +5,7 @@ import { handTool } from './hand';
 import { highlighterTool, penTool } from './pen';
 import { laserTool } from './laser';
 import { lassoTool } from './lasso';
-import { SHAPE_TOOLS } from './shape';
+import { arrowTool, diamondTool, ellipseTool, frameTool, lineTool, rectTool, starTool, stickyTool, textTool, triangleTool } from './shape';
 import { selectTool } from './select';
 
 export { ToolList, createOverlayState, defaultStyles } from './def';
@@ -25,5 +25,12 @@ export { editKey } from './keys';
 /** Every built-in tool; a host takes some away with `without` and adds its own with `with`. */
 export const defaultTools: ToolList = new ToolList([penTool, highlighterTool, eraserTool, laserTool, lassoTool, handTool]);
 
-/** `defaultTools` with the select tool and the shape tools: the list the board view shows (design 10, ui.md). */
-export const boardTools: ToolList = new ToolList([selectTool, penTool, highlighterTool, eraserTool, laserTool, lassoTool, handTool, ...SHAPE_TOOLS]);
+/**
+ * `defaultTools` with the select tool and the shape tools: the list the board view shows, in ui.md's order (Select, Hand,
+ * the ink tools, then Rect, Ellipse, Arrow, Line, Text, Sticky, Frame; the board view puts Triangle, Diamond and Star in
+ * the More shapes menu). The same tools as `SHAPE_TOOLS`, which is in the order of the shapes' own table.
+ */
+export const boardTools: ToolList = new ToolList([
+  selectTool, handTool, penTool, highlighterTool, eraserTool, laserTool, lassoTool,
+  rectTool, ellipseTool, arrowTool, lineTool, textTool, stickyTool, frameTool, triangleTool, diamondTool, starTool,
+]);

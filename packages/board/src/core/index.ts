@@ -20,7 +20,7 @@ export {
 } from './paint';
 export type { ClipBox, Dash, FontFamily, GlyphPart, ImagePart, Part, PathData, PathPart, ShapeItem } from './paint';
 export { LINE_HEIGHT, TEXT_ALIGNS, cssFontFor, layoutText, measureGeneration, setFontMeasure, textParts } from './text';
-export type { FontMeasure, LaidLine, TextAlign, TextLayout } from './text';
+export type { FontMeasure, FontMetrics, LaidLine, TextAlign, TextLayout } from './text';
 export { shapeGeometry } from './geometry';
 export type { Geometry } from './geometry';
 export { EDITOR_MACHINE, TextEditor } from './text-editor';

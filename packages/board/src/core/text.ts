@@ -10,7 +10,10 @@ import type { MathItem } from '@incantly/view';
 import { PATH_LINE, PATH_MOVE, PATH_CLOSE, pathPart } from './paint';
 import type { FontFamily, Part } from './paint';
 
-export type FontMeasure = (s: string, font: math.MathFont, px: number, family: FontFamily) => math.GlyphMetrics;
+/** What a measure gives for a run of glyphs: the advance, the height, and (when the canvas knows it) how far the ink reaches to the right of the start. */
+export type FontMetrics = math.GlyphMetrics & { readonly right?: number };
+
+export type FontMeasure = (s: string, font: math.MathFont, px: number, family: FontFamily) => FontMetrics;
 
 const rough: FontMeasure = (s, font, px) => math.roughMeasure(s, font, px);
 
@@ -89,6 +92,8 @@ function tokens(paragraph: string): Token[] {
 
 interface Laid {
   readonly w: number;
+  /** How far the items reach to the right: the laid-out boxes of the maths, an italic letter's ink included. At least `w`. */
+  readonly reach: number;
   readonly asc: number;
   readonly desc: number;
   readonly items: readonly MathItem[];
@@ -98,16 +103,27 @@ function shiftItems(items: readonly MathItem[], dx: number): MathItem[] {
   return items.map((it) => (it.k === 'path' ? { ...it, pts: it.pts.map(([x, y]) => [x + dx, y] as const) } : { ...it, x: it.x + dx }));
 }
 
+/** The right edge of a laid-out item: a glyph's advance or its ink when the measure knows it, a rule's width, a path's last x. */
+function itemReach(it: MathItem, family: FontFamily): number {
+  if (it.k === 'glyph') {
+    const m = measuring.measure(it.s, it.font, it.px, family);
+    return it.x + Math.max(m.w, m.right ?? 0);
+  }
+  if (it.k === 'rule') return it.x + it.w;
+  return it.pts.reduce((r, [px]) => Math.max(r, px), 0) + it.lw / 2;
+}
+
 /** One line of text with maths in it: plain runs in the text font, `$…$` runs typeset; a run the subset cannot read shows its source. */
 function layoutLine(src: string, px: number, family: FontFamily, color: string): Laid {
   const measure: math.Measure = (s, font, size) => measuring.measure(s, font, size, family);
   let x = 0;
+  let reach = 0;
   let asc = px * 0.72;
   let desc = px * 0.22;
   const items: MathItem[] = [];
   const plain = (s: string): Laid => {
     const m = measure(s, 'text', px);
-    return { w: m.w, asc: m.asc, desc: m.desc, items: s === '' ? [] : [{ k: 'glyph', x: 0, y: 0, s, font: 'text', px, color }] };
+    return { w: m.w, reach: m.w, asc: m.asc, desc: m.desc, items: s === '' ? [] : [{ k: 'glyph', x: 0, y: 0, s, font: 'text', px, color }] };
   };
   for (const run of math.splitMath(src)) {
     let l: Laid;
@@ -117,12 +133,14 @@ function layoutLine(src: string, px: number, family: FontFamily, color: string):
     } else {
       l = plain(run.s);
     }
-    items.push(...shiftItems(l.items, x));
+    const placed = shiftItems(l.items, x);
+    items.push(...placed);
+    reach = Math.max(reach, x + l.w, ...placed.map((it) => itemReach(it, family)));
     x += l.w;
     asc = Math.max(asc, l.asc);
     desc = Math.max(desc, l.desc);
   }
-  return { w: x, asc, desc, items };
+  return { w: x, reach: Math.max(reach, x), asc, desc, items };
 }
 
 /**
@@ -155,7 +173,8 @@ export function layoutText(text: string, px: number, family: FontFamily, color: 
     }
     flush();
   }
-  const blockW = maxW ?? lines.reduce((m, l) => Math.max(m, l.w), 0);
+  // a block that fits its longest line is as wide as the laid-out boxes reach, so no maths is cut off at the box
+  const blockW = maxW ?? lines.reduce((m, l) => Math.max(m, l.reach), 0);
   const laid: LaidLine[] = [];
   let top = 0;
   for (const l of lines) {

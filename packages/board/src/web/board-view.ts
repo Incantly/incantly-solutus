@@ -146,6 +146,8 @@ export interface BoardView {
 }
 
 const STYLE_ID = 'incantly-board-view-style';
+/** The shapes in the "More shapes" menu. */
+const MORE_SHAPES: readonly string[] = ['triangle', 'diamond', 'star'];
 const CSS = `
 .ib-view{position:relative;width:100%;height:100%;min-height:200px;overflow:hidden;background:#fbfbfa;color:#1f2430;font:13px/1.3 system-ui,sans-serif;user-select:none;-webkit-user-select:none}
 .ib-surface{position:absolute;inset:0;outline:none;cursor:crosshair}
@@ -153,7 +155,10 @@ const CSS = `
 .ib-bar button,.ib-bar select{font:inherit;border:1px solid transparent;border-radius:7px;background:transparent;padding:5px 9px;cursor:pointer;color:inherit}
 .ib-bar button:hover{background:#eef0f4}.ib-bar button[aria-pressed=true]{background:#e0e7ff;border-color:#a5b4fc}
 .ib-bar button:disabled{opacity:.4;cursor:default}
-.ib-tools{left:50%;bottom:14px;transform:translateX(-50%);flex-wrap:wrap;justify-content:center;max-width:94%}
+.ib-tools{left:0;right:0;margin:0 auto;bottom:14px;width:max-content;max-width:94%;flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.ib-tools button{flex:none;white-space:nowrap;padding:5px 7px;font-size:12px}
+.ib-tools .ib-sep{flex:none}
+.ib-more{left:auto;top:auto;bottom:62px;min-width:120px}
 .ib-style{right:12px;top:70px;flex-wrap:wrap;max-width:300px;justify-content:flex-start}
 .ib-style[hidden],.ib-list[hidden]{display:none}
 .ib-sep{width:1px;align-self:stretch;background:#d5d7dd;margin:2px 2px}
@@ -195,8 +200,8 @@ function installFontMeasure(doc: Document): void {
   setFontMeasure((text, font, px, family) => {
     ctx.font = cssFontFor(font, family, px);
     const m = ctx.measureText(text);
-    if (font === 'text') return { w: m.width, asc: m.fontBoundingBoxAscent > 0 ? m.fontBoundingBoxAscent : px * 0.8, desc: m.fontBoundingBoxDescent > 0 ? m.fontBoundingBoxDescent : px * 0.22 };
-    return { w: m.width, asc: Math.max(px * 0.3, m.actualBoundingBoxAscent), desc: Math.max(0, m.actualBoundingBoxDescent) };
+    if (font === 'text') return { w: m.width, asc: m.fontBoundingBoxAscent > 0 ? m.fontBoundingBoxAscent : px * 0.8, desc: m.fontBoundingBoxDescent > 0 ? m.fontBoundingBoxDescent : px * 0.22, right: m.actualBoundingBoxRight };
+    return { w: m.width, asc: Math.max(px * 0.3, m.actualBoundingBoxAscent), desc: Math.max(0, m.actualBoundingBoxDescent), right: m.actualBoundingBoxRight };
   });
 }
 
@@ -376,13 +381,53 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   // ---- tool strip and style strip
   const toolButtons = new Map<string, HTMLButtonElement>();
   const shapeToolIds = new Set(SHAPE_TOOLS.map((t) => t.id));
+  // triangle, diamond and star are in a "More shapes" menu on the rectangle's group, so the strip stays one row (ui.md)
+  const moreMenu = h('div', { class: 'ib-list ib-more', role: 'menu', 'aria-label': 'More shapes', hidden: '' });
+  const moreBtn = h('button', { type: 'button', title: 'More shapes', 'aria-label': 'More shapes', 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'more-shapes' }, '▾');
+  /** Opens or closes the menu above its button. The menu's `hidden` is its state: no other field says it. */
+  const showMore = (open: boolean): void => {
+    moreMenu.hidden = !open;
+    moreBtn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const at = moreBtn.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    moreMenu.style.left = `${Math.max(0, at.left - box.left)}px`;
+  };
+  const hasMore = host.tools.some((t) => MORE_SHAPES.includes(t.id)) && host.tools.some((t) => t.id === 'rect');
   for (const def of host.tools) {
+    const extra = hasMore && MORE_SHAPES.includes(def.id);
     // the shape tools sit in a group of their own
     if (def.id === SHAPE_TOOLS[0]?.id) toolBar.append(h('span', { class: 'ib-sep' }));
     const b = h('button', { type: 'button', 'aria-pressed': 'false', title: def.key !== undefined ? `${def.label} (${def.key})` : def.label, 'data-tool': def.id }, def.label);
-    b.addEventListener('click', () => host.setTool(def.id));
-    toolBar.append(b);
+    b.addEventListener('click', () => {
+      showMore(false);
+      host.setTool(def.id);
+    });
+    if (extra) {
+      b.setAttribute('role', 'menuitem');
+      moreMenu.append(b);
+    } else {
+      toolBar.append(b);
+      if (hasMore && def.id === 'rect') toolBar.append(moreBtn);
+    }
     toolButtons.set(def.id, b);
+  }
+  if (hasMore) {
+    moreBtn.addEventListener('click', () => showMore(moreMenu.hidden));
+    moreBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') showMore(false);
+    });
+    moreMenu.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      showMore(false);
+      moreBtn.focus();
+    });
+    // a press anywhere else on the board closes the menu
+    root.addEventListener('pointerdown', (e) => {
+      const t = e.target as Node;
+      if (!moreMenu.hidden && !moreMenu.contains(t) && !moreBtn.contains(t)) showMore(false);
+    });
+    root.append(moreMenu);
   }
   // an image comes from a file; Fix turns the newest stroke (or the selected ones) into a clean shape
   const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', hidden: '', 'aria-label': 'Choose an image' });
@@ -495,6 +540,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     styleBar.replaceChildren(...kids);
     styleBar.hidden = kids.length === 0;
     for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(id === tool));
+    moreBtn.setAttribute('aria-pressed', String(MORE_SHAPES.includes(tool)));
     surface.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   };
 
