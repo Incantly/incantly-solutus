@@ -287,3 +287,35 @@ No new kind of hidden state was found in this round: the five new tables (B31 to
 - **BR-69.** The lasso of 2,000 strokes is 3.8 to 4.3 ms in Chrome with the CPU ×4 (goal 4 ms) and 1.14 ms in Node. The loop is a polygon of 48 points tested against every stroke's box and then its points; a box test against the loop's own box first (done) and a coarse grid of the loop's cells would cut the polygon tests.
 - **BR-70.** The frame after a lasso of 2,000 strokes (outlines of every selected shape on the overlay) is 9 to 10 ms with the CPU ×4. Past a few hundred selected shapes draw their one frame and a count, not each outline.
 - **BR-71.** The nib list (pen, marker, pencil) could not be shown in a screenshot: with a mouse the three nibs make strokes that look the same (their difference is how they answer pressure and tilt), and the bench's pen events through the protocol did not draw in the script that made the screenshots (they did in the Chrome bench). A pen with real pressure was not tried.
+
+## Round 6 (PR #137, reviewed at `3ad3fb5`)
+
+### Fix now
+
+#### BR-72. A tile is left blank
+
+- **Where:** `web/painter.ts`, `web/painter-gl.ts`: the round 6 tile budget and the "compose nothing when nothing changed" memo.
+- **What:** in `final-background-lines.png` the tile at screen x 512 to 1024, y 48 to 560 is blank: no ruled lines, the strokes cut at its left edge, while the laser runs. A blank tile on a teacher's board is the worst visible bug the board can have.
+- **Fix:** find the cause in the Chrome script that made the picture (switch the background to lines while the laser is drawing, then wait), with a failing test first. Likely places: a tile marked drawn before its draw finished or after the budget cut it; the memo of what the screen shows keyed on tile ids, not on each tile's content version. If the cause is a memo that can disagree with what it stands for, add a lint rule or a check that makes that kind of memo impossible (each cached "what is shown" keyed by a version the owner bumps), with tests. Retake the picture.
+
+#### BR-73. Zoom with 10,000 shapes: 10.2 to 11.7 ms (goal 8 ms)
+
+- **What:** the shapes of each tile (rects, ellipses, text, sticky notes) are drawn with Canvas 2D, about 9 ms a tile with the CPU 4 times slower.
+- **Fix:** draw shape outlines and fills on the GPU with the view package's tessellated paths, as ink is; keep Canvas 2D only for text (from a glyph atlas if needed) and images. Chrome row must be under 8 ms at the 95th percentile on two runs.
+
+#### BR-74. Collections over a 10 s stroke: 4 (goal 0)
+
+- **Ruling:** the goal counts the garbage our code makes. The Chrome row subtracts a blank page's count with the same listener and `getCoalescedEvents()` (the browser's own garbage, measured in the same run), and says both numbers.
+- **Fix:** draw the live stroke and its predicted tail with WebGL from the stroke's typed arrays, so no Canvas 2D call makes a number object. The row must show 0 after the subtraction, on two runs.
+
+#### BR-75. Lasso of 2,000 strokes: 3.8 to 4.3 ms (goal 4 ms)
+
+- **Fix:** do only the selection on pointer up (outlines of the selected shapes drawn on the next frame from cached geometry); the row must be under 4 ms on every one of four runs.
+
+#### BR-76. Two gallery pictures do not show their feature
+
+- **Fix:** retake `final-card-takes-input.png` with point A dragged to a new place, and `final-three-live-cards-with-pictures.png` with a caption overlay in the shot ("live" / "picture" over each card, added by the script, not the product), and `final-background-lines.png` after BR-72. Check all 33 pictures by eye after the retakes and keep README.md matching.
+
+### Later
+
+- None new from this review.
