@@ -1,7 +1,7 @@
 /** The mode records, compiled policies, derived modes and the model's view of a mode (.kiro/specs/app-modes R1, R2, R10.6). */
 import { describe, expect, it } from 'vitest';
 import {
-  MODES, MODE_IDS, EXAM_PROFILES, allowedInstead, availableModes, compilePolicy, deriveMode, filterCatalogue, getMode, modeCard, modeSummary, parseRestrict,
+  I18n, MODES, MODE_IDS, EXAM_PROFILES, allowedInstead, availableModes, compilePolicy, deriveMode, filterCatalogue, getMode, modeCard, modeSummary, parseRestrict,
 } from '../../src/index';
 import type { CommandRef, ModeConfig } from '../../src/index';
 
@@ -193,5 +193,51 @@ describe('what the model sees (R10.6)', () => {
     expect(s.angleUnit).toBe('degree');
     expect(s.allowedGroups).toContain('conics');
     expect(s.allowedGroups).not.toContain('stats');
+  });
+});
+
+describe('the notes mode shows the board (design 3.2 row notes; ui 1 and 2; board design 15)', () => {
+  it('is available, and its only view is the board: available, initial, on its own, not toggled', () => {
+    const r = getMode('notes');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.available).toBe(true);
+    expect(r.value.views).toEqual({ available: ['board'], initial: ['board'], layout: 'single', canToggle: false });
+    expect(availableModes().map((m) => m.id)).toContain('notes');
+    expect(modeSummary(compilePolicy(r.value), CAT).mode).toBe('notes');
+  });
+
+  it('has no maths commands of its own (design 3.2: "Cmd groups: none")', () => {
+    const p = compilePolicy(MODES.notes);
+    for (const c of CAT) expect(p.command(c.name, c.group), c.name).toBe(false);
+    expect(p.view('board')).toBe(true);
+    expect(p.view('graphics')).toBe(false);
+    expect(p.view('algebra')).toBe(false);
+  });
+
+  it('has pages and file operations (design 3.2: "Pages, undo, sharing")', () => {
+    expect(MODES.notes.features.pageSet).toBe(true);
+    expect(MODES.notes.features.fileOps).toBe(true);
+    expect(MODES.notes.features.share).toBe(true);
+    expect(MODES.notes.ui.algebra).toBe(false);
+    expect(MODES.notes.ui.inputBar).toBe(false);
+  });
+
+  it('is a record of plain data, as every mode is (R1)', () => {
+    expect(JSON.parse(JSON.stringify(MODES.notes))).toEqual(MODES.notes);
+  });
+
+  it('is named Notes on its tile, with the purpose "write and draw" (app-modes ui 1)', () => {
+    const i18n = new I18n({ locale: 'en' });
+    expect(i18n.t(MODES.notes.title)).toBe('Notes');
+    expect(i18n.t(MODES.notes.purpose)).toBe('write and draw');
+  });
+
+  it('a mistyped id gets the closest mode, notes', () => {
+    const r = getMode('note');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.kind).toBe('unknown_mode');
+    expect(r.hint).toContain("'notes'");
   });
 });

@@ -2,15 +2,24 @@
  * Board core benchmarks against the round-1 rows of docs/features/board/design.md 13 (Node, warm): open a 1,000-shape
  * board, switch to a page of 2,000 shapes, undo a 500-shape paste, hit test at a point.
  *
+ * Round 2 adds the ink rows: core work per input sample, a frame while drawing, pan and zoom with 10,000 shapes, a lasso
+ * of 2,000 strokes, memory for 100,000 ink points, and no garbage collection over a simulated 10 s stroke. They are
+ * measured on the core alone (no canvas in Node): a "frame" is the work the core does for a frame, which is everything
+ * the web view's frame function does before it calls the painter. "Pen sample to pixel" needs a screen and is measured
+ * in Chrome (`docs/design/performance.md`).
+ *
  * Run: `npx vitest run --config packages/board/bench/vitest.config.ts`. Each case is a test that fails when it misses
  * its target; the number is the best of several warm runs. The rows are measured on the core alone: "open" is parse,
  * check and build the spatial index of the current page (everything before the first picture that the core owns);
  * "switch" is `goToPage` plus building the index of the page from its records.
  */
-import { performance } from 'node:perf_hooks';
+import { PerformanceObserver, performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
-import { Cameras, History, IndexGrid, KindRegistry, Pages, Store, keysBetween, loadBoard, saveBoard } from '../src/index';
-import type { BoardResult, KindDef, ShapeRecord } from '../src/index';
+import {
+  BoardCore, Cameras, History, IndexGrid, KindRegistry, Pages, PointerGate, Store, TileCache, ToolHost, createOverlayState, defaultStyles, defaultTools, keysBetween, loadBoard, saveBoard,
+  tileBox,
+} from '../src/index';
+import type { BoardResult, InputSample, KindDef, ShapeRecord, Tile, ToolContext } from '../src/index';
 
 interface RectProps {
   readonly w: number;
@@ -177,5 +186,353 @@ describe('board core, design 13', () => {
     }, 50);
     report('viewport query, 1,000 x 600 on 10,000 shapes', ms, 'ms', 1);
     expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// round 2: ink (design 13)
+
+interface Rig {
+  readonly core: BoardCore;
+  readonly host: ToolHost;
+}
+
+function makeRig(tool = 'pen'): Rig {
+  const made = BoardCore.create({});
+  if (!made.ok) throw new Error(made.message);
+  const core = made.value;
+  const ctx: ToolContext = {
+    core,
+    styles: defaultStyles(),
+    overlay: createOverlayState(),
+    camera: () => core.camera,
+    requestFrame: () => undefined,
+    strokeEnded: () => undefined,
+    strokeDropped: () => undefined,
+  };
+  return { core, host: new ToolHost(ctx, defaultTools, tool) };
+}
+
+/** One sample object, reused for every event, as the input layer does (`phase` is read through a getter, as in `web/input.ts`). */
+class Mutable implements InputSample {
+  pointer = 1;
+  device: 'pen' | 'touch' | 'mouse' = 'pen';
+  x = 0;
+  y = 0;
+  pressure = 0.6;
+  tiltX = 0;
+  tiltY = 0;
+  twist = 0;
+  buttons = 1;
+  time = 0;
+  predicted = false;
+  #step: InputSample['phase'] = 'move';
+
+  get phase(): InputSample['phase'] {
+    return this.#step;
+  }
+
+  setPhase(next: InputSample['phase']): void {
+    this.#step = next;
+  }
+}
+
+const reused = (): Mutable => new Mutable();
+
+/** The y of a wavy line, so the stroke has turns. */
+const wave = (i: number): number => 200 + 80 * Math.sin(i / 14) + 20 * Math.sin(i / 3.7);
+
+/** Ink strokes of `points` points each in a grid (60 units apart, 100 columns), put in one transaction without history. */
+function putStrokes(core: BoardCore, count: number, points: number, stride: 3 | 5 = 3): void {
+  const page = core.pages.current as string;
+  const idx = must(keysBetween(null, null, count));
+  must(
+    core.store.change(
+      'host',
+      (tx) => {
+        for (let i = 0; i < count; i++) {
+          const pts = new Float32Array(points * stride);
+          for (let k = 0; k < points; k++) {
+            pts[k * stride] = (k * 40) / points;
+            pts[k * stride + 1] = 12 * Math.sin(k / 3) + 15;
+            pts[k * stride + 2] = 0.3 + 0.6 * ((k % 7) / 7);
+          }
+          must(
+            tx.put({
+              id: `shape:i${i}`, page, kind: 'ink', x: (i % 100) * 60, y: Math.floor(i / 100) * 50, rotation: 0, parent: null, index: idx[i] as string, locked: false, opacity: 1,
+              props: { points: pts, stride, nib: 'pen', size: 3, color: '#1f2430', opacity: 1 }, meta: {},
+            }),
+          );
+        }
+      },
+      { history: false },
+    ),
+  );
+}
+
+const stats = (times: Float64Array): { mean: number; p95: number; max: number } => {
+  const sorted = Float64Array.from(times).sort();
+  let sum = 0;
+  for (const t of times) sum += t;
+  return { mean: sum / times.length, p95: sorted[Math.floor(sorted.length * 0.95)] as number, max: sorted[sorted.length - 1] as number };
+};
+
+const reportRow = (name: string, value: number, unit: string, target: number, extra = ''): void => {
+  process.stdout.write(`${value <= target ? 'ok  ' : 'MISS'}  ${name.padEnd(54)} ${value.toFixed(4).padStart(10)} ${unit}   target ${target} ${unit}${extra}\n`);
+};
+
+const info = (name: string, value: string): void => {
+  process.stdout.write(`info  ${name.padEnd(54)} ${value}\n`);
+};
+
+function collectNow(): void {
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (!gc) throw new Error('the memory and "no garbage" rows need Node started with --expose-gc: run the benches with packages/board/bench/vitest.config.ts');
+  // twice: the second run frees what the first one's finalisers released
+  gc();
+  gc();
+}
+
+describe('board ink, design 13 (round 2)', () => {
+  it('core work per input sample is under 0.1 ms (gate, tool host, 0.5 px filter, simulated pressure, commit of the stroke)', () => {
+    const { host, core } = makeRig();
+    const gate = new PointerGate();
+    const s = reused();
+    const STROKES = 30;
+    const PER = 1000;
+    const stroke = (n: number, mixed: boolean): void => {
+      for (let i = 0; i < PER; i++) {
+        s.setPhase(i === 0 ? 'down' : i === PER - 1 ? 'up' : 'move');
+        s.x = i * 0.8 + n;
+        s.y = wave(i) + n * 3;
+        s.pressure = mixed && n % 2 === 0 ? 0.3 + 0.5 * ((i % 40) / 40) : Number.NaN;
+        s.time = i * 4;
+        if (gate.admit(s as InputSample) === 'draw') host.sample(s as InputSample);
+      }
+    };
+    for (let w = 0; w < 3; w++) stroke(0, false);
+    core.history.clear();
+    const t0 = performance.now();
+    for (let n = 0; n < STROKES; n++) stroke(n, true);
+    const perSample = (performance.now() - t0) / (STROKES * PER);
+    reportRow('core work per input sample', perSample, 'ms', 0.1);
+    expect(core.store.all('shape').length).toBeGreaterThanOrEqual(STROKES);
+    expect(perSample).toBeLessThan(0.1);
+  });
+
+  it('a frame while drawing a stroke is under 2 ms of script (rebuild the live outline, hand the painter its view), over a simulated 10 s stroke', () => {
+    const { host, core } = makeRig();
+    const s = reused();
+    const FRAMES = 600;
+    const PER_FRAME = 4;
+    const times = new Float64Array(FRAMES);
+    let i = 0;
+    s.setPhase('down');
+    s.x = 0;
+    s.y = wave(0);
+    s.pressure = 0.5;
+    host.sample(s as InputSample);
+    s.setPhase('move');
+    for (let f = 0; f < FRAMES; f++) {
+      const t0 = performance.now();
+      for (let k = 0; k < PER_FRAME; k++) {
+        i++;
+        s.x = i * 1.1;
+        s.y = wave(i);
+        s.pressure = 0.3 + 0.6 * ((i % 50) / 50);
+        s.time = i * 4;
+        host.sample(s as InputSample);
+      }
+      core.live.rebuild(2);
+      core.live.view();
+      times[f] = performance.now() - t0;
+    }
+    const st = stats(times);
+    const early = stats(times.subarray(0, 100));
+    const late = stats(times.subarray(FRAMES - 100));
+    reportRow('frame while drawing (mean over 10 s)', st.mean, 'ms', 2, `   p95 ${st.p95.toFixed(3)}  max ${st.max.toFixed(3)}  points ${core.live.count}`);
+    info('  first 100 frames / last 100 frames, mean', `${early.mean.toFixed(3)} ms / ${late.mean.toFixed(3)} ms`);
+    expect(st.mean).toBeLessThan(2);
+    expect(st.p95).toBeLessThan(2);
+  });
+
+  describe('pan and zoom with 10,000 shapes on the page', () => {
+    const W = 1280;
+    const H = 800;
+    const DPR = 1;
+
+    /** What the web view's frame does before the painter is called: the camera, the tiles in view, the draw list of each tile that needs it. */
+    function frame(core: BoardCore, cache: TileCache, list: Tile[], ids: string[], now: number): number {
+      const camera = core.camera as NonNullable<BoardCore['camera']>;
+      camera.tick(now);
+      cache.beginFrame();
+      cache.visible(camera, W, H, DPR, list);
+      let drawn = 0;
+      for (const tile of list) {
+        if (tile.needsDraw && drawn < 6) {
+          const scale = Math.pow(2, tile.k);
+          const box = tileBox(tile.k, tile.tx, tile.ty);
+          const grow = 2 / scale;
+          core.drawList.itemsIn({ minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow }, scale);
+          cache.markDrawn(tile);
+          drawn++;
+        }
+      }
+      // culling for the frame: the viewport and a 256 px margin
+      ids.length = 0;
+      core.drawList.cull(camera.visibleBounds(W, H, 256), 0, ids);
+      return drawn;
+    }
+
+    function setup(): { core: BoardCore; cache: TileCache; list: Tile[]; ids: string[] } {
+      const { core } = makeRig();
+      putStrokes(core, 10_000, 16);
+      return { core, cache: new TileCache(), list: [], ids: [] };
+    }
+
+    it('panning: a frame is under 8 ms with a cold cache (the outlines of strokes that come into view are built) and with a warm one', () => {
+      const { core, cache, list, ids } = setup();
+      const camera = core.camera as NonNullable<BoardCore['camera']>;
+      const FRAMES = 300;
+      const run = (): Float64Array => {
+        camera.moveTo(0, 0, 1, 0);
+        const times = new Float64Array(FRAMES);
+        for (let f = 0; f < FRAMES; f++) {
+          camera.panBy(-14, -6);
+          const t0 = performance.now();
+          frame(core, cache, list, ids, f * 16);
+          times[f] = performance.now() - t0;
+        }
+        return times;
+      };
+      const cold = stats(run());
+      const warm = stats(run());
+      reportRow('pan, 10,000 shapes, cold, mean frame', cold.mean, 'ms', 8, `   p95 ${cold.p95.toFixed(3)}  max ${cold.max.toFixed(3)}`);
+      reportRow('pan, 10,000 shapes, warm, mean frame', warm.mean, 'ms', 8, `   p95 ${warm.p95.toFixed(3)}  max ${warm.max.toFixed(3)}`);
+      expect(core.store.shapeCount(core.pages.current as string)).toBe(10_000);
+      expect(cold.p95).toBeLessThan(8);
+      expect(warm.p95).toBeLessThan(8);
+    });
+
+    it('zooming: a frame is under 8 ms while the zoom changes about the pointer', () => {
+      const { core, cache, list, ids } = setup();
+      const camera = core.camera as NonNullable<BoardCore['camera']>;
+      camera.moveTo(1000, 500, 1, 0);
+      const FRAMES = 200;
+      const times = new Float64Array(FRAMES);
+      for (let f = 0; f < FRAMES; f++) {
+        camera.zoomBy(f < FRAMES / 2 ? 1.012 : 1 / 1.012, W / 2, H / 2, f * 16);
+        const t0 = performance.now();
+        frame(core, cache, list, ids, f * 16);
+        times[f] = performance.now() - t0;
+      }
+      const st = stats(times);
+      reportRow('zoom, 10,000 shapes, mean frame', st.mean, 'ms', 8, `   p95 ${st.p95.toFixed(3)}  max ${st.max.toFixed(3)}`);
+      expect(st.p95).toBeLessThan(8);
+    });
+  });
+
+  it('a lasso of 2,000 strokes selects in under 4 ms', () => {
+    const { core, host } = makeRig('lasso');
+    putStrokes(core, 2000, 30);
+    const s = reused();
+    // a loop of 48 points round the whole grid of 2,000 strokes (100 columns by 20 rows)
+    const loop: [number, number][] = [];
+    for (let k = 0; k < 12; k++) loop.push([-200 + (k / 12) * 6600, -200]);
+    for (let k = 0; k < 12; k++) loop.push([6400, -200 + (k / 12) * 1600]);
+    for (let k = 0; k < 12; k++) loop.push([6400 - (k / 12) * 6600, 1400]);
+    for (let k = 0; k < 12; k++) loop.push([-200, 1400 - (k / 12) * 1600]);
+    core.camera?.moveTo(0, 0, 1, 0);
+    let upMs = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 14; run++) {
+      core.selection.clear();
+      s.device = 'mouse';
+      s.pressure = Number.NaN;
+      s.buttons = 1;
+      loop.forEach(([x, y], i) => {
+        s.setPhase(i === 0 ? 'down' : 'move');
+        s.x = x;
+        s.y = y;
+        s.time = i * 8;
+        host.sample(s as InputSample);
+      });
+      const [lx, ly] = loop[0] as [number, number];
+      s.setPhase('up');
+      s.x = lx;
+      s.y = ly + 2;
+      s.time = 1000;
+      const t0 = performance.now();
+      host.sample(s as InputSample);
+      const ms = performance.now() - t0;
+      if (run >= 3) upMs = Math.min(upMs, ms);
+    }
+    reportRow('lasso of 2,000 strokes (select, best of 11)', upMs, 'ms', 4);
+    expect(core.selection.size).toBe(2000);
+    expect(upMs).toBeLessThan(4);
+  });
+
+  it('100,000 ink points take under 8 MB in the store', () => {
+    collectNow();
+    const before = process.memoryUsage();
+    const { core } = makeRig();
+    putStrokes(core, 1000, 100, 3);
+    collectNow();
+    const after = process.memoryUsage();
+    const mb = (after.heapUsed + after.arrayBuffers - (before.heapUsed + before.arrayBuffers)) / (1024 * 1024);
+    reportRow('memory for 100,000 ink points (1,000 strokes of 100)', mb, 'MB', 8);
+    expect(core.store.inkPoints(core.pages.current as string)).toBe(100_000);
+    expect(mb).toBeLessThan(8);
+    const withTilt = process.memoryUsage();
+    const { core: other } = makeRig();
+    putStrokes(other, 1000, 100, 5);
+    collectNow();
+    const after5 = process.memoryUsage();
+    info('  the same with tilt (5 numbers a point)', `${((after5.heapUsed + after5.arrayBuffers - (withTilt.heapUsed + withTilt.arrayBuffers)) / (1024 * 1024)).toFixed(2)} MB`);
+  });
+
+  it('drawing makes no garbage: no collection runs over a simulated 10 s stroke (design 13: 0 collections)', async () => {
+    const { host, core } = makeRig();
+    const s = reused();
+    const FRAME_MS = 1000 / 60;
+    const SAMPLES_PER_FRAME = 4;
+    const frames = Math.floor(10_000 / FRAME_MS);
+    const run = (): void => {
+      let i = 0;
+      s.setPhase('down');
+      s.x = 0;
+      s.y = wave(0);
+      s.pressure = 0.5;
+      s.time = 0;
+      host.sample(s as InputSample);
+      s.setPhase('move');
+      for (let f = 0; f < frames; f++) {
+        for (let k = 0; k < SAMPLES_PER_FRAME; k++) {
+          i++;
+          s.x = i * 0.6;
+          s.y = wave(i);
+          s.pressure = 0.3 + 0.6 * ((i % 50) / 50);
+          s.time = i * (FRAME_MS / SAMPLES_PER_FRAME);
+          host.sample(s as InputSample);
+        }
+        core.live.rebuild(2);
+        core.live.view();
+      }
+      s.setPhase('up');
+      host.sample(s as InputSample);
+    };
+    // a first stroke of the same length grows every buffer, as a stroke in use has done
+    run();
+    core.history.clear();
+    collectNow();
+    let collections = 0;
+    const obs = new PerformanceObserver((list) => {
+      collections += list.getEntries().length;
+    });
+    obs.observe({ entryTypes: ['gc'] });
+    run();
+    await new Promise((r) => setTimeout(r, 50));
+    obs.disconnect();
+    info('collections during the second simulated 10 s stroke', `${collections}   (${frames} frames, ${frames * SAMPLES_PER_FRAME} samples)`);
+    expect(collections).toBe(0);
   });
 });

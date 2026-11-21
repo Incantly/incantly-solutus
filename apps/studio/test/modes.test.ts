@@ -165,3 +165,94 @@ describe('app modes in the studio', () => {
     expect(root.querySelector('.app-btn')?.textContent).toBe('☰ الرسوم البيانية');
   });
 });
+
+describe('the Notes app shows the board (app-modes ui 2 Notes; board design 15)', () => {
+  let root: HTMLElement;
+  let m: Mounted;
+  const mount = (mode?: 'notes' | 'graphing' | 'classic'): void => {
+    root = document.createElement('div');
+    document.body.append(root);
+    m = mountStudio(root, { raf: () => 1, caf: () => undefined, storage: null, ...(mode ? { mode } : {}) });
+  };
+  afterEach(() => {
+    m.dispose();
+    root.remove();
+  });
+
+  it('opening in notes shows the board and no graph or expression list', () => {
+    mount('notes');
+    expect(m.modes.mode.id).toBe('notes');
+    expect(root.querySelector('.app')?.getAttribute('data-mode')).toBe('notes');
+    expect(m.board.element.hidden).toBe(false);
+    expect(m.board.view()).toBeDefined();
+    expect(m.board.element.querySelector('[data-board-view]')).not.toBeNull();
+    expect((root.querySelector('.panel') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('the board has its tools, a page bar with an add button, and undo and redo', () => {
+    mount('notes');
+    const board = m.board.element;
+    expect([...board.querySelectorAll<HTMLElement>('[data-tool]')].map((b) => b.dataset['tool'])).toEqual(['pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand']);
+    expect(board.querySelector('button[aria-label="Add a page"]')).not.toBeNull();
+    expect(board.querySelector('button[aria-label="Undo"]')).not.toBeNull();
+    expect(board.querySelector('button[aria-label="Redo"]')).not.toBeNull();
+    expect(board.querySelector('output[aria-label="Zoom"]')).not.toBeNull();
+  });
+
+  it('the board starts with one page, and its add button adds a page', () => {
+    mount('notes');
+    const view = m.board.view();
+    expect(view?.core.pages.list()).toHaveLength(1);
+    (m.board.element.querySelector('button[aria-label="Add a page"]') as HTMLButtonElement).click();
+    expect(view?.core.pages.list()).toHaveLength(2);
+  });
+
+  it('other apps do not make the board: it is made when Notes first shows it', () => {
+    mount('graphing');
+    expect(m.board.view()).toBeUndefined();
+    expect(m.board.element.hidden).toBe(true);
+    expect(m.board.element.querySelector('[data-board-view]')).toBeNull();
+  });
+
+  it('switching to Notes and back hides the board and keeps its board, so a drawing is still there', () => {
+    mount('classic');
+    expect(m.board.view()).toBeUndefined();
+    expect(m.modes.setMode('notes').error).toBeUndefined();
+    const view = m.board.view();
+    expect(view).toBeDefined();
+    expect(m.board.element.hidden).toBe(false);
+    expect(m.modes.setMode('classic').error).toBeUndefined();
+    expect(m.board.element.hidden).toBe(true);
+    expect(m.modes.setMode('notes').error).toBeUndefined();
+    expect(m.board.view()).toBe(view);
+    expect(m.board.element.hidden).toBe(false);
+    expect(m.board.element.querySelectorAll('[data-board-view]')).toHaveLength(1);
+  });
+
+  it('the start screen offers Notes between the maths apps and Classic, labelled and with its purpose', () => {
+    mount();
+    m.modes.showStart();
+    const tile = root.querySelector('.mode-tile[data-mode="notes"]') as HTMLElement;
+    expect(tile).not.toBeNull();
+    expect(tile.querySelector('.tile-title')?.textContent).toBe('Notes');
+    expect(tile.querySelector('.tile-purpose')?.textContent).toBe('write and draw');
+    const ids = [...root.querySelectorAll<HTMLElement>('.mode-tile')].map((t) => t.dataset['mode']);
+    expect(ids.indexOf('notes')).toBeLessThan(ids.indexOf('classic'));
+  });
+
+  it('?mode=notes opens it: the entry point reads the query and mounts the studio in notes', async () => {
+    mount();
+    const entry = document.createElement('div');
+    entry.id = 'app';
+    document.body.append(entry);
+    window.history.replaceState({}, '', '/?mode=notes');
+    try {
+      await import('../src/main');
+      expect(entry.querySelector('.app')?.getAttribute('data-mode')).toBe('notes');
+      expect(entry.querySelector('.board-host [data-board-view]')).not.toBeNull();
+    } finally {
+      window.history.replaceState({}, '', '/');
+      entry.remove();
+    }
+  });
+});
