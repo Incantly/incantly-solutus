@@ -6,6 +6,8 @@
  * table serves every tool; each tool is one instance with its own state.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import { beginGesture } from '../edit';
 import type { Gesture as EditGesture } from '../edit';
@@ -81,7 +83,7 @@ export function styledDefaults(ctx: ToolContext, kind: string): Record<string, u
 class ShapeTool implements ToolHandlers {
   readonly #ctx: ToolContext;
   readonly #spec: ShapeToolSpec;
-  readonly #machine = new StateMachine(SHAPE_TOOL_MACHINE, 'idle');
+  readonly #machine = new StateMachine(SHAPE_TOOL_MACHINE, 'idle', refusedMove('shape tool', () => this.#ctx.core.store.sink));
   #gesture: Gesture = { px: 0, py: 0, sx: 0, sy: 0, id: '', edit: undefined };
 
   constructor(ctx: ToolContext, spec: ShapeToolSpec) {
@@ -134,7 +136,7 @@ class ShapeTool implements ToolHandlers {
 
   onCancel(): void {
     const g = this.#gesture;
-    if (!this.#machine.send('cancel')) return;
+    if (!sendIfAble(this.#machine, 'cancel')) return;
     // everything the gesture wrote goes, and its undo step with it
     g.edit?.cancel();
     this.#gesture = { ...g, id: '', edit: undefined };

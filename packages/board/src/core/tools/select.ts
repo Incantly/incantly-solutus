@@ -6,6 +6,7 @@
  * (`core/bindings.ts`). No DOM, no timers.
  */
 import { StateMachine } from '@incantly/kernel';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import { bindEnd, bindTargetAt, unbindEnd } from '../bindings';
 import type { ArrowEnd } from '../bindings';
@@ -77,8 +78,8 @@ const emptyGesture = (): Gesture => ({
 
 class SelectTool implements ToolHandlers {
   readonly #ctx: ToolContext;
-  readonly #machine = new StateMachine(SELECT_MACHINE, 'idle');
-  readonly #snapper = new Snapper();
+  readonly #machine = new StateMachine(SELECT_MACHINE, 'idle', refusedMove('select tool', () => this.#ctx.core.store.sink));
+  readonly #snapper = new Snapper((e) => this.#ctx.core.store.sink(e));
   #gesture: Gesture = emptyGesture();
   /** The last click that was not a drag, for double clicks. */
   readonly #click = { time: -1e9, x: 0, y: 0, id: '' };

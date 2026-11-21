@@ -6,7 +6,7 @@
  * started, and the text tools open the editor. Only the public API is used.
  */
 import { describe, expect, it } from 'vitest';
-import { SHAPE_TOOLS, SHAPE_TOOL_MACHINE, boardTools, builtInKind, shapeGeometry } from '../../src/index';
+import { SHAPE_TOOLS, SHAPE_TOOL_MACHINE, defaultTools, builtInKind, shapeGeometry } from '../../src/index';
 import type { ShapeRecord } from '../../src/index';
 import { sample } from './ink-helpers';
 import { MOD_ALT, MOD_SHIFT, add, boxOf, centreOf, drag, get, key, ofKind, pageOf, press, release, shapeRig, shapesOf, tap } from './shape-helpers';
@@ -37,7 +37,7 @@ describe('which tools there are, and their keys (ui.md)', () => {
   });
 
   it('the board tools are the select tool, the ink tools, the hand and the shape tools', () => {
-    const ids = boardTools.ids();
+    const ids = defaultTools.ids();
     for (const id of ['select', 'pen', 'highlighter', 'eraser', 'laser', 'lasso', 'hand', ...SHAPE_TOOLS.map((t) => t.id)]) expect(ids, id).toContain(id);
   });
 

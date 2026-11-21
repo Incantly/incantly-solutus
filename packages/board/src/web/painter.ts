@@ -7,11 +7,12 @@
  * layer (B17) are `*_MACHINE` tables in docs/state-machines.md. Every call returns a `BoardResult`; nothing throws.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../core/machine';
 import type { MachineTable } from '@incantly/kernel';
 import type { CameraView } from '../core/camera';
 import { TILE_CAP_BYTES, TILE_CAP_BYTES_LOW, TileCache } from '../core/draw';
 import type { BoardPainter, DrawItem, LiveStrokeView, OverlayItems, SelectionView, Tile, TileContent } from '../core/draw';
-import { boardError, DONE } from '../core/errors';
+import { boardError, DONE, refusedMove } from '../core/errors';
 import type { BoardError, BoardResult } from '../core/errors';
 import { GlRaster } from './painter-gl';
 import { CanvasRaster, drawItems2D, fillTriangles, rgbCss } from './painter-2d';
@@ -55,6 +56,8 @@ export interface WebPainterOptions {
   readonly onNotice?: (error: BoardError) => void;
   /** Called when the painter wants a frame (a lost context came back). */
   readonly requestFrame?: () => void;
+  /** Where a refused move of the painter's machines is told (the board's `onError`, as `internal`). */
+  readonly onError?: (error: BoardError) => void;
 }
 
 export interface PainterStats {
@@ -78,9 +81,9 @@ export class WebPainter implements BoardPainter {
   readonly element: HTMLDivElement;
   readonly tiles: TileCache;
   readonly #options: WebPainterOptions;
-  readonly #backend = new StateMachine(BACKEND_MACHINE, 'gl');
-  readonly #frameState = new StateMachine(FRAME_MACHINE, 'between');
-  readonly #layer = new StateMachine(LIVELAYER_MACHINE, 'clear');
+  readonly #backend = new StateMachine(BACKEND_MACHINE, 'gl', refusedMove('painter backend', () => this.#options.onError));
+  readonly #frameState = new StateMachine(FRAME_MACHINE, 'between', refusedMove('painter frame', () => this.#options.onError));
+  readonly #layer = new StateMachine(LIVELAYER_MACHINE, 'clear', refusedMove('live layer', () => this.#options.onError));
   #tileCanvas: HTMLCanvasElement;
   readonly #liveCanvas: HTMLCanvasElement;
   readonly #overlayCanvas: HTMLCanvasElement;
@@ -107,6 +110,7 @@ export class WebPainter implements BoardPainter {
     this.tiles = new TileCache({
       capBytes: options.capBytes ?? (memory <= 4 ? TILE_CAP_BYTES_LOW : TILE_CAP_BYTES),
       release: (tile) => this.#raster?.release(tile),
+      ...(options.onError !== undefined ? { report: options.onError } : {}),
     });
     this.element = document.createElement('div');
     this.element.style.cssText = 'position:relative;overflow:hidden;width:100%;height:100%';
@@ -342,17 +346,17 @@ export class WebPainter implements BoardPainter {
 
   /** The stroke ended and was stored: the live layer keeps showing it until the tile that holds it is drawn. */
   releaseLive(): void {
-    this.#layer.send('release');
+    sendIfAble(this.#layer, 'release');
   }
 
   /** The tile that holds the stroke is drawn: the live layer lets go. */
   settleLive(): void {
-    if (this.#layer.send('settle')) this.#clearLive();
+    if (sendIfAble(this.#layer, 'settle')) this.#clearLive();
   }
 
   /** The stroke was dropped. */
   abortLive(): void {
-    if (this.#layer.send('abort')) this.#clearLive();
+    if (sendIfAble(this.#layer, 'abort')) this.#clearLive();
   }
 
   #clearLive(): void {

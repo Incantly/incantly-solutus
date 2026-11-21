@@ -16,7 +16,7 @@
 import { PerformanceObserver, performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
-  BoardCore, Cameras, History, IndexGrid, KindRegistry, Pages, PointerGate, Snapper, Store, TileCache, ToolHost, boardTools, copySelection, createOverlayState, defaultStyles, keysBetween,
+  BoardCore, Cameras, History, IndexGrid, KindRegistry, Pages, PointerGate, Snapper, Store, TileCache, ToolHost, defaultTools, copySelection, createOverlayState, defaultStyles, keysBetween,
   loadBoard, pasteData, recogniseStroke, saveBoard, tileBox,
 } from '../src/index';
 import type { BoardResult, Bounds, InputSample, KindDef, ShapeRecord, Tile, ToolContext } from '../src/index';
@@ -210,7 +210,7 @@ function makeRig(tool = 'pen'): Rig {
     strokeEnded: () => undefined,
     strokeDropped: () => undefined,
   };
-  return { core, host: new ToolHost(ctx, boardTools, tool) };
+  return { core, host: new ToolHost(ctx, defaultTools, tool) };
 }
 
 /** One sample object, reused for every event, as the input layer does (`phase` is read through a getter, as in `web/input.ts`). */

@@ -5,6 +5,7 @@
  * to one `WebPainter` and one `WebInput`. The frame loop (B18) and the page bar (B13) are `*_MACHINE` tables.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../core/machine';
 import type { MachineTable } from '@incantly/kernel';
 import { BoardCore } from '../core/board';
 import type { BoardCoreOptions } from '../core/board';
@@ -15,7 +16,7 @@ import type { OverlayItems, Tile } from '../core/draw';
 import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
 import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
-import { boardError, ok } from '../core/errors';
+import { boardError, ok, refusedMove } from '../core/errors';
 import { fixStrokes, strokesToFix } from '../core/fix';
 import { shapeBounds, shapeGeometry, unionBounds } from '../core/geometry';
 import type { InputSink, TouchDraws } from '../core/input';
@@ -62,13 +63,14 @@ export const LOOP_MACHINE: MachineTable<LoopState, LoopEvent> = {
 
 /** A frame is asked for from anywhere, runs once on the next animation frame, and one asked for during a frame runs after it. */
 class FrameLoop {
-  readonly #machine = new StateMachine(LOOP_MACHINE, 'idle');
+  readonly #machine: StateMachine<LoopState, LoopEvent>;
   readonly #schedule: (cb: (now: number) => void) => number;
   readonly #cancel: (id: number) => void;
   readonly #body: (now: number) => boolean;
   #handle = 0;
 
-  constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean) {
+  constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean, report?: (error: BoardError) => void) {
+    this.#machine = new StateMachine(LOOP_MACHINE, 'idle', refusedMove('frame loop', () => report));
     this.#schedule = schedule;
     this.#cancel = cancel;
     this.#body = body;
@@ -229,6 +231,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const painter = new WebPainter({
     ...(options.canvas2dOnly === true ? { canvas2dOnly: true } : {}),
     onNotice: (e) => options.onError?.(e),
+    onError: report,
     requestFrame: () => loop.request(),
   });
   const overlay = createOverlayState();
@@ -358,6 +361,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     (cb) => window.requestAnimationFrame(cb),
     (id) => window.cancelAnimationFrame(id),
     render,
+    report,
   );
 
   // ---- input
@@ -372,7 +376,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     wheel: (w) => host.wheel(w),
     gesture: (g) => host.gesture(g),
   };
-  const input = new WebInput({ element: surface, sink, ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
+  const input = new WebInput({ element: surface, sink, report, ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
 
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
@@ -397,7 +401,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     overlay.loop = null;
     pageName.textContent = `${core.pages.get(page ?? '')?.name ?? 'Page'} ▾`;
     pageList.hidden = true;
-    pagesState.send('close');
+    sendIfAble(pagesState, 'close');
     loop.request();
   });
   const stopSelection = core.selection.on(() => {
@@ -942,7 +946,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   root.addEventListener('paste', onPaste);
 
   // ---- page bar
-  const pagesState = new StateMachine(PAGEBAR_MACHINE, 'closed');
+  const pagesState = new StateMachine(PAGEBAR_MACHINE, 'closed', refusedMove('page bar', () => report));
   const pageName = h('button', { type: 'button', 'aria-haspopup': 'listbox', 'aria-label': strings.t('pages.label') }, `${core.pages.get(core.pages.current ?? '')?.name ?? 'Page'} ▾`);
   const addBtn = h('button', { type: 'button', title: strings.t('pages.add'), 'aria-label': strings.t('pages.add') }, '+');
   const pageList = h('div', { class: 'ib-list', role: 'listbox', 'aria-label': strings.t('pages.label') });
@@ -960,7 +964,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     if (pagesState.state === 'closed' && pagesState.send('open')) {
       fillList();
       pageList.hidden = false;
-    } else if (pagesState.send('close')) {
+    } else if (sendIfAble(pagesState, 'close')) {
       pageList.hidden = true;
     }
   });
@@ -980,7 +984,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   if (!readOnly) pageBar.append(pageMenuBtn);
   pageBar.append(pageList);
   const onKeyEscape = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && pagesState.send('close')) pageList.hidden = true;
+    if (e.key === 'Escape' && sendIfAble(pagesState, 'close')) pageList.hidden = true;
   };
   root.addEventListener('keydown', onKeyEscape);
 

@@ -110,8 +110,8 @@ export class Strings {
         text = undefined;
       }
     }
-    // the caller's own words (a tool's label) beat the English default, so a tool the board does not know keeps its label
-    if (text === undefined) text = fallback ?? (Object.prototype.hasOwnProperty.call(BOARD_STRINGS, key) ? BOARD_STRINGS[key] : undefined) ?? key;
+    // then the English table, then the caller's own words (a tool's label: a tool the board does not know keeps it), then the key
+    if (text === undefined) text = (Object.prototype.hasOwnProperty.call(BOARD_STRINGS, key) ? BOARD_STRINGS[key] : undefined) ?? fallback ?? key;
     return text.replace(/\{(\w+)\}/g, (all, name: string) => (params[name] !== undefined ? String(params[name]) : all));
   }
 }

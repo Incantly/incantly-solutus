@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StateMachine } from '@incantly/kernel';
 import type { MountedApp } from '@incantly/sdk';
 import {
-  CARD_MACHINE, INPUT_MACHINE, KEYMAP_MACHINE, KeyMap, MENU_MACHINE, MOTION_MACHINE, MenuHost, addFigure, createBoard, defaultKeyTable, boardTools,
+  CARD_MACHINE, INPUT_MACHINE, KEYMAP_MACHINE, KeyMap, MENU_MACHINE, MOTION_MACHINE, MenuHost, addFigure, createBoard, defaultKeyTable, defaultTools,
 } from '../../src/index';
 import type { Board, BoardError, FigureCard, MenuItem } from '../../src/index';
 import { installCanvas2d, walk } from './ink-helpers';
@@ -42,6 +42,7 @@ const CARD_ROWS: readonly Row<CardState, CardEvent>[] = [
   ['picture', 'claim', 'mounting'],
   ['mounting', 'claim', 'mounting'],
   ['mounting', 'mounted', 'live'],
+  ['mounting', 'release', 'picture'],
   ['mounting', 'unmounted', 'picture'],
   ['mounting', 'fail', 'failed'],
   ['mounting', 'giveUp', 'dead'],
@@ -96,7 +97,7 @@ walk('B30 KEYMAP_MACHINE', KEYMAP_MACHINE, ['building', 'sealed'], ['bind', 'sea
 ]);
 
 /** Drives a real `StateMachine` (made by `make`) from every state with every event: a listed move goes, the others are refused and change nothing. */
-function drive<S extends string, E extends string>(name: string, make: (from: S) => StateMachine<S, E>, states: readonly S[], events: readonly E[], rows: readonly Row<S, E>[]): void {
+function drive<S extends string, E extends string>(name: string, make: (from: S, onRefused: (from: S, event: E) => void) => StateMachine<S, E>, states: readonly S[], events: readonly E[], rows: readonly Row<S, E>[]): void {
   describe(`${name} driven as a StateMachine`, () => {
     it('makes every listed move and refuses every other, leaving the state as it was', () => {
       let moves = 0;
@@ -104,14 +105,17 @@ function drive<S extends string, E extends string>(name: string, make: (from: S)
       for (const from of states) {
         for (const event of events) {
           const row = rows.find(([f, e]) => f === from && e === event);
-          const machine = make(from);
+          const told: string[] = [];
+          const machine = make(from, (f, e) => told.push(`${f}|${e}`));
           const went = machine.send(event);
           if (row === undefined) {
             expect(went, `${from} on ${event} has no row`).toBe(false);
+            expect(told, `${from} on ${event} is reported to onRefused`).toEqual([`${from}|${event}`]);
             expect(machine.state, `${from} on ${event} changed the state`).toBe(from);
             refusals++;
           } else {
             expect(went, `${from} on ${event}`).toBe(true);
+            expect(told, `${from} on ${event} is not a refusal`).toEqual([]);
             expect(machine.state, `${from} on ${event}`).toBe(row[2]);
             moves++;
           }
@@ -123,14 +127,14 @@ function drive<S extends string, E extends string>(name: string, make: (from: S)
   });
 }
 
-drive('B26', (from: CardState) => new StateMachine(CARD_MACHINE, from), CARD_STATES, CARD_EVENTS, CARD_ROWS);
-drive('B27', (from: 'board' | 'input') => new StateMachine(INPUT_MACHINE, from), ['board', 'input'], ['give', 'release'], [['board', 'give', 'input'], ['input', 'release', 'board']]);
-drive('B28', (from: 'still' | 'moving') => new StateMachine(MOTION_MACHINE, from), ['still', 'moving'], ['moved', 'settle'], [['still', 'moved', 'moving'], ['moving', 'moved', 'moving'], ['moving', 'settle', 'still']]);
-drive('B29', (from: 'closed' | 'main' | 'page' | 'context') => new StateMachine(MENU_MACHINE, from), ['closed', 'main', 'page', 'context'], ['openMain', 'openPage', 'openContext', 'close'], [
+drive('B26', (from: CardState, onRefused) => new StateMachine(CARD_MACHINE, from, onRefused), CARD_STATES, CARD_EVENTS, CARD_ROWS);
+drive('B27', (from: 'board' | 'input', onRefused) => new StateMachine(INPUT_MACHINE, from, onRefused), ['board', 'input'], ['give', 'release'], [['board', 'give', 'input'], ['input', 'release', 'board']]);
+drive('B28', (from: 'still' | 'moving', onRefused) => new StateMachine(MOTION_MACHINE, from, onRefused), ['still', 'moving'], ['moved', 'settle'], [['still', 'moved', 'moving'], ['moving', 'moved', 'moving'], ['moving', 'settle', 'still']]);
+drive('B29', (from: 'closed' | 'main' | 'page' | 'context', onRefused) => new StateMachine(MENU_MACHINE, from, onRefused), ['closed', 'main', 'page', 'context'], ['openMain', 'openPage', 'openContext', 'close'], [
   ['closed', 'openMain', 'main'], ['closed', 'openPage', 'page'], ['closed', 'openContext', 'context'], ['main', 'close', 'closed'], ['page', 'close', 'closed'], ['context', 'close', 'closed'],
   ['main', 'openPage', 'page'], ['main', 'openContext', 'context'], ['page', 'openMain', 'main'], ['page', 'openContext', 'context'], ['context', 'openMain', 'main'], ['context', 'openPage', 'page'],
 ]);
-drive('B30', (from: 'building' | 'sealed') => new StateMachine(KEYMAP_MACHINE, from), ['building', 'sealed'], ['bind', 'seal', 'rebind'], [['building', 'bind', 'building'], ['building', 'seal', 'sealed'], ['sealed', 'rebind', 'building']]);
+drive('B30', (from: 'building' | 'sealed', onRefused) => new StateMachine(KEYMAP_MACHINE, from, onRefused), ['building', 'sealed'], ['bind', 'seal', 'rebind'], [['building', 'bind', 'building'], ['building', 'seal', 'sealed'], ['sealed', 'rebind', 'building']]);
 
 describe('B26 reachable invalid moves, from the document', () => {
   const none = (state: CardState, events: readonly CardEvent[]): void => {
@@ -143,8 +147,11 @@ describe('B26 reachable invalid moves, from the document', () => {
     none('picture', ['mounted']);
     none('saving', ['mounted']);
   });
-  it('`release` has no row in picture, mounting or failed', () => {
-    for (const s of ['picture', 'mounting', 'failed'] as const) none(s, ['release']);
+  it('`release` has no row in picture or failed', () => {
+    for (const s of ['picture', 'failed'] as const) none(s, ['release']);
+  });
+  it('`release` in mounting goes to picture, so the app that arrives is freed and the place is given up at once (BR-46)', () => {
+    expect((CARD_MACHINE.mounting as Record<string, string | undefined>)['release']).toBe('picture');
   });
   it('every event in `gone` has no row', () => {
     none('gone', CARD_EVENTS);
@@ -464,7 +471,7 @@ describe('B29 on a running MenuHost', () => {
 // B30 on a running KeyMap
 
 describe('B30 on a running KeyMap', () => {
-  const defaults = defaultKeyTable(boardTools);
+  const defaults = defaultKeyTable(defaultTools);
   const press = (map: KeyMap, key: string, mods: { mod?: boolean; shift?: boolean; alt?: boolean } = {}): string | undefined =>
     map.actionOf({ key, down: true, shift: mods.shift === true, alt: mods.alt === true, mod: mods.mod === true, repeat: false });
 

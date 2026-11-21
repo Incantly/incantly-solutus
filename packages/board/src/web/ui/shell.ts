@@ -134,7 +134,7 @@ export function resolveShell(options: ShellOptions, tools: ToolList, report: (er
   }
   // keys
   const defaults = defaultKeyTable(tools);
-  const keys = KeyMap.from(defaults, options.keys ?? {});
+  const keys = KeyMap.from(defaults, options.keys ?? {}, report);
   for (const error of keys.errors) report(error);
   for (const action of Object.keys(options.keys ?? {})) {
     if (!(action in defaults) && !(action in ACTION_KEYS)) {

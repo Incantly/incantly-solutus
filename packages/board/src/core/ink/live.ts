@@ -7,8 +7,8 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import type { CameraView } from '../camera';
-import { boardError, ok } from '../errors';
-import type { BoardResult } from '../errors';
+import { boardError, ok, refusedMove } from '../errors';
+import type { BoardResult, ErrorSink } from '../errors';
 import { keyBetween } from '../fractional';
 import type { InputSample } from '../input';
 import { parseColor } from '../kinds/ink';
@@ -52,7 +52,8 @@ type Writable<T> = { -readonly [K in keyof T]: T[K] };
 export class LiveStroke {
   /** The triangles of the stroke so far, rebuilt by `rebuild`; the painter reads them. */
   readonly outliner = new Outliner();
-  readonly #machine = new StateMachine(LIVE_MACHINE, 'idle');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(LIVE_MACHINE, 'idle', refusedMove('live stroke', () => this.#report));
   readonly #samplers: Readonly<Record<Stride, InkSampler>> = { 3: new InkSampler(3), 5: new InkSampler(5) };
   readonly #predicted = new Float32Array(PREDICTED_MAX * 2);
   #predictedCount = 0;
@@ -67,6 +68,10 @@ export class LiveStroke {
   readonly #strokeView: Writable<LiveStrokeView> = {
     serial: 0, originX: 0, originY: 0, r: 0, g: 0, b: 0, size: 3, opacity: 1, multiply: false, outliner: this.outliner, predicted: null,
   };
+
+  constructor(report?: ErrorSink) {
+    this.#report = report;
+  }
 
   get state(): LiveState {
     return this.#machine.state;

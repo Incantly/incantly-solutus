@@ -5,8 +5,9 @@
  * selection, and gives wheel and two-finger input to the camera.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
 import type { MachineTable } from '@incantly/kernel';
-import { boardError, DONE } from '../errors';
+import { boardError, DONE, refusedMove } from '../errors';
 import type { BoardResult } from '../errors';
 import { BUTTON_ERASER, BUTTON_MIDDLE } from '../input';
 import type { GestureInput, InputSample, KeyInput, WheelInput } from '../input';
@@ -30,7 +31,7 @@ const ZOOM_PX = 240;
 export class ToolHost {
   readonly #ctx: ToolContext;
   readonly #list: ToolList;
-  readonly #machine = new StateMachine(TOOLS_MACHINE, 'chosen');
+  readonly #machine = new StateMachine(TOOLS_MACHINE, 'chosen', refusedMove('tool host', () => this.#ctx.core.store.sink));
   readonly #instances = new Map<string, ToolHandlers>();
   readonly #listeners: ((id: string) => void)[] = [];
   /** Actions the shell carries out (zoom, pages, a figure card): the key map names them, the shell registers them. */
@@ -43,7 +44,7 @@ export class ToolHost {
   #down = -1;
 
   constructor(ctx: ToolContext, list: ToolList, initial = 'pen', keys?: KeyMap) {
-    this.#keys = keys ?? KeyMap.from(defaultKeyTable(list));
+    this.#keys = keys ?? KeyMap.from(defaultKeyTable(list), {}, ctx.core.store.sink);
     // a tool may ask for another one (a shape tool hands back to the select tool); the host answers
     this.#ctx = ctx.setTool !== undefined ? ctx : { ...ctx, setTool: (id: string) => void this.setTool(id) };
     this.#list = list;
@@ -151,7 +152,7 @@ export class ToolHost {
     this.#instance(this.active)?.onCancel();
     this.#down = -1;
     if (this.#heldBy === 'middle') this.#endHand();
-    this.#machine.send('eraserUp');
+    sendIfAble(this.#machine, 'eraserUp');
   }
 
   /** Moves the camera by a wheel step: a pan, or a zoom about the pointer for Ctrl or a trackpad pinch. */

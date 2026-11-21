@@ -9,6 +9,7 @@
 import { createApp, createHeadlessApp } from '@incantly/sdk';
 import type { App, MountedApp } from '@incantly/sdk';
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../core/machine';
 import type { MachineTable } from '@incantly/kernel';
 import { MODE_IDS } from '@incantly/modes';
 import { DEFAULT_SCHEDULER_CONFIG, SchedulerHost } from '@incantly/view';
@@ -17,7 +18,7 @@ import type { BoardCore } from '../core/board';
 import type { CameraView } from '../core/camera';
 import { STEADY_DELAY_MS } from '../core/camera';
 import { deleteShapes } from '../core/edit';
-import { boardError } from '../core/errors';
+import { boardError, refusedMove } from '../core/errors';
 import type { BoardError } from '../core/errors';
 import { figuresOnPage, sdkMode, setFigureMode, setFigurePicture, setFigureScript } from '../core/figures';
 import type { FigureProps } from '../core/kinds/media';
@@ -33,7 +34,7 @@ type CardEvent = 'claim' | 'mounted' | 'move' | 'settle' | 'release' | 'unmounte
 
 export const CARD_MACHINE: MachineTable<CardState, CardEvent> = {
   picture: { claim: 'mounting', remove: 'gone' },
-  mounting: { claim: 'mounting', mounted: 'live', unmounted: 'picture', fail: 'failed', giveUp: 'dead', remove: 'gone' },
+  mounting: { claim: 'mounting', mounted: 'live', release: 'picture', unmounted: 'picture', fail: 'failed', giveUp: 'dead', remove: 'gone' },
   live: { claim: 'live', move: 'moving', release: 'saving', unmounted: 'picture', remove: 'gone' },
   moving: { claim: 'moving', settle: 'live', release: 'saving', unmounted: 'picture', remove: 'gone' },
   saving: { claim: 'live', unmounted: 'picture', remove: 'gone' },
@@ -140,9 +141,9 @@ export class FigureCard {
   readonly picEl: HTMLImageElement;
   readonly badge: HTMLElement;
   /** The card's lifecycle; every change goes through `CARD_MACHINE`. */
-  readonly life = new StateMachine(CARD_MACHINE, 'picture');
+  readonly life = new StateMachine(CARD_MACHINE, 'picture', refusedMove('figure card', () => this.#home.report));
   /** Who has the input (B27). */
-  readonly input = new StateMachine(INPUT_MACHINE, 'board');
+  readonly input = new StateMachine(INPUT_MACHINE, 'board', refusedMove('card input', () => this.#home.report));
   shape: Shape;
   /** The zoom the host is laid out for (CSS pixels of the host for each page unit). */
   hostScale = 1;
@@ -162,6 +163,7 @@ export class FigureCard {
   #appliedMode = '';
   #offApp: (() => void)[] = [];
   #pictureTimer = 0;
+  #watch: MutationObserver | undefined;
   readonly #home: CardHome;
 
   constructor(shape: Shape, home: CardHome) {
@@ -197,6 +199,15 @@ export class FigureCard {
         home.core.selection.set([this.id]);
       }
     });
+    // a lost graphics context does not bubble: the capture phase of the host sees it from the app's canvas
+    this.hostEl.addEventListener('webglcontextlost', () => this.#lost(), true);
+    // an app destroyed from outside takes its element out of the host
+    if (typeof MutationObserver === 'function') {
+      this.#watch = new MutationObserver(() => {
+        if (this.#app?.destroyed === true) this.#lost();
+      });
+      this.#watch.observe(this.hostEl, { childList: true });
+    }
     this.#home.scheduler.register(this.id);
     this.render();
   }
@@ -230,7 +241,8 @@ export class FigureCard {
     if (this.life.is('gone', 'dead')) return;
     const seq = ++this.#orderSeq;
     if (this.#app === undefined && !this.wantsMount) {
-      this.#home.makeRoom(this);
+      // no place, no claim: the card stays a picture and the scheduler's next order decides
+      if (!this.#home.makeRoom(this)) return;
       this.#claim(seq);
     } else this.life.send('claim');
   }
@@ -261,7 +273,7 @@ export class FigureCard {
 
   /** The camera started to move: show the picture instead of the app. */
   move(): void {
-    if (!this.life.send('move')) return;
+    if (!sendIfAble(this.life, 'move')) return;
     this.slot.dataset['state'] = this.life.state;
     const snap = this.mode === 'graphing3d' ? undefined : this.#snapshot();
     const url = snap ?? this.shape.props.picture ?? undefined;
@@ -274,7 +286,7 @@ export class FigureCard {
 
   /** The camera stopped: the host is sized for the zoom again, and the app shows and paints. */
   settle(scale: number): void {
-    if (!this.life.send('settle')) return;
+    if (!sendIfAble(this.life, 'settle')) return;
     this.hostScale = scale;
     this.hostEl.style.visibility = '';
     this.picEl.hidden = this.shape.props.picture === null;
@@ -311,7 +323,7 @@ export class FigureCard {
 
   releaseInput(): void {
     this.facts.inputAsked = false;
-    if (!this.input.send('release')) return;
+    if (!sendIfAble(this.input, 'release')) return;
     this.slot.style.pointerEvents = '';
     this.slot.classList.remove('ib-card-input');
     this.#home.changed();
@@ -412,7 +424,8 @@ export class FigureCard {
     } catch (e) {
       this.hostEl.replaceChildren();
       this.hostEl.hidden = true;
-      this.#mountFailed(e instanceof Error ? e.message : 'the browser refused');
+      // released while the app was being made: nobody wants it, so the failure is not the card's
+      if (this.wantsMount) this.#mountFailed(e instanceof Error ? e.message : 'the browser refused');
       return;
     }
     if (this.life.is('gone') || !this.wantsMount) {
@@ -430,17 +443,18 @@ export class FigureCard {
     }
     this.#app = app;
     this.#appliedMode = mode;
-    this.#failures = 0;
-    this.life.send('mounted');
     try {
       this.#loadInto(app);
       this.#follow(app);
       app.screen.paint();
     } catch (e) {
-      this.#unmount();
+      // `fail` goes first, while the card is still `mounting`; then the app is freed
       this.#mountFailed(e instanceof Error ? e.message : 'the script could not be loaded');
+      this.#freeApp();
       return;
     }
+    this.#failures = 0;
+    this.life.send('mounted');
     this.#home.scheduler.noteMounted(this.id);
     this.#home.scheduler.noteFirstDraw(this.id);
     this.render();
@@ -519,21 +533,34 @@ export class FigureCard {
     this.#home.changed();
   }
 
-  #unmount(): void {
+  /** Frees the app and its host; the card's own state is the caller's to move. */
+  #freeApp(): void {
     const app = this.#app;
     window.clearTimeout(this.#pictureTimer);
     this.facts.pictureDue = false;
     for (const off of this.#offApp) off();
     this.#offApp = [];
     this.#app = undefined;
-    this.life.send('unmounted');
     this.releaseInput();
     if (app !== undefined) safe(() => app.destroy());
     this.hostEl.replaceChildren();
     this.hostEl.hidden = true;
     this.hostEl.style.visibility = '';
+    this.render();
+  }
+
+  #unmount(): void {
+    this.life.send('unmounted');
+    this.#freeApp();
     this.badge.hidden = true;
     this.render();
+  }
+
+  /** The app is lost (the graphics context went, or something destroyed it): free it, and ask again when the scheduler still wants the card. */
+  #lost(): void {
+    if (this.#app === undefined || !this.life.is('live', 'moving', 'saving')) return;
+    this.#unmount();
+    if (this.#wanted() && this.#home.hasRoom(this)) this.#claim();
   }
 
   /** Makes the card's picture 500 ms after the app last drew, when the card has none or the script changed. */
@@ -576,6 +603,7 @@ export class FigureCard {
   destroy(): void {
     if (this.life.is('gone')) return;
     window.clearTimeout(this.#pictureTimer);
+    this.#watch?.disconnect();
     this.releaseInput();
     this.life.send('remove');
     const app = this.#app;
@@ -610,7 +638,7 @@ export class FigureLayer {
   readonly element: HTMLElement;
   readonly scheduler: SchedulerHost;
   readonly cards = new Map<string, FigureCard>();
-  readonly motion = new StateMachine(MOTION_MACHINE, 'still');
+  readonly motion = new StateMachine(MOTION_MACHINE, 'still', refusedMove('card motion', () => this.#opts.onError));
   readonly #core: BoardCore;
   readonly #opts: FigureLayerOptions;
   readonly #home: CardHome;
@@ -809,7 +837,7 @@ export class FigureLayer {
     this.#visible = new Set();
     this.#near = new Set();
     this.#page = this.#core.pages.current ?? '';
-    this.motion.send('settle');
+    sendIfAble(this.motion, 'settle');
     this.#last.x = Number.NaN;
     this.#marks.stale = true;
   }

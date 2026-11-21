@@ -263,6 +263,43 @@ tester.run('no-ai-credit', rules['no-ai-credit'], {
   ],
 });
 
+tester.run('no-imported-mutation', rules['no-imported-mutation'], {
+  valid: [
+    "import { style } from './style'; const s = { ...style }; s.axes = true;",
+    "import { style } from './style'; function f(o) { o.axes = true; } f({});",
+    "import { style } from './style'; function f(style) { style.axes = true; }",
+    "import { style } from './style'; const read = style.axes; use(style.grid);",
+    "import { style } from './style'; Object.assign({}, style);",
+    "import { make } from './make'; make().axes = true;",
+    "import { style } from './style'; class A { style = {}; f() { this.style.axes = true; } }",
+    "import { style } from './style'; { const style = {}; style.axes = true; }",
+  ],
+  invalid: [
+    { code: "import { style } from './style'; style.axes = true;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; function f() { style.grid.on = false; }", errors: [{ messageId: 'mutated' }] },
+    { code: "import * as ns from './style'; ns.count += 1;", errors: [{ messageId: 'mutated' }] },
+    { code: "import style from './style'; style['axes'] = true;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { n } from './n'; n.count++;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { n } from './n'; --n.count;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; Object.assign(style, { axes: true });", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; Object.assign(style.grid, { on: true });", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; style!.axes = true;", errors: [{ messageId: 'mutated' }] },
+  ],
+});
+
+tester.run('state-refusal-reported', rules['state-refusal-reported'], {
+  valid: [
+    "const m = new StateMachine(A_MACHINE, 'idle', (from, event) => report(from, event));",
+    "class A { #m = new StateMachine(A_MACHINE, 'idle', this.#refused); #refused = () => {}; }",
+    "const m = new Other(A_MACHINE, 'idle');",
+  ],
+  invalid: [
+    { code: "const m = new StateMachine(A_MACHINE, 'idle');", errors: [{ messageId: 'silent' }] },
+    { code: "class A { #m = new StateMachine<S, E>(A_MACHINE, 'idle'); }", errors: [{ messageId: 'silent' }] },
+    { code: 'const m = new StateMachine(A_MACHINE);', errors: [{ messageId: 'silent' }] },
+  ],
+});
+
 describe('libraries.md reading', () => {
   it('reads the library names of one table', () => {
     const md = '## Ship in the product\n\n| Library | L |\n|---|---|\n| [KaTeX](https://x) | MIT |\n| [Tone.js](https://y) | MIT |\n\n## Dev and test only\n\n| [mathjs](https://z) | A |\n';

@@ -46,10 +46,11 @@ export class BoardCore {
   readonly outlines = new OutlineCache();
   readonly drawList: DrawList;
   /** The stroke being drawn; the pen tools write to it and the painter reads it. */
-  readonly live = new LiveStroke();
+  readonly live: LiveStroke;
 
   private constructor(store: Store) {
     this.store = store;
+    this.live = new LiveStroke(store.sink);
     this.pages = new Pages(store);
     this.cameras = new Cameras(store);
     this.history = new History(store);

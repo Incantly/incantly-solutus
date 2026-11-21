@@ -13,7 +13,7 @@ class InkTool implements ToolHandlers {
   readonly #ctx: ToolContext;
   readonly #which: 'pen' | 'highlighter';
   /** Watches the pen for the hold that fixes a rough shape (B23); the highlighter never starts it. */
-  readonly #hold = new HoldWatch();
+  readonly #hold = new HoldWatch((e) => this.#ctx.core.store.sink(e));
 
   constructor(ctx: ToolContext, which: 'pen' | 'highlighter') {
     this.#ctx = ctx;

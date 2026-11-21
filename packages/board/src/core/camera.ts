@@ -8,8 +8,8 @@
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { ZOOM_MAX, ZOOM_MIN } from './check';
-import { boardError, ok } from './errors';
-import type { BoardResult } from './errors';
+import { boardError, ok, refusedMove } from './errors';
+import type { BoardResult, ErrorSink } from './errors';
 import type { Store } from './store';
 import { isCamera, isPage } from './types';
 import type { Bounds, CameraRecord } from './types';
@@ -57,9 +57,11 @@ export class Camera implements CameraView {
   #zoom: number;
   #steadyZoom: number;
   #changedAt = 0;
-  readonly #machine = new StateMachine(CAMERA_MACHINE, 'steady');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(CAMERA_MACHINE, 'steady', refusedMove('camera', () => this.#report));
 
-  constructor(initial: Partial<CameraView> = {}) {
+  constructor(initial: Partial<CameraView> = {}, report?: ErrorSink) {
+    this.#report = report;
     this.#x = finite(initial.x ?? 0) ? (initial.x ?? 0) : 0;
     this.#y = finite(initial.y ?? 0) ? (initial.y ?? 0) : 0;
     const z = initial.zoom ?? 1;
@@ -191,7 +193,7 @@ export class Cameras {
     const rec = this.#store.get(page);
     if (rec === undefined || !isPage(rec)) return boardError('bad_argument', `There is no page "${page}".`, { detail: { page } });
     const saved = this.#store.get(cameraIdOf(page));
-    const camera = new Camera(saved !== undefined && isCamera(saved) ? saved : {});
+    const camera = new Camera(saved !== undefined && isCamera(saved) ? saved : {}, this.#store.sink);
     this.#cameras.set(page, camera);
     return ok(camera);
   }

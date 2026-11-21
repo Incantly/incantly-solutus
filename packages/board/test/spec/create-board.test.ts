@@ -4,7 +4,7 @@
  * only, limits and the headless core, all as options of `createBoard`. Only the public API and the DOM the docs describe.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { THEMES, addFigure, boardTools, createBoard, defaultIcon, defaultTools, saveBoard } from '../../src/index';
+import { THEMES, addFigure, createBoard, defaultIcon, defaultTools, saveBoard } from '../../src/index';
 import type { Board, BoardError, BoardOptions, MenuItem, ToolDef, ToolHandlers } from '../../src/index';
 import { installCanvas2d, sample } from './ink-helpers';
 import type { FakeCanvas } from './ink-helpers';
@@ -78,19 +78,19 @@ describe('tools (design 10; R7.1, R7.2; errors.md tool_unknown)', () => {
   });
 
   it('lists every built-in tool as a ToolDef (id, label, create) that a host can filter', () => {
-    expect(boardTools.ids()).toEqual(expect.arrayContaining(ALL));
-    for (const def of boardTools.defs) {
+    expect(defaultTools.ids()).toEqual(expect.arrayContaining(ALL));
+    for (const def of defaultTools.defs) {
       expect(typeof def.id).toBe('string');
       expect(typeof def.label).toBe('string');
       expect(typeof def.create).toBe('function');
     }
-    const filtered = boardTools.without('star');
+    const filtered = defaultTools.without('star');
     expect(filtered.ids()).not.toContain('star');
-    expect(boardTools.ids()).toContain('star');
+    expect(defaultTools.ids()).toContain('star');
   });
 
-  it('shows only the tools of the list: `boardTools.without("star").with(myTool)` puts the host tool on the board and drops star', () => {
-    const board = mount({ tools: boardTools.without('star').with(stamp()) });
+  it('shows only the tools of the list: `defaultTools.without("star").with(myTool)` puts the host tool on the board and drops star', () => {
+    const board = mount({ tools: defaultTools.without('star').with(stamp()) });
     expect(toolButton(board, 'stamp')).not.toBeNull();
     expect(toolButton(board, 'star')).toBeNull();
     expect(board.host.tools.map((t) => t.id)).toContain('stamp');
@@ -100,7 +100,7 @@ describe('tools (design 10; R7.1, R7.2; errors.md tool_unknown)', () => {
 
   it('runs a host tool through the same handlers as a built-in one (down, move, up) once it is chosen', () => {
     const log: string[] = [];
-    const board = mount({ tools: boardTools.with(stamp(log)) });
+    const board = mount({ tools: defaultTools.with(stamp(log)) });
     expect(board.setTool('stamp').ok).toBe(true);
     expect(board.tool).toBe('stamp');
     board.host.sample(sample({ phase: 'down', x: 10, y: 10 }));
@@ -110,7 +110,7 @@ describe('tools (design 10; R7.1, R7.2; errors.md tool_unknown)', () => {
   });
 
   it('gives a host tool the key it asks for', () => {
-    const board = mount({ tools: boardTools.with(stamp()) });
+    const board = mount({ tools: defaultTools.with(stamp()) });
     expect(press(board, 'x')).toBe(true);
     expect(board.tool).toBe('stamp');
   });
@@ -128,7 +128,7 @@ describe('tools (design 10; R7.1, R7.2; errors.md tool_unknown)', () => {
   });
 
   it('a tool the list left out cannot be chosen', () => {
-    const board = mount({ tools: boardTools.without('star') });
+    const board = mount({ tools: defaultTools.without('star') });
     const done = board.setTool('star');
     expect(done.ok).toBe(false);
     if (!done.ok) expect(done.kind).toBe('tool_unknown');
@@ -298,7 +298,7 @@ describe('icons (design 10; errors.md icon_invalid; R7.3)', () => {
   });
 
   it('the built-in icons are SVG, one for each default tool', () => {
-    for (const id of boardTools.ids()) {
+    for (const id of defaultTools.ids()) {
       const svg = defaultIcon(id);
       expect(svg, id).toBeDefined();
       expect(svg).toMatch(/^<svg[\s>]/);
@@ -702,7 +702,7 @@ describe('strings (design 10)', () => {
   });
 
   it('names a host tool by its own label when no table has it', () => {
-    const board = mount({ tools: boardTools.with(stamp()) });
+    const board = mount({ tools: defaultTools.with(stamp()) });
     expect(toolButton(board, 'stamp')?.getAttribute('aria-label')).toBe('Stamp');
   });
 });
@@ -906,7 +906,7 @@ describe('headless createBoard (R7.4)', () => {
   it('has the tools, the key map and the tool choice', () => {
     const board = must(createBoard());
     boards.push(board);
-    expect(board.host.tools.map((t) => t.id)).toEqual(boardTools.ids());
+    expect(board.host.tools.map((t) => t.id)).toEqual(defaultTools.ids());
     expect(board.tool).toBe('pen');
     expect(board.setTool('rect').ok).toBe(true);
     expect(board.tool).toBe('rect');

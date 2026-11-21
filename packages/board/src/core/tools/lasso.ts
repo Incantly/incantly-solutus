@@ -3,6 +3,8 @@
  * than half of a stroke's points). The loop is drawn on the overlay only, and the selection is not an undo step.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../machine';
+import { refusedMove } from '../errors';
 import type { MachineTable } from '@incantly/kernel';
 import { isInk, shapeGeometry } from '../geometry';
 import { pointInPolygon } from '../index-grid';
@@ -24,7 +26,7 @@ const MIN_STEP_PX = 0.5;
 
 class LassoTool implements ToolHandlers {
   readonly #ctx: ToolContext;
-  readonly #machine = new StateMachine(LASSO_MACHINE, 'idle');
+  readonly #machine = new StateMachine(LASSO_MACHINE, 'idle', refusedMove('lasso', () => this.#ctx.core.store.sink));
   #xy = new Float32Array(512);
   #count = 0;
   #lastSx = 0;
@@ -58,7 +60,7 @@ class LassoTool implements ToolHandlers {
   }
 
   onCancel(): void {
-    this.#machine.send('cancel');
+    sendIfAble(this.#machine, 'cancel');
     this.#ctx.overlay.loop = null;
     this.#ctx.requestFrame();
   }

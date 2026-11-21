@@ -93,7 +93,7 @@ export type { NewFigure } from './figures';
 export { BoardCore, registerBuiltInKinds } from './board';
 export type { BoardCoreOptions } from './board';
 export {
-  ERASER_MACHINE, HAND_MACHINE, LASER_FADE_MS, LASER_MACHINE, LASER_MAX_POINTS, LASSO_MACHINE, SELECT_MACHINE, SHAPE_TOOLS, SHAPE_TOOL_MACHINE, TOOLS_MACHINE, ToolHost, ToolList, arrowTool, boardTools,
+  ERASER_MACHINE, HAND_MACHINE, LASER_FADE_MS, LASER_MACHINE, LASER_MAX_POINTS, LASSO_MACHINE, SELECT_MACHINE, SHAPE_TOOLS, SHAPE_TOOL_MACHINE, TOOLS_MACHINE, ToolHost, ToolList, arrowTool, inkTools,
   createOverlayState, defaultStyles, defaultTools, diamondTool, EDIT_ACTIONS, editAction, editKey, ellipseTool, eraserTool, frameTool, handTool, highlighterTool, laserTool, lassoTool, lineTool, penTool, rectTool, selectTool,
   starTool, stickyTool, styledDefaults, textTool, triangleTool,
 } from './tools/index';

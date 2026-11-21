@@ -7,6 +7,7 @@
  */
 import { MOD_ALT, MOD_MOD, MOD_SHIFT, PointerGate, PressureProbe } from '../core/input';
 import type { Device, GestureInput, InputSample, InputSink, KeyInput, Phase, TouchDraws, WheelInput } from '../core/input';
+import type { ErrorSink } from '../core/errors';
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -41,6 +42,8 @@ export interface WebInputOptions {
   readonly element: HTMLElement;
   readonly sink: InputSink;
   readonly touchDraws?: TouchDraws;
+  /** Where a refused move of the input's machines is told (the board's `onError`). */
+  readonly report?: ErrorSink;
 }
 
 const deviceOf = (type: string): Device => (type === 'pen' ? 'pen' : type === 'touch' ? 'touch' : 'mouse');
@@ -49,7 +52,7 @@ export class WebInput {
   readonly #el: HTMLElement;
   readonly #sink: InputSink;
   readonly #gate: PointerGate;
-  readonly #probe = new PressureProbe();
+  readonly #probe: PressureProbe;
   /** The one sample object every event reuses. */
   readonly #sample = new ReusedSample();
   readonly #key: Mutable<KeyInput> = { key: '', down: true, shift: false, alt: false, mod: false, repeat: false };
@@ -68,7 +71,8 @@ export class WebInput {
   constructor(options: WebInputOptions) {
     this.#el = options.element;
     this.#sink = options.sink;
-    this.#gate = new PointerGate(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {});
+    this.#probe = new PressureProbe(options.report);
+    this.#gate = new PointerGate({ ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}), ...(options.report !== undefined ? { report: options.report } : {}) });
     const el = this.#el;
     el.style.touchAction = 'none';
     if (el.tabIndex < 0) el.tabIndex = 0;

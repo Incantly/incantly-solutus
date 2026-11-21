@@ -56,7 +56,13 @@ export default defineConfig([
     rules: {
       'incantly/allowed-imports': 'error',
       'incantly/no-throw-export': 'error',
+      'incantly/no-imported-mutation': 'error',
     },
+  },
+  {
+    // a refused move is reported, never silent
+    files: ['packages/board/**/*.ts', 'packages/tiptap/**/*.ts', 'tools/**/*.js'],
+    rules: { 'incantly/state-refusal-reported': 'error' },
   },
   {
     files: ['packages/server/src/**/*.ts'],

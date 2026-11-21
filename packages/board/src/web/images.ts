@@ -5,6 +5,8 @@
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
+import { refusedMove } from '../core/errors';
+import type { BoardError } from '../core/errors';
 import type { Store } from '../core/store';
 import { isAsset } from '../core/types';
 
@@ -19,10 +21,12 @@ export const IMAGE_MACHINE: MachineTable<ImageState, ImageEvent> = {
 
 /** One asset's picture and how far its decoding has got. */
 export class ImageEntry {
-  readonly #machine = new StateMachine(IMAGE_MACHINE, 'pending');
+  readonly #report: ((error: BoardError) => void) | undefined;
+  readonly #machine = new StateMachine(IMAGE_MACHINE, 'pending', refusedMove('image', () => this.#report));
   readonly #image: HTMLImageElement;
 
-  constructor(src: string, settled: () => void) {
+  constructor(src: string, settled: () => void, report?: (error: BoardError) => void) {
+    this.#report = report;
     this.#image = new Image();
     this.#image.onload = () => {
       if (this.#machine.send('decoded')) settled();
@@ -76,7 +80,7 @@ export class ImageCache {
     if (known !== undefined) return known.picture;
     const record = this.#store.get(asset);
     if (record === undefined || !isAsset(record)) return null;
-    const entry = new ImageEntry(`data:${record.mime};base64,${record.data}`, this.#settled);
+    const entry = new ImageEntry(`data:${record.mime};base64,${record.data}`, this.#settled, this.#store.sink);
     this.#entries.set(asset, entry);
     return entry.picture;
   };

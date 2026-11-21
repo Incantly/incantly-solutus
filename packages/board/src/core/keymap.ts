@@ -6,8 +6,8 @@
  */
 import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
-import { boardError } from './errors';
-import type { BoardError } from './errors';
+import { boardError, refusedMove } from './errors';
+import type { BoardError, ErrorSink } from './errors';
 import type { KeyInput } from './input';
 import type { ToolList } from './tools/def';
 
@@ -66,7 +66,7 @@ const MODIFIERS: Readonly<Record<string, 'mod' | 'shift' | 'alt'>> = { mod: 'mod
 /** The digit a shifted symbol key stands for on a US keyboard (`shift+0` arrives as `)`). */
 const SHIFTED_DIGIT: Readonly<Record<string, string>> = { ')': '0', '!': '1', '@': '2', '#': '3', $: '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9' };
 
-const combo = (mod: boolean, alt: boolean, shift: boolean, key: string): string => `${mod ? 'mod+' : ''}${alt ? 'alt+' : ''}${shift ? 'shift+' : ''}${key}`;
+const combo = (mod: boolean, alt: boolean, shift: boolean, key: string): string => `${mod ? 'mod+' : ''}${shift ? 'shift+' : ''}${alt ? 'alt+' : ''}${key}`;
 
 /** `shift+Mod+P` as `mod+shift+p`; undefined when the text names no key or a modifier twice. */
 export function normaliseKey(text: string): string | undefined {
@@ -130,10 +130,15 @@ export function defaultKeyTable(tools: ToolList): Readonly<Record<string, readon
 const asList = (option: KeyOption): readonly string[] => (option === false ? [] : typeof option === 'string' ? [option] : option);
 
 export class KeyMap {
-  readonly #machine = new StateMachine(KEYMAP_MACHINE, 'building');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(KEYMAP_MACHINE, 'building', refusedMove('key map', () => this.#report));
   readonly #byKey = new Map<string, string>();
   readonly #byAction = new Map<string, string[]>();
   readonly #errors: BoardError[] = [];
+
+  constructor(report?: ErrorSink) {
+    this.#report = report;
+  }
 
   /** `building` while bindings are added, `sealed` when the map answers. */
   get state(): MapState {
@@ -149,8 +154,8 @@ export class KeyMap {
    * A sealed map from the defaults and the host's `keys`. The host's actions come first, in the order it wrote them,
    * so its keys beat a default's; a key string asked for twice goes to the first action and the later one is reported.
    */
-  static from(defaults: Readonly<Record<string, readonly string[]>>, options: KeyOptions = {}): KeyMap {
-    const map = new KeyMap();
+  static from(defaults: Readonly<Record<string, readonly string[]>>, options: KeyOptions = {}, report?: ErrorSink): KeyMap {
+    const map = new KeyMap(report);
     map.#fill(defaults, options);
     map.#machine.send('seal');
     return map;

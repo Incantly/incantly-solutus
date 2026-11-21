@@ -4,8 +4,9 @@
  * time. A function that throws or returns a bad list gives the default list and is reported.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from '../../core/machine';
 import type { MachineTable } from '@incantly/kernel';
-import { boardError } from '../../core/errors';
+import { boardError, refusedMove } from '../../core/errors';
 import type { BoardError } from '../../core/errors';
 import { describeKey } from '../../core/keymap';
 import { defaultIcon } from './icons';
@@ -68,7 +69,7 @@ export interface MenuHostOptions {
 }
 
 export class MenuHost {
-  readonly #machine = new StateMachine(MENU_MACHINE, 'closed');
+  readonly #machine = new StateMachine(MENU_MACHINE, 'closed', refusedMove('menu', () => this.#opts.onError));
   readonly #opts: MenuHostOptions;
   readonly #root: HTMLElement;
   #element: HTMLElement | undefined;
@@ -192,7 +193,7 @@ export class MenuHost {
 
   /** Closes the open menu (an item, Esc, a press elsewhere). */
   close(): void {
-    if (!this.#machine.send('close')) return;
+    if (!sendIfAble(this.#machine, 'close')) return;
     this.#remove();
   }
 

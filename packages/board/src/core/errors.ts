@@ -96,5 +96,23 @@ export function recordInvalid(record: string, field: string, message: string, hi
   return boardError('record_invalid', message, { ...(hint !== undefined ? { hint } : {}), detail: { record, field } });
 }
 
+/** Where a board error goes: the board's `onError`. */
+export type ErrorSink = (error: BoardError) => void;
+
+/**
+ * The `onRefused` of a state machine (docs/state-machines.md, how to read): a move the table refuses is told to the
+ * board's `onError` as `internal`, with the machine, the state and the event. `sink` is read when a move is refused, so
+ * the owner may set it after the machine is made.
+ */
+export function refusedMove(machine: string, sink: () => ErrorSink | undefined): (from: string, event: string) => void {
+  return (from, event) => {
+    try {
+      sink()?.(boardError('internal', `The ${machine} machine refused "${event}" in the state "${from}".`, { detail: { machine, state: from, event } }));
+    } catch {
+      // the host's error handler failed; there is nobody left to tell
+    }
+  };
+}
+
 /** The text of a thrown value, for an `internal` error. */
 export const describeThrown = (e: unknown): string => (e instanceof Error ? e.message : String(e));

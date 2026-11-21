@@ -11,7 +11,7 @@ import { loadBoard, saveBoard } from '../core/file';
 import { KindRegistry } from '../core/kinds/def';
 import type { Limits } from '../core/types';
 import { ToolHost } from '../core/tools/host';
-import { boardTools, createOverlayState, defaultStyles } from '../core/tools/index';
+import { defaultTools, createOverlayState, defaultStyles } from '../core/tools/index';
 import type { ToolContext, ToolList } from '../core/tools/index';
 import { mountBoardView } from './board-view';
 import type { BoardView } from './board-view';
@@ -23,7 +23,7 @@ export interface BoardOptions extends ShellOptions {
   readonly container?: HTMLElement;
   /** A saved board (the text of a `.incantly-board` file); a new board with one page when omitted. */
   readonly document?: string;
-  /** The tools; default `boardTools`. `defaultTools.without('star').with(myTool)` filters and extends a list. */
+  /** The tools; default `defaultTools`. `defaultTools.without('star').with(myTool)` filters and extends a list. */
   readonly tools?: ToolList;
   /** Lower limits than the defaults (design 4). */
   readonly limits?: Partial<Limits>;
@@ -73,7 +73,7 @@ export function createBoard(options: BoardOptions = {}): BoardResult<Board> {
       // a host's listener that throws does not stop the board
     }
   };
-  const tools = toolsFor(options.tools ?? boardTools, options.readOnly === true);
+  const tools = toolsFor(options.tools ?? defaultTools, options.readOnly === true);
   const shell = resolveShell(options, tools, report);
   const kinds = new KindRegistry();
   registerBuiltInKinds(kinds);

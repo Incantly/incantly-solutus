@@ -16,7 +16,9 @@ export type TiptapErrorKind =
   /** A figure's picture could not be made. */
   | 'export_failed'
   /** A formula's expression failed. */
-  | 'formula_failed';
+  | 'formula_failed'
+  /** A state machine refused a move the extension made: the state and the event are in `detail`. */
+  | 'internal';
 
 export interface TiptapError {
   readonly ok: false;

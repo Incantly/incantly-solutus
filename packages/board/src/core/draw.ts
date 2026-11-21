@@ -5,6 +5,7 @@
  * on each `Tile`. The tile machine is B14 in docs/state-machines.md.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from './machine';
 import type { MachineTable } from '@incantly/kernel';
 import type { CameraView } from './camera';
 import { isInk, shapeBounds, shapeGeometry, unionBounds } from './geometry';
@@ -15,7 +16,8 @@ import { measureGeneration } from './text';
 import type { Outline, Outliner } from './ink/outline';
 import { OutlineCache } from './ink/outline';
 import { parseColor } from './kinds/ink';
-import type { BoardResult } from './errors';
+import { refusedMove } from './errors';
+import type { BoardResult, ErrorSink } from './errors';
 import type { PageIndex } from './page-index';
 import type { Bounds, Diff, PageBackground, ShapeRecord } from './types';
 import { isShape } from './types';
@@ -71,9 +73,11 @@ export class Tile {
   handle: unknown = null;
   /** The frame this tile was last used in. */
   lastUsed = 0;
-  readonly #machine = new StateMachine(TILE_MACHINE, 'blank');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(TILE_MACHINE, 'blank', refusedMove('tile', () => this.#report));
 
-  constructor(k: number, tx: number, ty: number) {
+  constructor(k: number, tx: number, ty: number, report?: ErrorSink) {
+    this.#report = report;
     this.k = k;
     this.tx = tx;
     this.ty = ty;
@@ -95,19 +99,19 @@ export class Tile {
 
   /** The painter drew it. */
   drawn(): boolean {
-    return this.#machine.send('draw');
+    return sendIfAble(this.#machine, 'draw');
   }
 
   dirty(): boolean {
-    return this.#machine.send('dirty');
+    return sendIfAble(this.#machine, 'dirty');
   }
 
   lose(): boolean {
-    return this.#machine.send('lose');
+    return sendIfAble(this.#machine, 'lose');
   }
 
   evict(): boolean {
-    return this.#machine.send('evict');
+    return sendIfAble(this.#machine, 'evict');
   }
 }
 
@@ -116,6 +120,8 @@ export interface TileCacheOptions {
   readonly capBytes?: number;
   /** Called when a tile leaves the cache or loses its picture: the painter frees its handle. */
   readonly release?: (tile: Tile) => void;
+  /** Where a refused tile move is told (the board's `onError`). */
+  readonly report?: ErrorSink;
 }
 
 const meets = (a: Bounds, b: Bounds): boolean => a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
@@ -125,6 +131,7 @@ export class TileCache {
   readonly capBytes: number;
   readonly #tiles = new Map<number, Tile>();
   readonly #release: ((tile: Tile) => void) | undefined;
+  readonly #report: ErrorSink | undefined;
   #frame = 0;
   #bytes = 0;
 
@@ -132,6 +139,7 @@ export class TileCache {
     const cap = options.capBytes;
     this.capBytes = cap !== undefined && Number.isFinite(cap) && cap >= TILE_BYTES ? cap : TILE_CAP_BYTES;
     this.#release = options.release;
+    this.#report = options.report;
   }
 
   /** The number of tiles held. */
@@ -182,7 +190,7 @@ export class TileCache {
       for (let tx = tx0; tx <= tx1; tx++) {
         const id = tileId(k, tx, ty);
         let tile = this.#tiles.get(id);
-        if (tile === undefined) this.#tiles.set(id, (tile = new Tile(k, tx, ty)));
+        if (tile === undefined) this.#tiles.set(id, (tile = new Tile(k, tx, ty, this.#report)));
         tile.lastUsed = this.#frame;
         out.push(tile);
       }

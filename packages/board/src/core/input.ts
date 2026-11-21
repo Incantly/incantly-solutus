@@ -5,6 +5,9 @@
  * no `Date`: `time` always comes from the adapter's own clock.
  */
 import { StateMachine } from '@incantly/kernel';
+import { sendIfAble } from './machine';
+import { refusedMove } from './errors';
+import type { ErrorSink } from './errors';
 import type { MachineTable } from '@incantly/kernel';
 
 export type Device = 'pen' | 'touch' | 'mouse';
@@ -143,21 +146,25 @@ export type TouchDraws = 'auto' | 'never' | 'always';
 export interface GateOptions {
   /** `auto`: a finger draws unless a pen is near; `never`: pen only; `always`: a finger draws even with a pen near. */
   readonly touchDraws?: TouchDraws;
+  /** Where a refused move is told (the board's `onError`). */
+  readonly report?: ErrorSink;
 }
 
 export class PointerGate {
   readonly #machine: StateMachine<GateState, GateEvent>;
   readonly #touchDraws: TouchDraws;
+  readonly #report: ErrorSink | undefined;
   /** Data next to the machine: the fingers down, the pointer that draws, the last pen sample's time. */
   #touches = 0;
   #drawing = -1;
   #penTime = -Infinity;
 
   constructor(options: GateOptions = {}) {
+    this.#report = options.report;
     this.#touchDraws = options.touchDraws ?? 'auto';
     // the table is chosen once, from the option
     const CHOSEN_MACHINE = this.#touchDraws === 'always' ? GATE_ALWAYS_MACHINE : GATE_MACHINE;
-    this.#machine = new StateMachine(CHOSEN_MACHINE, 'idle');
+    this.#machine = new StateMachine(CHOSEN_MACHINE, 'idle', refusedMove('pointer gate', () => this.#report));
   }
 
   get state(): GateState {
@@ -285,8 +292,13 @@ export const PROBE_MACHINE: MachineTable<ProbeState, ProbeEvent> = {
 export const PROBE_FLAT_SAMPLES = 8;
 
 export class PressureProbe {
-  readonly #machine = new StateMachine(PROBE_MACHINE, 'unknown');
+  readonly #report: ErrorSink | undefined;
+  readonly #machine = new StateMachine(PROBE_MACHINE, 'unknown', refusedMove('pressure probe', () => this.#report));
   #flatSeen = 0;
+
+  constructor(report?: ErrorSink) {
+    this.#report = report;
+  }
 
   get state(): ProbeState {
     return this.#machine.state;
@@ -297,12 +309,12 @@ export class PressureProbe {
     if (!Number.isFinite(pressure)) return Number.NaN;
     if (pressure <= 0) return pressure;
     if (pressure !== 0.5) {
-      this.#machine.send('varied');
+      sendIfAble(this.#machine, 'varied');
       return pressure;
     }
     if (this.#machine.is('real')) return pressure;
     this.#flatSeen++;
-    if (this.#flatSeen >= PROBE_FLAT_SAMPLES) this.#machine.send('flat');
+    if (this.#flatSeen >= PROBE_FLAT_SAMPLES) sendIfAble(this.#machine, 'flat');
     return Number.NaN;
   }
 }
