@@ -135,8 +135,8 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 
 1. Smooth the points with a short moving window weighted by distance (streamline), so a shaky hand gives a steady line.
 2. Width at each point: `size * (1 - thinning + thinning * pressure)`, eased, with the speed taper for simulated pressure.
-3. Offset each point left and right of the direction by half its width; round caps at both ends; a sharp turn (over 120°) adds the corner's arc so the line does not pinch.
-4. The outline is one polygon, tessellated once into triangles and cached until the stroke changes. Moving or zooming never re-tessellates.
+3. Offset each point left and right of the direction by half its width, on the bisector of the two segments; round caps at both ends; a turn of more than 30° gets its own offsets on each segment and a round arc on the outer side, so the line does not pinch (a turn over 120° always needs it).
+4. The outline is written as indexed triangles of one winding: a quad for each segment, a fan for each cap and each arc. Their union is the stroke, so no general polygon tessellator is needed and a sharp turn cannot make the outline cross itself. The triangles are cached until the stroke changes (a changed stroke is a new record). Moving or panning never rebuilds them; a zoom step rebuilds the arcs only.
 
 ### 6.3 Drawing it with no lag
 

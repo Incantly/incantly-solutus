@@ -38,15 +38,10 @@ describe('the mode records (R1)', () => {
     expect(MODES.probability.views.initial).toEqual(['distribution', 'graphics']);
   });
 
-  it('lists notes but says it is not available yet; 3D is available', () => {
+  it('the board (notes) and 3D are available', () => {
     expect(getMode('graphing3d').ok).toBe(true);
-    const r = getMode('notes');
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.kind).toBe('mode_unavailable');
-    expect(r.detail?.['available']).toContain('graphing');
-    expect(availableModes().map((m) => m.id)).not.toContain('notes');
-    expect(getMode('notes').ok).toBe(false);
+    expect(getMode('notes').ok).toBe(true);
+    expect(availableModes().map((m) => m.id)).toContain('notes');
   });
 
   it('gives the closest id for an unknown mode', () => {

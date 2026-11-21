@@ -12,7 +12,7 @@ export const en: Record<string, string | { readonly one: string; readonly other:
   'mode.scientific.purpose': 'calculate with keys',
   'mode.probability.title': 'Probability',
   'mode.probability.purpose': 'explore chance',
-  'mode.notes.title': 'Notes',
+  'mode.notes.title': 'Board',
   'mode.notes.purpose': 'write and draw',
   'mode.cas.title': 'CAS',
   'mode.cas.purpose': 'exact algebra',

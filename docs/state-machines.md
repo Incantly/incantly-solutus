@@ -1501,7 +1501,7 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 
 ## board
 
-Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Rounds 2 to 5 append their machines here (tools, figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B17 (below); rounds 3 to 5 append theirs (shape tools, figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
 
 Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
 
@@ -1573,6 +1573,250 @@ Three machines and one derived state in round 1: the store transaction (B1), the
 | `zooming` | `settle` | `now - changedAt >= 150`, or `now` is before `changedAt` (the clock went back) | `steady` | `steadyZoom = zoom`; `tick` returns true |
 
 - **Reachable invalid states or transitions:** none known. A zoom that is clamped to the same value is not a change, so the camera does not leave `steady` at the zoom limits.
+
+### Round 2 (branch `feat/board-2`: ink, tools, painter)
+
+Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`, `core/draw.ts`, `web/input.ts`, `web/painter.ts`, `web/board-view.ts`). Data that is not a state is named in each invariants line: counts, the last kept sample, the clock the input layer hands in, byte totals. Marks that do not depend on each other go in one named `readonly` record (`layers`, `frame`), never in loose booleans. Every table below refuses at least one move (`incantly/state-table-refuses`).
+
+### B5. Pointer gate and palm rule
+
+- **Where:** `core/input.ts` `PointerGate`, `GATE_MACHINE`; used by `web/input.ts`.
+- **States:** `idle` (nothing happening), `penNear` (a pen hovers), `penDown` (a pen is writing), `mouseDown` (a mouse button is down), `touchDown` (one finger is drawing), `gesture` (two or more fingers pan and zoom).
+- **Invariants:** a touch never draws while the state is `penNear` or `penDown`, nor within 600 ms (the grace, from the input clock) of the last pen sample, unless the host sets `touchDraws: 'always'`; `touchDraws: 'never'` ignores every single touch; two touches always give `gesture` except while a pen is writing; a pen that goes down while a finger draws cancels that finger's stroke (`cancelThenDraw`) and wins; the number of touches down (`touches`) and the pointer that draws (`drawing`) are data next to the machine, and `touches` never goes below 0; a sample the machine refuses is `ignore`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `penHover` | | `penNear` | the pen time is kept |
+| `idle` | `penDown` | | `penDown` | `draw` |
+| `idle` | `mouseDown` | | `mouseDown` | `draw` |
+| `idle` | `touchDown` | one touch, drawing allowed | `touchDown` | `draw` |
+| `idle` | `secondTouch` | touches reach 2 | `gesture` | `gesture` |
+| `penNear` | `penHover` | | `penNear` | |
+| `penNear` | `penDown` | | `penDown` | `draw` |
+| `penNear` | `penAway` | the pen left | `idle` | |
+| `penNear` | `mouseDown` | | `mouseDown` | `draw` |
+| `penNear` | `secondTouch` | touches reach 2 | `gesture` | `gesture` |
+| `penDown` | `penUp` | | `penNear` | `draw` (the `up` sample) |
+| `penDown` | `penCancel` | | `idle` | `draw` (the `cancel` sample) |
+| `mouseDown` | `mouseUp` | | `idle` | `draw` |
+| `touchDown` | `touchUp` | | `idle` | `draw` |
+| `touchDown` | `secondTouch` | touches reach 2 | `gesture` | the finger's stroke is cancelled |
+| `touchDown` | `penHover`, `penDown` | | `penNear`, `penDown` | `cancelThenDraw` |
+| `gesture` | `secondTouch` | a third finger | `gesture` | |
+| `gesture` | `gestureEnd` | touches fall below 2 | `idle` | |
+
+- **Reachable invalid states or transitions:** a touch in `penDown` has no row, so it is ignored and only counted. `penAway` is the pen's `pointerleave`; a browser that never sends it leaves `penNear` until the next pen or mouse event, and the grace then runs from the last pen sample.
+
+### B6. Pen pressure probe
+
+- **Where:** `core/input.ts` `PressureProbe`, `PROBE_MACHINE`; one probe per pen.
+- **States:** `unknown` (not enough samples), `flat` (every sample so far was exactly 0.5, so the pen has no sensor), `real` (a sample other than 0.5 was seen).
+- **Invariants:** in `unknown` and `flat` a 0.5 is reported as `NaN`, so the sampler simulates pressure from speed; in `real` every value is reported as it is; `flat` is decided after 8 samples that are all 0.5 (`flatSeen`, data); a value other than 0.5 moves `unknown` and `flat` to `real`; `real` is final, as a sensor does not go away.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `unknown` | `varied` | pressure is above 0 and not 0.5 | `real` | |
+| `unknown` | `flat` | the 8th sample of exactly 0.5 | `flat` | |
+| `flat` | `varied` | | `real` | |
+
+- **Reachable invalid states or transitions:** none known. `real` has no move; a probe never goes back.
+
+### B7. Live stroke (pen and highlighter tools)
+
+- **Where:** `core/ink/live.ts` `LiveStroke`, `LIVE_MACHINE`. The pen and the highlighter are one tool over two presets, so their tool state is the live stroke's state.
+- **States:** `idle` (no stroke), `drawing` (samples are being added to the stroke's own buffer, outside the store).
+- **Invariants:** BR-10: the buffer is never a stored record's array; the store gets a fresh record at `end` (`board.change('user', put)`, one undo step, merge key none) and the live buffer is cleared at once; nothing is written to the store while `drawing`; a sample closer than 0.5 screen pixels to the last kept one is dropped unless pressure changed by more than 0.05; a stroke with no kept sample is not stored; a refused commit (`limit`) keeps the board as it was and leaves the machine `idle`; predicted samples are never added.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | a pen, mouse or drawing touch went down | `drawing` | buffer cleared, first sample added |
+| `drawing` | `sample` | | `drawing` | filter, simulated pressure, push |
+| `drawing` | `end` | the up sample | `idle` | one `ink` record put, buffer cleared |
+| `drawing` | `cancel` | cancel, or a second finger, or the page changed | `idle` | buffer cleared, nothing stored |
+
+- **Reachable invalid states or transitions:** `sample` and `end` in `idle` have no row (a stray `move` is ignored); `begin` in `drawing` has no row (a second pointer is ignored by the gate and the tool).
+
+### B8. Eraser tool
+
+- **Where:** `core/tools/eraser.ts` `EraserTool`, `ERASER_MACHINE`.
+- **States:** `idle`, `erasing` (the pointer is down; every move erases along the segment from the last point).
+- **Invariants:** a drag is one undo step (the writes share the merge key `erase:<n>` and `seal()` ends them); the whole mode removes every stroke whose outline meets the eraser's circle; the partial mode cuts a stroke at each of its segments that meets the circle and keeps the runs of 2 or more points as new strokes; locked shapes are never erased; the pen's eraser end picks this tool through B12 for as long as it is used.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `erasing` | erase at the point |
+| `erasing` | `move` | | `erasing` | erase along the segment |
+| `erasing` | `up` | | `idle` | history sealed |
+| `erasing` | `cancel` | | `idle` | history sealed |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row. A refused write (a `limit` on the pieces of a cut stroke) leaves the stroke as it was.
+
+### B9. Laser tool
+
+- **Where:** `core/tools/laser.ts` `LaserTool`, `LASER_MACHINE`.
+- **States:** `idle`, `pointing` (the pointer is down and the trail grows), `fading` (the pointer is up and the trail dies out).
+- **Invariants:** nothing is stored; the trail holds at most 256 points and a point older than 1,200 ms is dropped; the trail has no clock of its own, `now` comes from the samples and from `tick(now)`; `tick` ends `fading` when the trail is empty; a new `down` in `fading` keeps the old points while they fade.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `pointing` | first point |
+| `pointing` | `move` | | `pointing` | point added |
+| `pointing` | `up` | | `fading` | |
+| `pointing` | `cancel` | | `fading` | |
+| `fading` | `down` | | `pointing` | first point |
+| `fading` | `faded` | the trail is empty | `idle` | |
+
+- **Reachable invalid states or transitions:** `up` and `faded` in `idle` have no row; `faded` in `pointing` has no row, so a held pointer keeps its trail.
+
+### B10. Lasso tool
+
+- **Where:** `core/tools/lasso.ts` `LassoTool`, `LASSO_MACHINE`.
+- **States:** `idle`, `drawing` (the loop is open).
+- **Invariants:** the loop is a polygon of page points, closed on `up`; selected are the strokes with more than half of their points inside, and later shapes whose centre is inside; locked shapes are not selected; the selection is not in the store and is not an undo step; a loop of fewer than 3 points selects nothing and clears the selection; the loop is drawn on the overlay only.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `drawing` | loop starts |
+| `drawing` | `move` | | `drawing` | point added (0.5 px filter) |
+| `drawing` | `up` | | `idle` | selection set from the loop |
+| `drawing` | `cancel` | | `idle` | loop dropped, selection kept |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B11. Hand tool (pan)
+
+- **Where:** `core/tools/hand.ts` `HandTool`, `HAND_MACHINE`.
+- **States:** `idle`, `panning`.
+- **Invariants:** a drag moves the camera by the pointer's screen delta (`Camera.panBy`); the camera never leaves finite numbers; the wheel, the pinch and the two-finger pan move the camera without this machine (they are single events, with no state between them).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `panning` | last point kept |
+| `panning` | `move` | | `panning` | `panBy` |
+| `panning` | `up` | | `idle` | |
+| `panning` | `cancel` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B12. Tool host (which tool is in force)
+
+- **Where:** `core/tools/host.ts` `ToolHost`, `TOOLS_MACHINE`. The chosen tool (`current`) is data; the machine says whether it is the chosen tool or a temporary one that answers input.
+- **States:** `chosen` (the chosen tool answers), `eraserEnd` (a pen's eraser end is down: the eraser answers), `handHeld` (Space is held, or the middle button is down: the hand answers).
+- **Invariants:** a tool is switched only while no pointer is down (`setTool` while a stroke is in progress cancels it first); the pen's eraser end (button bit 32) enters `eraserEnd` on its `down` and leaves on `up`, then the chosen tool answers again; a held Space or a middle button gives the hand; one temporary tool at a time (`eraserEnd` and `handHeld` do not nest); an unknown tool id is refused with `tool_unknown`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `chosen` | `eraserDown` | the sample has the eraser bit | `eraserEnd` | the chosen tool is cancelled |
+| `chosen` | `handDown` | Space is held, or the middle button is down | `handHeld` | the chosen tool is cancelled |
+| `eraserEnd` | `eraserUp` | | `chosen` | |
+| `handHeld` | `handUp` | | `chosen` | |
+
+- **Reachable invalid states or transitions:** `handDown` in `eraserEnd` and `eraserDown` in `handHeld` have no row, so a second temporary tool does not start while one is in force.
+
+### B13. Page bar
+
+- **Where:** `web/board-view.ts` `PageBar`, `PAGEBAR_MACHINE`.
+- **States:** `closed` (only the current page's name shows), `open` (the list of pages shows).
+- **Invariants:** a page is chosen by a click on its entry (`goToPage`, not an undo step); the add button is `addPage` (one undo step) and is refused with `limit` at 100 pages; the list closes when a page is chosen or on `Escape`; the bar reads the page list from `Pages` each time it opens, and never keeps its own copy of the page count.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | | `open` | list built |
+| `open` | `close` | choice, `Escape` or outside click | `closed` | list removed |
+
+- **Reachable invalid states or transitions:** `open` in `open` and `close` in `closed` have no row.
+
+### B14. Tile and tile cache
+
+- **Where:** `core/draw.ts` `Tile`, `TILE_MACHINE`, `TileCache`. The tile's GPU or canvas handle is held by `web/painter.ts`; the cache only keeps the key, the byte size and the order of use.
+- **States of one tile:** `blank` (made, nothing drawn), `fresh` (drawn and up to date), `stale` (drawn, but a shape that touches it changed), `gone` (evicted; the object is dropped from the cache).
+- **Invariants:** a tile's key is its zoom step `k` (the tile is drawn at 2^k device pixels per page unit), its column `tx` and its row `ty`; it covers 512 device pixels; a changed shape marks every tile of every step whose box meets the shape's old or new bounds `stale`, and no other; `blank` is never marked; the least recently used tiles are evicted when the bytes held pass the cap (64 MB; 24 MB on a device with 4 GB or less), never one the current frame uses; a lost GPU context sends every tile to `blank` (its handle is dead); `gone` takes no event.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `blank` | `draw` | the painter drew it | `fresh` | bytes counted |
+| `fresh` | `dirty` | a shape that touches it changed | `stale` | |
+| `stale` | `dirty` | | `stale` | |
+| `stale` | `draw` | the painter drew it again | `fresh` | |
+| `fresh`, `stale` | `lose` | the context was lost | `blank` | bytes released |
+| `blank`, `fresh`, `stale` | `evict` | over the cap, least recently used | `gone` | handle released |
+
+- **Reachable invalid states or transitions:** `dirty` in `blank` and `draw` in `fresh` have no row (a fresh tile is not drawn again); every event in `gone` has no row.
+
+### B15. Painter back-end
+
+- **Where:** `web/painter.ts` `WebPainter`, `BACKEND_MACHINE`.
+- **States:** `gl` (the view package's WebGL 2 back-end draws the tiles), `lost` (the context was lost; the last picture stays and nothing is drawn), `canvas2d` (the Canvas 2D backup draws them).
+- **Invariants:** WebGL 2 is tried first; if it is not offered, or a shader or a target fails to build, the painter goes to `canvas2d` and returns the `render_failed` notice once (`errors.md`); `canvas2d` is final for this painter, as a second back-end switch would flicker; a lost context goes to `lost` and `webglcontextrestored` back to `gl` with every tile `blank`; the board's data is never touched by a back-end change.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `gl` | `contextLost` | | `lost` | tiles sent `lose` |
+| `lost` | `contextRestored` | | `gl` | programs and targets built again |
+| `gl`, `lost` | `fail` | a build failed, or the context cannot come back | `canvas2d` | `render_failed` returned; tiles sent `lose` |
+
+- **Reachable invalid states or transitions:** `contextLost` and `contextRestored` in `canvas2d` have no row; `contextRestored` in `gl` has no row.
+
+### B16. Painter frame
+
+- **Where:** `web/painter.ts` `WebPainter`, `FRAME_MACHINE`.
+- **States:** `between` (no frame open), `drawing` (`beginFrame` was called, `endFrame` was not).
+- **Invariants:** `drawTile`, `drawItems`, `drawLiveStroke` and `drawOverlay` outside a frame return `bad_argument` and draw nothing; a second `beginFrame` before `endFrame` is refused; `endFrame` ends the frame even when a draw call failed.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `between` | `begin` | | `drawing` | size and camera kept |
+| `drawing` | `end` | | `between` | the frame is shown |
+
+- **Reachable invalid states or transitions:** `begin` in `drawing` and `end` in `between` have no row.
+
+### B17. Live layer
+
+- **Where:** `web/painter.ts` `LiveLayer`, `LIVELAYER_MACHINE`. Independent marks of the layer (how many points are already drawn, the stroke's colour and opacity) are one named record, `ink`.
+- **States:** `clear` (nothing on the live canvas), `inking` (a stroke grows on it), `holding` (the stroke ended; the canvas still shows it until the tile that now holds the stroke is drawn).
+- **Invariants:** the canvas asks for `desynchronized`; each frame draws only the segments added since the last frame, with one segment of overlap so no seam shows; the tail not yet final (the last 3 points) and the predicted samples go to the overlay and are cleared each frame; the stroke's opacity is the canvas's CSS opacity, so overlapping segments of one stroke do not darken; `holding` ends in the frame that draws the tile (`settle`), so the stroke is never missing for a frame and never drawn twice.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `clear` | `ink` | a stroke began | `inking` | colour and opacity set |
+| `inking` | `ink` | | `inking` | new segments drawn |
+| `inking` | `release` | the stroke ended and was stored | `holding` | |
+| `inking` | `abort` | the stroke was cancelled | `clear` | canvas cleared |
+| `holding` | `settle` | the frame drew the tile | `clear` | canvas cleared |
+
+- **Reachable invalid states or transitions:** `release` in `clear` and `ink` in `holding` have no row; `ink` in `holding` is held back until `settle`, so a fast second stroke starts on the next frame.
+
+### B18. Frame loop
+
+- **Where:** `web/board-view.ts` `FrameLoop`, `LOOP_MACHINE`.
+- **States:** `idle` (no frame asked for), `queued` (a frame is on the animation frame queue), `running` (the frame body runs), `again` (a frame was asked for while one ran).
+- **Invariants:** at most one animation frame is queued; a request made during a frame runs one more frame after it, never nested; a body that returns true (a fading laser trail, a zoom not yet steady, tiles still waiting for their turn) asks for the next frame itself; a body that throws is dropped and the loop goes back to `idle`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `request` | | `queued` | frame scheduled |
+| `queued` | `request` | | `queued` | |
+| `queued` | `run` | the frame came | `running` | |
+| `running` | `request` | | `again` | |
+| `running` | `done` | | `idle` | |
+| `again` | `request` | | `again` | |
+| `again` | `done` | | `queued` | next frame scheduled |
+
+- **Reachable invalid states or transitions:** `run` and `done` in `idle`, and `run` in `running`, have no row.
 
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 

@@ -311,6 +311,29 @@ export class WebGL2Backend implements GpuBackend {
   }
 
   /**
+   * Resolve an MSAA frame into another single-sample target of the same size (the board draws each tile into one
+   * shared multisample target, then keeps the resolved copy in the tile's own texture).
+   */
+  resolveInto(frame: FrameCtx, dest: Target): Result<void> {
+    const gl = this.gl;
+    if (gl.isContextLost()) return internalError('WebGL2 context lost');
+    try {
+      const src = (frame as GlFrame).glTarget;
+      const dst = dest as GlTarget;
+      const w = Math.floor(frame.size.width * frame.size.dpr);
+      const h = Math.floor(frame.size.height * frame.size.dpr);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, src.msaaFbo ?? src.fbo);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, dst.fbo);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return okResult(undefined);
+    } catch {
+      return internalError('WebGL2 resolveInto');
+    }
+  }
+
+  /**
    * Copy a resolved target to the context's own canvas so a 2D
    * context can `drawImage` it without a CPU readback (VIEW-SM-25). The
    * target lands in the bottom `h` rows of the canvas.
@@ -359,6 +382,16 @@ export class WebGL2Backend implements GpuBackend {
           else if (arr.length === 9) gl.uniformMatrix3fv(loc, false, arr);
         }
       }
+      // Textures: each named target is bound to the next texture unit and the sampler is pointed at it.
+      let unit = 0;
+      for (const [name, tex] of Object.entries(batch.textures ?? {})) {
+        const loc = gl.getUniformLocation(prog.program, name);
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, (tex as GlTarget).colorTex);
+        if (loc !== null) gl.uniform1i(loc, unit);
+        unit++;
+      }
+      gl.activeTexture(gl.TEXTURE0);
       // Vertex layout.
       gl.bindBuffer(gl.ARRAY_BUFFER, arena.vbo);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, arena.ibo);
@@ -387,6 +420,7 @@ export class WebGL2Backend implements GpuBackend {
       else {
         gl.enable(gl.BLEND);
         if (batch.blend === 'add') gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        else if (batch.blend === 'premult') gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         else gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       }
       if (batch.cullBack) {
