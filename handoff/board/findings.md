@@ -61,3 +61,46 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-9.** A shape the load kept raw stays raw through `Tx.update` and through undo and redo (the mark is the stored record object), but a host that builds a new record by hand (`{ ...s, x: 1 }`) and calls `Tx.put` with it gets `record_invalid` while its props still fail the kind. Decide whether `put` of a record whose props are the same as a kept-raw record's keeps it raw.
 - **BR-10.** (Round 2: the `ink` kind's `check` copies the points, and the live stroke writes into its own buffer and commits a fresh record; kept open for other kinds with typed arrays.) Freezing is shallow: a typed array inside `props` (ink points) and the objects inside `meta` are shared with the caller, and a typed array cannot be frozen. A caller that keeps its `Float32Array` and writes into it after `put` changes the stored record and the history. Round 2 grows a live stroke's points: the live stroke should write into its own buffer and `put` a copy, or `put` should copy typed arrays.
 - **BR-11.** `meta.invalid` is reserved on a kept-raw shape: a host's own `meta.invalid` on such a shape is replaced by the note on load, and the saved file has the note removed, so the host's value is lost. Move the note to a field of its own, or keep the host's value under another key.
+
+## Round 2 (PR #133, reviewed at `11ba2cb`)
+
+### Fix now
+
+#### BR-12. Moving a stroke rebuilds its outline
+
+- **Where:** `core/draw.ts` / the outline cache (`OutlineCache` keyed by the record).
+- **What:** design 6.2 item 4 says moving or panning never rebuilds an outline; a move writes a new record, so the cache misses and rebuilds. A drag of 2,000 strokes rebuilds them all every frame.
+- **Fix:** key the outline by what it is made of (the points array, its count and stride, nib and size); the shape's `x`, `y` and `rotation` only change the transform. Test: the tester's failing test in `ink.test.ts`.
+
+#### BR-13. `touchDraws: 'always'` is refused while a pen is near
+
+- **Where:** `core/input.ts` `PointerGate`, B5.
+- **What:** `penNear` has no `touchDown` row, so the option the design promises (design 6.5, B5 invariants) cannot work.
+- **Fix:** the gate's table has the moves for `touchDraws: 'always'` (a touch draws in `penNear`, and while the pen is down it stays a second pointer as the design says), chosen from the option at construction. Update B5. Test: the tester's failing test in `input.test.ts`.
+
+#### BR-14. The mode's name
+
+- **Ruling:** the product owner calls it the board, so the mode's title is "Board" ("Tableau" in French); its id stays `notes`. Change `docs/features/app-modes/ui.md` (the tile `[ Board ]`) and the other app-modes docs that name the tile, and make the two tests that expect "Notes" expect "Board".
+
+#### BR-15. The lasso of 2,000 strokes takes 6.4 to 7.2 ms (goal 4 ms)
+
+- **Where:** the lasso selection pass.
+- **Fix:** ask the index grid for the strokes whose boxes touch the lasso's box; a stroke whose box is inside the lasso is in without a point test; a stroke whose box is outside is out; only the rest count points, stopping as soon as more than half are in or can no longer be. Bench row must meet 4 ms.
+
+#### BR-16. A 10 s stroke makes 7 garbage collections (goal 0)
+
+- **Where:** `core/ink/live.ts` `LiveStroke.rebuild` → `Outliner.build`.
+- **Fix:** the outliner writes into buffers it keeps and grows by doubling, and the live stroke extends its outline from the last settled point instead of rebuilding the whole stroke each frame (only the last few segments, which streamlining can still move, are made again). The bench row must show 0 collections, and the outline must equal a full rebuild (test).
+
+#### BR-17. A live stroke keeps its page after it ends
+
+- **Where:** `core/ink/live.ts` `#page`.
+- **What:** `#page` is set on `begin` and never cleared, so `page` reports the last page while the stroke is `idle`; the field and the machine can disagree.
+- **Fix:** clear it when the stroke ends or is cancelled, or hold the page in the drawing state's data. Test: `page` is `null` when idle.
+
+### Later
+
+- **BR-18.** The page backgrounds (`grid`, `dots`, `lines`) are not drawn yet (round 6 or with the style bar in round 4).
+- **BR-19.** No key for the next or previous page (ui.md lists `mod+pagedown`, `mod+pageup`): round 4, with the custom keys.
+- **BR-20.** The pen-only paths (tilt, a 0.5-only pen, the eraser end, palm rejection, pinch) have not been tried on a real stylus or touch screen.
+- **BR-21.** An ink shape's `rotation` is ignored until round 3.
