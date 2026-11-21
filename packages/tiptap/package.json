@@ -6,5 +6,13 @@
   "description": "The Tiptap extension: incantlyFigure and incantlyFormula nodes.",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "@tiptap/core": "^3.34.0",
+    "@tiptap/pm": "^3.34.0"
+  },
+  "devDependencies": {
+    "@tiptap/core": "^3.34.0",
+    "@tiptap/pm": "^3.34.0"
   }
 }
