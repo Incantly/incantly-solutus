@@ -6,7 +6,7 @@ import type { Editor } from '@tiptap/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTEXT_CHARS, aiUnavailable, askIncantly, httpTransport, parseEvent } from '../../src/index';
 import type { AiEvent, AiRequest, AiTransport } from '../../src/index';
-import { Viewport, destroyAll, docOf, figureAttrs, figureJson, makeEditor, para, posOf, real, undoOnce, until, lastError } from './helpers';
+import { Viewport, boxOf, destroyAll, docOf, figureAttrs, figureJson, makeEditor, para, posOf, real, undoOnce, until, lastError } from './helpers';
 
 beforeEach(() => {
   vi.stubGlobal('IntersectionObserver', Viewport);
@@ -184,6 +184,44 @@ describe('a stream that ends well (R6.2)', () => {
     await job;
   });
 
+  it('keeps later lines that read accepted ones when the figure is saved during the stream (TT-R3)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    try {
+      const tick = (ms: number): Promise<unknown> => vi.advanceTimersByTimeAsync(ms);
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((res) => {
+        release = res;
+      });
+      const transport: AiTransport = async function* () {
+        yield { lines: ['b = a + 1'] };
+        await gate;
+        yield { lines: ['c = b + 1', 'd = c * 2'] };
+        yield { done: true };
+      };
+      const { editor } = makeEditor(doc('a = 1'), { aiTransport: transport });
+      await tick(1500);
+      const box = boxOf(editor, 'fig_a') as HTMLElement;
+      expect(box.dataset['state']).toBe('live');
+      const job = askIncantly(editor, 'fig_a', 'add b, c and d');
+      await tick(50);
+      expect(editor.view.dom.querySelector('[aria-label="Objects in the figure"]')?.textContent ?? '').toContain('b');
+      Viewport.set(box, false);
+      await tick(10_000);
+      expect(box.dataset['state']).toBe('saved');
+      release();
+      await tick(50);
+      const r = await job;
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value.applied).toBe(3);
+        expect(r.value.failed).toEqual([]);
+      }
+      expect(figureAttrs(editor, 'fig_a')?.script).toBe('a = 1\nb = a + 1\nc = b + 1\nd = c * 2');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps lines that fail aside: the script gets the old lines plus the ones that worked', async () => {
     const { editor } = makeEditor(doc('a = 1'), { aiTransport: replay([{ lines: ['b = 2', 'c = Nope((('] }, { lines: ['d = a + 1'] }, { done: true }]) });
     const r = await askIncantly(editor, 'fig_a', 'add things');
@@ -308,6 +346,52 @@ describe('a new request on the same figure (R6, design 9)', () => {
     release();
     await Promise.all([first, second]);
     expect(figureAttrs(editor, 'fig_a')?.script).toBe('a = 1\ntwo = 2');
+  });
+
+  it('leaves the figure to the newer request: its lines that read its earlier lines are all committed (TT-R2)', async () => {
+    let releaseFirst: () => void = () => undefined;
+    let releaseSecond: () => void = () => undefined;
+    const gateFirst = new Promise<void>((res) => {
+      releaseFirst = res;
+    });
+    const gateSecond = new Promise<void>((res) => {
+      releaseSecond = res;
+    });
+    let secondStarted = false;
+    const transport: AiTransport = async function* (request) {
+      if (request.request === 'first') {
+        yield { lines: ['one = 1'] };
+        await gateFirst;
+        yield { lines: ['late = 9'] };
+        yield { done: true };
+      } else {
+        secondStarted = true;
+        yield { lines: ['c = 5'] };
+        await gateSecond;
+        yield { lines: ['d = c + 1'] };
+        yield { lines: ['total = d + c'] };
+        yield { done: true };
+      }
+    };
+    const { editor } = makeEditor(doc('a = 1'), { aiTransport: transport });
+    await until(() => editor.view.dom.querySelector('.inc-tt-box[data-state="live"]'), 'a live figure');
+    const first = askIncantly(editor, 'fig_a', 'first');
+    await until(() => (editor.view.dom.querySelector('[aria-label="Objects in the figure"]')?.textContent ?? '').includes('one'), 'the first line in the figure');
+    const second = askIncantly(editor, 'fig_a', 'second');
+    await until(() => secondStarted && (editor.view.dom.querySelector('[aria-label="Objects in the figure"]')?.textContent ?? '').includes('c'), 'the second request\'s first line in the figure');
+    // the replaced request leaves its loop now, after the newer one has applied a line
+    releaseFirst();
+    const r1 = await first;
+    expect(r1.ok).toBe(false);
+    expect(editor.view.dom.querySelector('[aria-label="Objects in the figure"]')?.textContent ?? '').toContain('c');
+    releaseSecond();
+    const r2 = await second;
+    expect(r2.ok).toBe(true);
+    if (r2.ok) {
+      expect(r2.value.applied).toBe(3);
+      expect(r2.value.failed).toEqual([]);
+    }
+    expect(figureAttrs(editor, 'fig_a')?.script).toBe('a = 1\nc = 5\nd = c + 1\ntotal = d + c');
   });
 
   it('does not abort a request on another figure', async () => {

@@ -191,7 +191,8 @@ export async function askIncantly(editor: Editor, id: string, request: string): 
     const applyTo = (lines: readonly string[]): readonly LineResult[] => {
       const live = view?.runLines(lines);
       if (live) return live;
-      if (!jobApp) jobApp = createHeadlessApp({ mode: attrs.mode, script: base });
+      // the figure is not live: a headless one starts from the lines already accepted, so later lines can read them
+      if (!jobApp) jobApp = createHeadlessApp({ mode: attrs.mode, script: joinScript(base, good) });
       return jobApp.run(lines);
     };
 
@@ -238,9 +239,9 @@ export async function askIncantly(editor: Editor, id: string, request: string): 
       if (map.get(id) === ctl) map.delete(id);
     }
 
-    // a newer request replaced this one: it leaves the figure as the node has it
+    // a newer request replaced this one: the figure and the panel are the newer request's now, so this one touches neither
     if (ctl.signal.aborted) {
-      view?.resetToNode();
+      if (!map.has(id)) view?.resetToNode();
       return tiptapError('ai_partial', 'A newer request replaced this one.', { node: id, detail: { superseded: true, applied: good.length, failed } });
     }
     if (tooBig) stopped = tiptapError('ai_unavailable', `The figure would be over ${SCRIPT_LIMIT / 1024} KB.`, { hint: 'Split the figure into two.', node: id });
