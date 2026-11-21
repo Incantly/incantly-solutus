@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 // Packages that run without a DOM are tested in Node; browser packages in happy-dom.
 const node = ['kernel', 'plot', 'symbolic', 'modes', 'teacher', 'server'];
-const dom = ['view', 'audio', 'ui', 'sdk', 'tiptap'];
+const dom = ['view', 'audio', 'ui', 'sdk', 'tiptap', 'board'];
 
 const project = (name: string, environment: 'node' | 'happy-dom') => ({
   test: {

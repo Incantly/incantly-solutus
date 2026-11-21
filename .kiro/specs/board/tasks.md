@@ -1,6 +1,6 @@
 # Board: tasks
 
-- [ ] 1. Round 1: store, transactions, history, pages, camera, spatial grid, file save and load (R1, R2, R3, R9)
+- [x] 1. Round 1: store, transactions, history, pages, camera, spatial grid, file save and load (R1, R2, R3, R9)
 - [ ] 2. Round 2: ink: web input, samples, simulated pressure, outline, live layer, painter with tiles and culling, pen tools (R4, R1.2)
 - [ ] 3. Round 3: shapes, kinds, editing, handles, snap, bindings, clipboard, shape fixing (R5)
 - [ ] 4. Round 4: figure cards under the scheduler; the customisable UI shell: toolbar, style bar, page bar, menus, keys, icons, theme, strings (R6, R7)
