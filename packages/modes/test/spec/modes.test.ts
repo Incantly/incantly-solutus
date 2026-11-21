@@ -227,9 +227,9 @@ describe('the notes mode shows the board (design 3.2 row notes; ui 1 and 2; boar
     expect(JSON.parse(JSON.stringify(MODES.notes))).toEqual(MODES.notes);
   });
 
-  it('is named Notes on its tile, with the purpose "write and draw" (app-modes ui 1)', () => {
+  it('is named Board on its tile, with the purpose "write and draw" (app-modes ui 1)', () => {
     const i18n = new I18n({ locale: 'en' });
-    expect(i18n.t(MODES.notes.title)).toBe('Notes');
+    expect(i18n.t(MODES.notes.title)).toBe('Board');
     expect(i18n.t(MODES.notes.purpose)).toBe('write and draw');
   });
 

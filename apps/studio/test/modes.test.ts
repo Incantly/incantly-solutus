@@ -166,7 +166,7 @@ describe('app modes in the studio', () => {
   });
 });
 
-describe('the Notes app shows the board (app-modes ui 2 Notes; board design 15)', () => {
+describe('the Board app shows the board (app-modes ui 2 Board; board design 15)', () => {
   let root: HTMLElement;
   let m: Mounted;
   const mount = (mode?: 'notes' | 'graphing' | 'classic'): void => {
@@ -207,14 +207,14 @@ describe('the Notes app shows the board (app-modes ui 2 Notes; board design 15)'
     expect(view?.core.pages.list()).toHaveLength(2);
   });
 
-  it('other apps do not make the board: it is made when Notes first shows it', () => {
+  it('other apps do not make the board: it is made when Board first shows it', () => {
     mount('graphing');
     expect(m.board.view()).toBeUndefined();
     expect(m.board.element.hidden).toBe(true);
     expect(m.board.element.querySelector('[data-board-view]')).toBeNull();
   });
 
-  it('switching to Notes and back hides the board and keeps its board, so a drawing is still there', () => {
+  it('switching to Board and back hides the board and keeps its board, so a drawing is still there', () => {
     mount('classic');
     expect(m.board.view()).toBeUndefined();
     expect(m.modes.setMode('notes').error).toBeUndefined();
@@ -229,12 +229,12 @@ describe('the Notes app shows the board (app-modes ui 2 Notes; board design 15)'
     expect(m.board.element.querySelectorAll('[data-board-view]')).toHaveLength(1);
   });
 
-  it('the start screen offers Notes between the maths apps and Classic, labelled and with its purpose', () => {
+  it('the start screen offers Board between the maths apps and Classic, labelled and with its purpose', () => {
     mount();
     m.modes.showStart();
     const tile = root.querySelector('.mode-tile[data-mode="notes"]') as HTMLElement;
     expect(tile).not.toBeNull();
-    expect(tile.querySelector('.tile-title')?.textContent).toBe('Notes');
+    expect(tile.querySelector('.tile-title')?.textContent).toBe('Board');
     expect(tile.querySelector('.tile-purpose')?.textContent).toBe('write and draw');
     const ids = [...root.querySelectorAll<HTMLElement>('.mode-tile')].map((t) => t.dataset['mode']);
     expect(ids.indexOf('notes')).toBeLessThan(ids.indexOf('classic'));
