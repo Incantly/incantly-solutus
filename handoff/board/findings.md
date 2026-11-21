@@ -68,11 +68,15 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 #### BR-12. Moving a stroke rebuilds its outline
 
+- **Status:** Fixed in 461156c. `OutlineCache` is keyed by the stroke's points array and also checks stride, size, nib and tolerance; the `ink` kind's `check` keeps an array it made itself (so a move or any patch to another field writes a record with the same array) and still copies an array a caller hands in (BR-10). Tests in `fixes-round2.test.ts` and the tester's `ink.test.ts` case.
+
 - **Where:** `core/draw.ts` / the outline cache (`OutlineCache` keyed by the record).
 - **What:** design 6.2 item 4 says moving or panning never rebuilds an outline; a move writes a new record, so the cache misses and rebuilds. A drag of 2,000 strokes rebuilds them all every frame.
 - **Fix:** key the outline by what it is made of (the points array, its count and stride, nib and size); the shape's `x`, `y` and `rotation` only change the transform. Test: the tester's failing test in `ink.test.ts`.
 
 #### BR-13. `touchDraws: 'always'` is refused while a pen is near
+
+- **Status:** Fixed in 461156c. `GATE_ALWAYS_MACHINE` is `GATE_MACHINE` plus `penNear` `touchDown`; the gate takes the table from the option when it is made. B5 is updated. Tests in `fixes-round2.test.ts` and the tester's `input.test.ts` case.
 
 - **Where:** `core/input.ts` `PointerGate`, B5.
 - **What:** `penNear` has no `touchDown` row, so the option the design promises (design 6.5, B5 invariants) cannot work.
@@ -80,19 +84,27 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 
 #### BR-14. The mode's name
 
+- **Status:** Fixed in aa276f3. The locale files already said "Board" and "Tableau"; the two tests (`packages/modes/test/spec/modes.test.ts`, `apps/studio/test/modes.test.ts`) expect "Board", and `app-modes/ui.md`, `design.md` and `features/README.md` name the tile "Board".
+
 - **Ruling:** the product owner calls it the board, so the mode's title is "Board" ("Tableau" in French); its id stays `notes`. Change `docs/features/app-modes/ui.md` (the tile `[ Board ]`) and the other app-modes docs that name the tile, and make the two tests that expect "Notes" expect "Board".
 
 #### BR-15. The lasso of 2,000 strokes takes 6.4 to 7.2 ms (goal 4 ms)
+
+- **Status:** Fixed in 461156c. `IndexGrid.queryLassoSplit` says which boxes lie wholly inside the loop (no polygon edge touches the box and a corner is inside); `mostlyInside` counts points and stops once the half is settled. Bench row: 6.95 ms before, 0.69 ms after (goal 4 ms). Tests: `mostlyInside` equals the full count on 400 random strokes and loops, and the lasso selection equals counting every point.
 
 - **Where:** the lasso selection pass.
 - **Fix:** ask the index grid for the strokes whose boxes touch the lasso's box; a stroke whose box is inside the lasso is in without a point test; a stroke whose box is outside is out; only the rest count points, stopping as soon as more than half are in or can no longer be. Bench row must meet 4 ms.
 
 #### BR-16. A 10 s stroke makes 7 garbage collections (goal 0)
 
+- **Status:** Fixed in 461156c. `Outliner.extend` keeps the triangles of the points that can no longer change (eight points behind the end) and makes the rest again; its arrays grow by doubling and keep their numbers. A full build allocated about 370 KB per call at 2,000 points (measured with the scavenger off); the per-point `Math.hypot` calls are replaced by a square root, the options and view objects are reused, and the work per frame no longer grows with the stroke. Bench rows: 7 collections before, 0 after; a frame while drawing 0.219 ms before, 0.008 ms after. Tests: `extend` equals `build` after every point of a stroke for every nib and both strides, after several points at a time, after a change of zoom or size, after `reset`, and for the live stroke frame by frame.
+
 - **Where:** `core/ink/live.ts` `LiveStroke.rebuild` → `Outliner.build`.
 - **Fix:** the outliner writes into buffers it keeps and grows by doubling, and the live stroke extends its outline from the last settled point instead of rebuilding the whole stroke each frame (only the last few segments, which streamlining can still move, are made again). The bench row must show 0 collections, and the outline must equal a full rebuild (test).
 
 #### BR-17. A live stroke keeps its page after it ends
+
+- **Status:** Fixed in ec79faf (the rule) and 461156c (the test). At `6e21a38` `end` and `cancel` already set `#page` to `null`, so `page` was `null` when idle (checked by the new test, which passes on the unchanged code); what was missing was a check that it stays so. `incantly/state-no-shadow-null` is that check: the repository lints clean with it, so no other class has the flaw. The field is now documented as data of the `drawing` state in B7.
 
 - **Where:** `core/ink/live.ts` `#page`.
 - **What:** `#page` is set on `begin` and never cleared, so `page` reports the last page while the stroke is `idle`; the field and the machine can disagree.
@@ -104,3 +116,7 @@ One review round per build round (Opus 5.5). **Fix now** is fixed by that round'
 - **BR-19.** No key for the next or previous page (ui.md lists `mod+pagedown`, `mod+pageup`): round 4, with the custom keys.
 - **BR-20.** The pen-only paths (tilt, a 0.5-only pen, the eraser end, palm rejection, pinch) have not been tried on a real stylus or touch screen.
 - **BR-21.** An ink shape's `rotation` is ignored until round 3.
+- **BR-22.** `incantly/state-no-shadow-null` knows a begin move by the event's name (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) and reads only `this.<machine>.send('literal')`. A machine whose first move has another name, or a send through a variable, is not checked. Reading the table's moves would make it exact.
+- **BR-23.** With `touchDraws: 'always'` a finger that draws in `penNear` and lifts leaves the gate `idle`, not `penNear`; the pen is still in range but the gate forgets it until the next pen event, so the palm grace runs from the last pen sample only. Harmless in `always` mode (touch draws anyway); the pen's `hover` also cancels a finger stroke in progress (`touchDown` `penHover` row), which `always` may not want.
+- **BR-24.** A stored `ink` record's `points` array is shared by every record written from it (BR-12), and a typed array cannot be frozen, so a host that writes into `record.props.points` changes the store and the history (BR-10 again, for arrays that came from the store).
+- **BR-25.** `packages/modes/src/locales/ar.ts` has no `mode.notes.*` entries (nor `mode.graphing3d.*`): not checked what the Arabic tile shows.
