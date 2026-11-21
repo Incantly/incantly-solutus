@@ -1499,6 +1499,90 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 - **Transitions:** as in V1, routed one to one (`build`, `goLive`, `pause`, `save`, `restore`). Without `IntersectionObserver`, `measure` sets visible and near from the boxes on scroll (50 ms later) and resize.
 - **Reachable invalid states or transitions:** the cap is only kept by the views themselves; T1's remount paths pass it (TT-R5).
 
+## board
+
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Rounds 2 to 5 append their machines here (tools, figure cards, agent job, circle to ask). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+
+Four machines in round 1: the store transaction (B1), the history (B2), the page count (B3) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback.
+
+### B1. Store transaction
+
+- **Where:** `core/store.ts` `Store.change`, `TX_MACHINE`, `HANDLE_MACHINE` (the `Tx` handle).
+- **States:** the store is `idle` (nothing running), `open` (the callback of `change` is writing; writes are staged, not applied), `notifying` (a committed diff is being delivered to listeners) or `nested` (a listener called `change` while notifying, and its callback is running). A `Tx` handle is `live` (its callback is running) or `closed` (the callback returned; any later call returns `bad_argument`).
+
+| State | Holds |
+|---|---|
+| `idle` | the committed records only; no staged writes |
+| `open` | the staged writes of one transaction (a map of id to record or removal); the records are unchanged |
+| `notifying` | a queue of committed diffs; the owner (the `change` that began from `idle`) delivers them in order |
+| `nested` | the staged writes of a listener's transaction; the owner's queue waits |
+
+- **Invariants:** the records change only in `commit`, in one step, after every check passed; a transaction that fails any check or limit applies nothing and sends no diff; one commit sends one diff, with its origin, and listeners see the records already in their new state; no two transactions are `open` or `nested` together (a `change` inside a callback is refused with `bad_argument`); diffs reach every listener in commit order; a throwing callback or listener is caught (a callback aborts its transaction; a listener's error goes to `onError`); a diff has each id once, with its net effect (add then remove of one id is nothing, two updates are one).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | origin is one of `user`, `model`, `host`, `remote` | `open` | handle `live`, empty staging |
+| `open` | `commit` | every record checks, integrity and limits hold | `notifying` | records applied, diff queued, handle `closed` |
+| `open` | `abort` | a check, integrity or limit failed, or the callback threw | `idle` | staging dropped, handle `closed`, the error is the result |
+| `notifying` | `drained` | queue empty | `idle` | |
+| `notifying` | `begin` | | `nested` | handle `live`; the owner keeps delivering after it |
+| `nested` | `commit` | as for `open` | `notifying` | records applied, diff queued |
+| `nested` | `abort` | | `notifying` | staging dropped |
+| `live` (handle) | `close` | | `closed` | |
+
+- **Reachable invalid states or transitions:** none known. `begin` in `open` or `nested` has no row, so a nested `change` is refused. A listener that writes on every diff without end would never reach `idle`; the host's listener must stop (no guard in the store).
+
+### B2. History
+
+- **Where:** `core/history.ts` `History`, `HISTORY_MACHINE`.
+- **States:** `recording` (the history listens to the store and records steps), `undoing` and `redoing` (the history is writing a step back through the store).
+- **Invariants:** a transaction with `history: false` is not a step; a replayed step is not recorded again; any recorded step empties the redo stack; a step with the `mergeKey` of the step on top of the undo stack joins it (the stroke's samples, a drag's moves) and keeps its first `before` and its last `after` per record; `seal()`, `undo` and `redo` end merging; one `undo` or `redo` is one store transaction, so listeners see one diff; a refused replay leaves both stacks as they were; the undo stack holds at most `maxSteps` steps.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `recording` | `undo` | undo stack not empty | `undoing` | the top step's `before` values are written in one transaction, `history: false` |
+| `recording` | `redo` | redo stack not empty | `redoing` | the step's `after` values are written in one transaction, `history: false` |
+| `undoing` | `done` | the write succeeded | `recording` | the step moves to the redo stack |
+| `undoing` | `done` | the write was refused | `recording` | stacks unchanged, the error is returned |
+| `redoing` | `done` | as for `undoing` | `recording` | the step moves to the undo stack |
+
+- **Reachable invalid states or transitions:** `undo` or `redo` called from a listener while a replay runs has no row and is refused with `bad_argument`. An empty stack is `nothing_to_undo`, returned before the machine moves. A change made with `history: false` to a record that a step holds is not part of that step, so undo writes the older value back (the camera, selection and pictures are not in steps, so this does not happen for them).
+
+### B3. Page count
+
+- **Where:** `core/pages.ts` `Pages`, `PAGES_MACHINE`.
+- **States:** `empty` (no page), `single` (one page), `several` (2 up to the limit minus one), `full` (the page limit, 100 by default). The state follows the page records: after every diff that touches a page record, `Pages` sends the event for the new count.
+- **Invariants:** the state always matches the number of page records; `removePage` is refused with `last_page` in `single`; `addPage` and `duplicatePage` are refused with `limit` in `full`; the current page is always a page that exists (or none in `empty`); every command except `goToPage` is one store transaction, so one undo step; a command that fails changes nothing; removing a page removes its shapes, its camera and the bindings of its shapes in the same transaction.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| any | `to_empty` | count is 0 | `empty` | current page becomes none |
+| any | `to_single` | count is 1 | `single` | current page is that page when the old one is gone |
+| any | `to_several` | count is 2 up to limit minus 1 | `several` | |
+| any | `to_full` | count equals the limit | `full` | |
+
+Every state accepts every event, so a command's own change and an undo, a redo or a load that changes the count all land in the right state. A command reads the state before it writes (`last_page`, `limit`).
+
+- **Reachable invalid states or transitions:** none known. A host that lowers `limits.pages` below the count of a loaded board gets `full` (not a refusal of the load); the next add is refused.
+
+### B4. Camera steady zoom
+
+- **Where:** `core/camera.ts` `Camera`, `CAMERA_MACHINE`. One `Camera` per page.
+- **States:** `steady` (the steady zoom equals the zoom) and `zooming` (the zoom changed less than 150 ms ago). Pan alone does not change the state.
+- **Invariants:** `zoom` is always inside 0.05 to 20; `steadyZoom` changes only when `tick` settles; the camera never reads a clock: the time of the last zoom change and the time `tick` is given come from the input layer; a non-finite number is ignored and changes nothing.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `steady` | `zoom` | the clamped zoom differs from the zoom | `zooming` | the time of the change is kept |
+| `zooming` | `zoom` | | `zooming` | the time of the change is kept |
+| `zooming` | `settle` | `now - changedAt >= 150`, or `now` is before `changedAt` (the clock went back) | `steady` | `steadyZoom = zoom`; `tick` returns true |
+
+- **Reachable invalid states or transitions:** none known. A zoom that is clamped to the same value is not a change, so the camera does not leave `steady` at the zoom limits.
+
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
 Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same.
