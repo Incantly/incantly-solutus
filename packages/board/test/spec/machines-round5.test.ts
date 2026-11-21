@@ -133,7 +133,7 @@ describe('the running code refuses the moves with no row, and reports nothing (t
 
   it('B32: every event of a final job is refused; the state does not change and nothing is reported', () => {
     const { errors, sink } = sinkOf();
-    const job = new AgentJob({ kind: 'talk', text: 'x', items: [], more: 0, page: 'page:1' }, () => sink);
+    const job = new AgentJob({ kind: 'talk', text: 'x', items: [], more: 0, page: 'page:1', allowEdit: false }, () => sink);
     expect(job.state).toBe('ready');
     expect(job.gotActions()).toBe(false);
     expect(job.finish()).toBe(false);
@@ -155,7 +155,7 @@ describe('the running code refuses the moves with no row, and reports nothing (t
     ['fail', (j: AgentJob) => j.fail('server', 'boom'), 'failed'],
     ['replace', (j: AgentJob) => j.replace(), 'replaced'],
   ] as const)('B32: a job that was %s takes no more events', (_name, end, state) => {
-    const job = new AgentJob({ kind: 'talk', text: 'x', items: [], more: 0, page: 'page:1' });
+    const job = new AgentJob({ kind: 'talk', text: 'x', items: [], more: 0, page: 'page:1', allowEdit: false });
     job.start();
     expect(end(job)).toBe(true);
     expect(job.state).toBe(state);

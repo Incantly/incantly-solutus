@@ -42,7 +42,7 @@ export interface TalkRequest {
   readonly more: number;
   readonly page: string;
   /** The user lets the agent change the work they made. */
-  readonly allowEdit?: boolean;
+  readonly allowEdit: boolean;
 }
 
 export type BoardAgentRequest = CircleRequest | TalkRequest;
@@ -261,7 +261,7 @@ export class AgentService {
     if (words === '') return boardError('bad_argument', 'Write what you want the agent to do.', { detail: { field: 'text' } });
     const read = this.runner.read();
     if (!read.ok) return read;
-    return this.ask({ kind: 'talk', text: words, items: read.value.items, more: read.value.more, page: read.value.page, ...(allowEdit ? { allowEdit: true } : {}) }, words);
+    return this.ask({ kind: 'talk', text: words, items: read.value.items, more: read.value.more, page: read.value.page, allowEdit }, words);
   }
 
   /** Ends the running job at once; what it drew stays. */
@@ -296,7 +296,7 @@ export class AgentService {
     this.say('you', say);
     // the whole answer is one gesture: one undo takes all of it back
     const gesture = beginGesture(this.runner.core, 'model');
-    const allow = request.kind === 'talk' ? request.allowEdit === true : EDITS_MINE.includes(request.choice);
+    const allow = request.kind === 'talk' ? request.allowEdit : EDITS_MINE.includes(request.choice);
     try {
       for await (const event of transport(request, job.controller.signal)) {
         if (!job.live) break;

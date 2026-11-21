@@ -98,7 +98,7 @@ describe('talking to the agent (ui.md The talking agent)', () => {
     const request = fakeT.requests[0] as BoardAgentRequest;
     expect(request.kind).toBe('talk');
     expect((request as { text: string }).text).toBe('draw a box');
-    expect((request as { allowEdit?: boolean }).allowEdit).not.toBe(true);
+    expect(request).toHaveProperty('allowEdit', false);
     const text = panelOf(board)?.textContent ?? '';
     expect(text).toContain('draw a box');
     expect(text.toLowerCase()).toContain('rect');
