@@ -431,7 +431,7 @@ Prompt-to-figure and prompt-to-film use the same language: one plan call, then o
 
 ### The model
 
-The AI that writes lines, for the live teacher and for the studio's AI panel, is Muse 1.3 Spark. The studio lets a learner or teacher ask for something ("show me the area under x² from 0 to 2"), and the model answers by writing lines through the `draw` tool, so every figure it makes is built from real formulas and commands. Model calls go only through `packages/server`, so API keys never reach the browser. The client follows the Muse Spark API documentation the product owner provides.
+The AI that writes lines, for the live teacher and for the studio's AI panel, is a free model on OpenRouter by default (`:free` ids only, tried in order), with Muse Spark as the second provider. The studio lets a learner or teacher ask for something ("show me the area under x² from 0 to 2"), and the model answers by writing lines through the `draw` tool, so every figure it makes is built from real formulas and commands. Model calls go only through `packages/server`, so API keys never reach the browser. The Muse Spark client follows the API documentation the product owner provides. The teacher's tools, prompt and loop are in `docs/features/teacher/`; the service is in `docs/features/server/`.
 
 ## 11. Packages
 
@@ -446,8 +446,8 @@ The AI that writes lines, for the live teacher and for the studio's AI panel, is
 | `packages/ui` | Algebra view, toolbars, input bar, sheet, style bar, maths keyboard, as Web Components | `kernel`, `view`, `modes` | Browser |
 | `packages/modes` | App mode records and exam profiles, as data | Nothing | Browser and Node |
 | `packages/sdk` | `createApp`, the embed API, iframe protocol, file format, export | All browser packages | Browser |
-| `packages/teacher` | `draw` and `figure` tools, catalogue builder, streaming apply | `kernel` | Browser and Node |
-| `packages/server` | Model calls (Muse Spark), keys, rate limits, headless checks and SVG export | `kernel`, `teacher` | Node |
+| `packages/teacher` | The model's tools, catalogue builder, turn loop, streaming apply; no network | `kernel`, `modes`, the SDK's headless app, `board/core` | Browser and Node |
+| `packages/server` | Model calls (OpenRouter by default, Muse Spark second), keys, rate limits, headless checks and SVG export | `kernel`, `teacher`, `modes`, the SDK's headless app and export, `board/core` | Node |
 | `apps/studio` | Our full web app, built only on `sdk` and `server`'s HTTP API | `sdk` | Browser |
 
 A project embeds Incantly with `@incantly/sdk` in its frontend. A backend that only needs to check lines, convert files or render SVG uses `@incantly/kernel` directly. Model calls belong in `@incantly/server` or the project's own backend, never in the browser.

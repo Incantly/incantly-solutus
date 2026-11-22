@@ -64,6 +64,10 @@ Columns: **kind / code**, **when**, **The reference app**, **our message templat
 | `version` K042 | file newer than supported | file errors | `This file is version {v}; supported: {list}.` | report | |
 | `tool_input` T001 | teacher tool called with a malformed or empty request | n/a | `{tool} needs {expected}.` | fix_line | `forms` |
 | `tool_busy` T002 | a tool call arrived while the previous one runs on the same figure | n/a | `The figure is busy; try again.` | skip | |
+| `turn_limit` T003 | a teacher turn passed 8 model calls, 24 tool calls or 60 s | n/a | `This answer stopped after {what}.` | report | `docs/features/teacher/errors.md` |
+| `tool_unknown` T004 | the model called a tool outside the job's toolset | n/a | `There is no tool {name}; the tools are {list}.` | fix_line | `expected` |
+| `retry_spent` T005 | a line failed after two retries, or with the same fingerprint twice | n/a | `{name} was left out after two tries.` | skip | notice |
+| `stream_cut` T006 | a streamed script or reply ended partway | n/a | `The answer stopped partway; {n} line(s) were drawn.` | report | notice |
 | `internal` K999 | a bug: an exception inside a rule, tool or listener | stack trace in console | `Something went wrong inside {where}; nothing was changed.` | skip | `fingerprint` |
 
 ## 2. How each kind is detected (and how we avoid false errors)
