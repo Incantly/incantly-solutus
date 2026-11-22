@@ -77,9 +77,8 @@ export function materialBlock(text: string): string {
   return `<material>\n${escapeMaterial(text)}\n</material>`;
 }
 
-/** The target's own data for the first message, cut to `TARGET_DATA_TOKENS`: a figure's summary, or a board's head line. */
-export function describeTarget(target: Target): string {
-  if (target.board !== undefined) return target.board.describe().head;
+/** The figure's summary as the first message shows it: a head line, what is undefined, a sample of objects, cut to `TARGET_DATA_TOKENS`. */
+function figureText(target: Target): string {
   const s = target.figureSummary();
   const head = `mode: ${s.mode}; objects: ${s.objects}; t: ${s.t}; window: x ${s.view.x0}..${s.view.x1}, y ${s.view.y0}..${s.view.y1}`;
   const lines = [head];
@@ -89,6 +88,11 @@ export function describeTarget(target: Target): string {
   const text = lines.join('\n');
   const max = TARGET_DATA_TOKENS * 4;
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/** The target's own data for the first message, cut to `TARGET_DATA_TOKENS`: a figure's summary, or a board's head line. */
+export function describeTarget(target: Target): string {
+  return target.board !== undefined ? target.board.describe().head : figureText(target);
 }
 
 /**
@@ -116,10 +120,12 @@ export function buildMessages(target: Target, request: TurnRequest): ChatMessage
     messages.push(h.role === 'user' ? { role: 'user', content: materialBlock(h.text) } : { role: 'assistant', content: h.text });
   }
   const board = target.board?.describe();
+  // a live lesson on a board may also hold the figure of the card in focus: it is told after the board
+  const focus = board !== undefined && target.figureSummary().objects > 0 ? `\n\nTHE FIGURE IN FOCUS (the card the lesson draws on)\n${figureText(target)}` : '';
   const first =
     board === undefined
       ? `THE FIGURE NOW\n${describeTarget(target)}`
-      : `THE BOARD NOW\n${board.head}\n\n${materialBlock(board.items === '' ? '(nothing in view)' : board.items)}`;
+      : `THE BOARD NOW\n${board.head}\n\n${materialBlock(board.items === '' ? '(nothing in view)' : board.items)}${focus}`;
   const texts = request.instruction === undefined ? [request.text, ...(request.material ?? [])] : [request.text, ...(request.material ?? [])].filter((t) => t.trim() !== '');
   const blocks = texts.map(materialBlock).join('\n\n');
   const ask = request.instruction === undefined ? '' : `\n\nTHE REQUEST\n${request.instruction}`;

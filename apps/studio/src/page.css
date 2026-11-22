@@ -537,3 +537,21 @@ button:disabled { opacity: 0.4; cursor: default; }
 .space-btn { width: 34px; height: 34px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; cursor: pointer; font-size: 15px; }
 .space-btn:hover { background: var(--tab); }
 .space-presets { width: 34px; height: 34px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; font-size: 11px; }
+
+/* Voice lesson: the Talk button and its panel (teacher design 8, state-machines TE4) */
+.voice-talk[hidden] { display: none; }
+.voice-panel { position: fixed; right: 16px; bottom: 16px; z-index: 40; width: min(360px, calc(100vw - 32px)); max-height: min(60vh, 460px); display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #fff; box-shadow: 0 8px 28px rgba(31, 36, 48, 0.18); }
+.voice-panel[hidden] { display: none; }
+.voice-head { display: flex; align-items: center; justify-content: space-between; }
+.voice-log { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 56px; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.voice-log li { padding: 4px 8px; border-radius: 6px; font-size: 13px; }
+.voice-you { align-self: flex-end; background: var(--accent-soft); color: var(--ink); max-width: 85%; }
+.voice-teacher { align-self: flex-start; background: var(--tab); max-width: 92%; }
+.voice-notice { align-self: stretch; background: var(--danger-soft); color: var(--danger); font-size: 12.5px; }
+.voice-heard { margin: 0; min-height: 1.2em; color: var(--muted); font-style: italic; font-size: 13px; }
+.voice-status { margin: 0; font-size: 12.5px; color: var(--muted); }
+.voice-panel[data-state='listening'] .voice-status { color: var(--accent); font-weight: 600; }
+.voice-panel[data-state='speaking'] .voice-status { color: #15803d; font-weight: 600; }
+.voice-row { display: flex; gap: 6px; align-items: center; }
+.voice-row .voice-input { flex: 1; min-width: 0; border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 8px; }
+.voice-mic.on { background: var(--accent-soft); color: var(--accent); }

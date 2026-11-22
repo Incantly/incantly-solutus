@@ -15,20 +15,25 @@ import type { Context, Route } from '../jobs/context';
 import { figureDraw } from '../jobs/figure';
 import { health } from '../jobs/health';
 import { Job } from '../jobs/job';
+import { speech } from '../jobs/speech';
+import { teach } from '../jobs/teach';
 import { RateLimiter } from '../limits/rate';
 import { silentLog } from '../log';
 import type { LogFn } from '../log';
-import { BODY_LIMIT, BODY_LIMIT_PICTURE, parseJsonObject, readBody } from './body';
+import type { SpeechClient } from '../providers/speech';
+import { BODY_LIMIT, BODY_LIMIT_PICTURE, BODY_LIMIT_SPEECH, parseJsonObject, readBody } from './body';
 import { checkOrigin, corsHeaders, preflightHeaders } from './cors';
 import { onClientClose } from './ndjson';
 
-/** The route table. Later rounds add the board, teach, speech and export routes here. */
+/** The route table. Round 5 adds the export route here. */
 export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/health', bodyLimit: 0, handle: health },
   { method: 'POST', path: '/v1/check', bodyLimit: BODY_LIMIT, handle: check },
   { method: 'POST', path: '/v1/figure/draw', bodyLimit: BODY_LIMIT, handle: figureDraw },
   // the board may send a picture of the circled area: the handler holds a request without one to `BODY_LIMIT`
   { method: 'POST', path: '/v1/board/ask', bodyLimit: BODY_LIMIT_PICTURE, handle: boardAsk },
+  { method: 'POST', path: '/v1/teach', bodyLimit: BODY_LIMIT, handle: teach },
+  { method: 'POST', path: '/v1/speech', bodyLimit: BODY_LIMIT_SPEECH, handle: speech },
 ];
 
 const routeNames = (routes: readonly Route[]): string[] => routes.map((r) => `${r.method} ${r.path}`);
@@ -37,6 +42,8 @@ export interface ServerOptions {
   readonly settings: Settings;
   /** The model client. Without one, model endpoints answer `model_unavailable`. */
   readonly client?: ModelClient;
+  /** The voices of `/v1/speech`. Without them the route answers `model_unavailable` and the studio uses the browser's voice. */
+  readonly speech?: SpeechClient;
   readonly log?: LogFn;
   /** The clock in milliseconds (limits, log stamps). Default: `Date.now`. */
   readonly now?: () => number;
@@ -119,7 +126,7 @@ export function createServer(options: ServerOptions): Server {
       }
       body = parsed.value;
     }
-    const ctx: Context = { job, settings, client: options.client, limiter, log, clientId: clientOf(req, settings.trustProxy), body, now };
+    const ctx: Context = { job, settings, client: options.client, speech: options.speech, limiter, log, clientId: clientOf(req, settings.trustProxy), body, now };
     log('request', { id, method, path });
     await route.handle(ctx);
   };

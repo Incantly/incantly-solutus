@@ -5,7 +5,7 @@
 import { createServer } from './http/server';
 import { readSettings } from './env';
 import { createLog } from './log';
-import { clientFor } from './providers/client';
+import { clientFor, speechFor } from './providers/client';
 
 async function main(): Promise<void> {
   const log = createLog(process.stdout, Date.now);
@@ -16,14 +16,15 @@ async function main(): Promise<void> {
     return;
   }
   const client = clientFor(settings.value);
-  const server = createServer({ settings: settings.value, ...(client !== undefined ? { client } : {}), log });
+  const speech = speechFor(settings.value);
+  const server = createServer({ settings: settings.value, ...(client !== undefined ? { client } : {}), ...(speech !== undefined ? { speech } : {}), log });
   const listening = await server.listen();
   if (!listening.ok) {
     process.stderr.write(`${listening.message}\n${listening.hint ?? ''}\n`);
     process.exitCode = 1;
     return;
   }
-  log('listening', { host: listening.host, port: listening.port, provider: settings.value.provider, ready: client !== undefined });
+  log('listening', { host: listening.host, port: listening.port, provider: settings.value.provider, ready: client !== undefined, voice: speech !== undefined });
   const stop = (): void => {
     void server.close().then(() => {
       process.exitCode = 0;

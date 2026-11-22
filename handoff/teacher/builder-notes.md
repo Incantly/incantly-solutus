@@ -161,3 +161,50 @@ Checked by hand with a fake model on a real server (`createServer`, port 0): a c
 - The model's words are not shown (choice 9).
 - `tasks.md` of both specs is not ticked (as asked in the earlier rounds).
 - Two edits in this round were made with `sed` and a short Python snippet (an anchored three-line replacement in `prompt/jobs.ts`, and five small replacements in `jobs/board.ts`) instead of the edit tool; both files were re-read and pass lint.
+
+---
+
+# Round 4: voice lessons
+
+Branch `feat/teacher-r4`, cut from `integration` after round 3 merged. Items 1 to 4 of `handoff/teacher/plan.md` Round 4. No tests were written (testers do that); the builder ran scratch specs (deleted) over the live job, the film tools, the splitter, the two routes with a fake model and a fake `fetch`, and the studio's `VoiceLesson` with a fake network, fake clips and a fake recogniser. No network was reached and `packages/server/.env` was never read. `npm run lint`, `npm run typecheck` and `npx vitest run` pass (12,570 tests, 11 skipped, 6 todo). `npm run server` builds, and the built server answered `/v1/health` (with `voice`), and `model_unavailable` on `/v1/teach` and `/v1/speech` with no key.
+
+## What was built
+
+| Item | Where |
+|---|---|
+| State machines first: `TE4` voice lesson, `SV3` speech call and audio answer, a note for the teacher's round 4 parts | `docs/state-machines.md` (own commit, before the code) |
+| 1. Film tools `pause`, `resume`, `seek_beat`, `show_me` | `packages/teacher/src/tools/film.ts`, added to the built-in tools in `tools/toolset.ts` |
+| 1. Sentence splitter | `packages/teacher/src/stream/sentences.ts` (`SentenceSplitter`, `splitSentences`, `speakable`) |
+| 1. The live job | `packages/teacher/src/loop/live.ts` (`liveTurn`, `liveTarget`, `liveTools`); the live instructions in `prompt/jobs.ts`; `prompt/build.ts` tells a board lesson its focus figure; `boardTarget`'s clock keeps the film time asked for |
+| 2. `POST /v1/teach` | `packages/server/src/jobs/teach.ts` (`teach`, `readTeachRequest`), route in `http/server.ts`; `readItems` of `jobs/board.ts` is exported |
+| 2. `POST /v1/speech` | `packages/server/src/jobs/speech.ts` (`speech`), `providers/speech.ts` (`OpenRouterSpeech`, `openRouterSpeech`, `SpeechClient`), `http/audio.ts`, `Job.audio`, `Job.chunk`, `Job.cut` in `jobs/job.ts`; `speechFor` in `providers/client.ts`; `speech` in `ServerOptions`, `Context`, `main.ts`; `voice` in `/v1/health`; `BODY_LIMIT_SPEECH` |
+| 3. Studio voice lesson | `apps/studio/src/voice.ts` (`VoiceLesson`, `VOICE_MACHINE`, `SentenceQueue`), `voice-audio.ts` (clips from `/v1/speech`, the browser's voice, browser recognition), `voice-targets.ts` (`figureLesson`, `boardLesson`), `voice-ui.ts` (Talk button and panel), `teach-client.ts` (`streamTeach`), mounted in `studio-page.ts` (`Mounted.voice`), styles in `page.css` |
+| 4. Acceptance lessons | `packages/teacher/test/fixtures/lesson-pendulum.json`, `lesson-area.json`, `lesson-fire.json` |
+
+Docs touched: `docs/features/teacher/design.md` (4, 8, 9, 11), `agent.md` (1, 3, 6), `docs/features/server/design.md` (3, 6, 7), `errors.md`. `findings.md` has TR-34 to TR-39. `tasks.md` of both specs is not ticked.
+
+One existing spec changed: `packages/server/test/spec/http.test.ts` no longer lists `/v1/teach` and `/v1/speech` among the 404 routes (the same change rounds 2 and 3 made for their routes).
+
+## Choices where the docs were silent
+
+1. **`show_me` with `to` and `seconds` moves at once.** The design says it writes a `SetValue` line; one line cannot glide. `seconds` is checked (above 0, at most 30) and reported in the result. A glide needs a protocol field (TR-34).
+2. **Film tools send events to the client as well as moving the target's clock.** `pause` and `resume` send `control` events, `seek_beat` sends `{ op: "seek", t }` with the time the target stands at (clamped by the kernel on the server's copy), `show_me` sends its `SetValue` line as a `lines` event once it passed. The headless copy on the server has a ticker that never ticks, so `resume` changes only its play flag.
+3. **`show_me` on a board** (target kind `board`) sends its line unchecked: the server has no figure of the card to check it on. The client applies it to the card made last, or the one in focus, which checks it again. `boardTarget`'s clock is a record of the time asked for.
+4. **A board lesson's target** is the figure of the card in focus (the request's `script`, loaded into a headless app) with the board's port added (`liveTarget`). Its tools: `board_read`, `board`, the film tools, and `draw` and `figure` when that figure has objects. Teacher design 2 says a live lesson on a board "also keeps `draw` and `figure`"; with no figure of its own the board had nothing for them to act on (round 3, choice 1), so the focus card's script is what they act on. The first message adds "THE FIGURE IN FOCUS" after the board (TR-35).
+5. **Request of `/v1/teach`:** `text` required (4,000 characters, `413`), `mode` default `graphing`, `script` at most 64 KB (`400`, as `/v1/figure/draw`), `t` 0 to 86,400, `board` `{ items, more?, page }` or `null`, `history` at most 10 turns (`400` over) and 8,000 characters (`413` over). Not named in the docs beyond design 6; a tester should treat these limits and statuses as mine.
+6. **The sentence splitter** cuts at `.`, `!`, `?`, `…` and a line break when a space follows (so `2.5` waits for the next piece and `e.g.`, `i.e.`, `Dr.`, `Fig.` do not cut), cuts a run of 400 characters at a comma, semicolon, colon or space, drops `` ` ``, `*`, `#` and `$`, and drops text with no letter or digit. Anything that is not `say` (a tool's lines, actions, controls, `done`, an error) flushes what is pending first.
+7. **`/v1/speech` is not an exclusive request.** It takes weight 0.1 in the minute but no model slot, because the studio fetches several sentences ahead at once and one sentence must not abort the one before. It takes no model call of the day. Body limit 16 KB. `instructions` (at most 200 characters) go only to models that are not HeyGen's.
+8. **Which model is PCM** is decided by id: one that starts with `heygen/` is asked for `pcm` and the voice `OPENROUTER_SPEECH_VOICE`; any other is asked for `mp3`. A provider answer with a JSON or text content type is a failure that passes to the next voice. The sample rate is the provider's `x-sample-rate`, else `rate=` in its content type, else 24,000; the answer also sets `access-control-expose-headers: x-sample-rate`.
+9. **The speech call's machine** is `CALL_MACHINE` of the fallback (SV2's table) in its own class (`providers/speech.ts`), with `exhausted` and `Pass` exported from `providers/fallback.ts` for it. An error before the first byte is an HTTP error (`model_busy` 503 with `retry-after`, `model_timeout` 504, `model_unavailable` 503); after it the response is ended where it is (`Job.cut`).
+10. **The studio's lesson.** `VOICE_MACHINE` is TE4 exactly. The panel shows `speaking` only while a clip or the browser's voice is playing, and `thinking` while waiting for the model or the next clip. A clip is played whole (TR-36). A turn's `error` event shows its message in the transcript and ends the turn through the queue's end marker, so sentences already queued are still spoken. The history sent is the last 10 turns and 8,000 characters (`voice.ts`).
+11. **The Talk button** shows in every mode whose views include `graphics` or `board`. It opens a panel; a first press starts listening where the browser can (`SpeechRecognition` or `webkitSpeechRecognition`); the text box is always in the panel (it is the input where recognition is missing, and a way to barge in by typing). The button calls `unlockAudio` so the browser lets the clips play.
+12. **A board lesson's board actions** go through `view.agent.runner.run` (each call is its own undo step, not one gesture for the whole turn as `AgentService.ask` does). `$last` is reset when a turn begins (`runner.forget`).
+13. **Recordings are hand-written**, not live captures, and carry extra fields (`lesson`, `note`, `mode`, `request`, `expect`) next to `replies`; `fakeModel` reads only `replies`. Each was replayed through `liveTurn` against a headless app of its mode: every line passes, and the figure ends with the objects in `expect`. A tester should replay them through `POST /v1/teach` as well.
+
+## Left undone, for the tester or later rounds
+
+- No tests, benches or live capture (testers; round 5). No test calls the network.
+- No screenshot of the Talk panel (the optional one): the studio needs a running server with a fake model, and there is no launcher for one yet. Round 5's screenshots cover it.
+- A timed `show_me` glide (TR-34), per-card scripts on a board lesson (TR-35), playing a clip while it streams (TR-36), a live check of the voices' formats (TR-37).
+- The 413 path for `/v1/speech` text and the `retry-after` of an all-busy answer were tried by hand; the rate-limit weight of 0.1 was not run against the limiter's clock.
+- `tasks.md` of both specs is not ticked (as asked in the earlier rounds).

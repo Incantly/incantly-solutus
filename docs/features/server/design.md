@@ -55,7 +55,7 @@ All from `packages/server/.env` (ignored by git); `.env.example` lists them.
 
 - On start, every setting is checked. A model id that does not end in `:free` is refused: the server does not start (`config_invalid`). This keeps every call free, as `tech.md` requires.
 - A missing key does not stop the server. Model endpoints then answer `model_unavailable`, and `/v1/check` and `/v1/export/svg` still work.
-- `/v1/health` lists the provider, the model ids, whether a key is set (`keySet`, `true` or `false`, never the key) and `ready`: `true` when a model client is set and its key is there, which is what the studio reads to choose between the server and the demo agent.
+- `/v1/health` lists the provider, the model ids, whether a key is set (`keySet`, `true` or `false`, never the key), `ready`: `true` when a model client is set and its key is there, which is what the studio reads to choose between the server and the demo agent, and `voice`: `true` when `/v1/speech` has voices to use.
 
 ## 4. Providers
 
@@ -103,7 +103,7 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 - A request that a newer one from the same client replaced ends with `{ "error": { "kind": "superseded" } }`, not `done`, so the client does not take a half figure for a finished one.
 - `/v1/check` answers one JSON body: the per-line results of the kernel, as `draw` gives them.
 - `/v1/export/svg` answers `image/svg+xml`, painted by the SDK export.
-- `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters, and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish, or `audio/pcm` with `x-sample-rate` from HeyGen. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models, counts toward the client's rate limit at one tenth of a model request, and answers `model_busy` or `model_unavailable` when no voice is free, so the studio uses the browser's voice.
+- `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters (`instructions` at most 200), and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish (`response_format: "mp3"`), or `audio/pcm` with `x-sample-rate` from HeyGen (`response_format: "pcm"` with the voice `OPENROUTER_SPEECH_VOICE`; the rate is the provider's `x-sample-rate` header, else the `rate=` of its content type, else 24,000). A model whose id starts with `heygen/` is asked for PCM and the voice; any other is asked for MP3 and gets `instructions`. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models (429, 5xx, a network error, no first byte within 15 s; 60 s skip after a 429), counts toward the client's rate limit at one tenth of a model request, takes no model slot and no model call of the day, and answers `model_busy`, `model_timeout` or `model_unavailable` as an HTTP error (nothing is streamed before the first byte), so the studio uses the browser's voice. A closed connection aborts the provider request. The head goes out with the first byte of audio; an error after that ends the response where it is.
 
 `/v1/board/ask` request: the board's `CircleRequest` or `TalkRequest` (board agent 3) with `items` at most 60 (each `{ id, kind, box, text?, summary?, shape?, madeBy? }`), `more`, `page`, and for a circle `choice`, `circle` and `text?` (needed for `ask`), for a talk `text` and `allowEdit`. A `picture` is a PNG or JPEG data URL, checked by its bytes (`checkPicture`), and sends the turn to `OPENROUTER_VISION_MODELS`. The route's body limit is the picture one (2.5 MB: a picture of 1.5 MB is 2 MB as base64, and the JSON around it comes on top); a request with no picture is held to 256 KB. The action results the model reads are `{ ok: true }` or an error, one for each action and without an `id`: ids are made by the client, and the model names the shape the previous action made as `$last`. A talk that ends with words and no action ends with `done`; a talk with neither, and a circle that drew nothing, end with `model_bad_output` ("The AI could not draw this.").
 
@@ -113,15 +113,15 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 { "text": "Take a circle of radius 2", "mode": "geometry", "script": "", "t": 0, "board": null, "history": [] }
 ```
 
-`history` holds the last turns as `{ role, text }`, at most 10 and 8,000 characters. `board`, when present, is the board request's `items` and `page`.
+`text` is required (at most 4,000 characters, else `413`); `mode` is a mode of the app (default `graphing`); `script` is the figure's script (the script of the card in focus, on a board; at most 64 KB); `t` is the film time in seconds. `history` holds the last turns as `{ role, text }`, at most 10 and 8,000 characters (more turns is `400`, more characters `413`). `board`, when present, is `{ items, more?, page }`, the board request's items (at most 60), and makes the lesson a board lesson. The server loads `script` into a headless copy of `mode`, with no clock ticker, and the teacher's `liveTurn` runs the model against it: `say` events are whole sentences, `lines` are the lines that passed on the copy, `actions` the board actions that passed their checks, and `control` the film tools' controls (`pause`, `resume`, `seek` with the time the copy stands at). The route takes a model slot like the other model routes, so a newer request of the same client ends the older with `superseded`.
 
 ## 7. Limits and safety
 
 | Limit | Value |
 |---|---|
-| Request body | 2.5 MB with a picture (1.5 MB of picture is 2 MB as base64), 256 KB without |
+| Request body | 2.5 MB with a picture (1.5 MB of picture is 2 MB as base64), 256 KB without, 16 KB for `/v1/speech` |
 | Picture | PNG or JPEG by magic number, at most 1.5 MB, at most 2,048 px a side |
-| Spoken or typed text | 4,000 characters (`413 payload_too_large`) |
+| Spoken or typed text | 4,000 characters (`413 payload_too_large`); one spoken sentence 500 characters |
 | Script | the SDK's script limit; a caller option of the model job, default that limit (the figure route passes 64 KB less the request's script) |
 | Model requests per client | 20 a minute (`RATE_PER_MINUTE`), one at a time; a newer one aborts the older |
 | Model calls per day | 900 (`DAILY_MODEL_CALLS`) |

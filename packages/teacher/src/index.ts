@@ -3,6 +3,7 @@ export { toolset, BUILTIN_TOOL_NAMES } from './tools/toolset';
 export { drawTool, lineResultOf, DRAW_MAX_LINES } from './tools/draw';
 export { figureTool, FIGURE_MAX_OBJECTS } from './tools/figure';
 export { boardReadTool, boardTool } from './tools/board';
+export { FILM_TOOLS, pauseTool, resumeTool, seekBeatTool, showMeTool } from './tools/film';
 export { boardTarget, BOARD_DATA_CHARS } from './tools/board-target';
 export type { BoardRequestData, BoardTargetOptions } from './tools/board-target';
 export { figureTarget } from './tools/targets';
@@ -33,12 +34,15 @@ export { runTurn, presentResult, TURN_LIMITS, TURN_MACHINE } from './loop/turn';
 export type { TurnEvent, TurnLimits, TurnMove, TurnOptions, TurnState } from './loop/turn';
 export { boardTurn, boardMode, boardAllowsEdit } from './loop/board';
 export type { BoardTurnOptions } from './loop/board';
+export { liveTurn, liveTarget, liveTools } from './loop/live';
+export type { LiveTurnOptions } from './loop/live';
 export { RETRY_FAILURES, STREAK_LIMIT, lineKey } from './loop/book';
 
 export { streamFigure, FIGURE_STREAM_MACHINE, FIGURE_LIMITS, PLAN_MIN_OBJECTS } from './stream/apply';
 export type { FigureLimits, FigureStreamMove, FigureStreamOptions, FigureStreamState, PlanMode } from './stream/apply';
 export { LineSplitter, cleanLine, splitLines } from './stream/split';
 export type { SplitEnd } from './stream/split';
+export { SentenceSplitter, SENTENCE_MAX, speakable, splitSentences } from './stream/sentences';
 
 export { streamErrorOf, turnLimitError, toolUnknownError, retrySpentError, streamCutError, noticeOf } from './errors';
 export type { StreamError, TurnNotice } from './errors';

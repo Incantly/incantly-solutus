@@ -35,3 +35,20 @@ None. TR-8 was fixed in round 1: the SDK's `run(lines, { independent: true })` p
 | TR-31 | `packages/teacher/src/loop/board.ts` | A circle that answers in words only (for example the `explain` choice, where an explanation is the natural answer) still ends with `model_bad_output`, and its words are dropped. TR-28 rules only the talk. Decide whether `explain` may end with `say` and `done` |
 | TR-32 | `packages/board/src/core/agent-service.ts` | The words of an answer are written as one `agent` line when the answer ends, after the lines about the actions. A long answer shows nothing of the words until it ends. Show the pieces as they come if that reads better |
 | TR-33 | `packages/server/test/spec/body.test.ts` | An `it.todo` still says "a request with a picture may be 2 MB" (the limit is now 2.5 MB). Reword it when its test is written |
+
+## Noted while building round 4 (builder notes: `builder-notes.md`, "Round 4")
+
+| Id | Where | Note |
+|---|---|---|
+| TR-34 | `packages/teacher/src/tools/film.ts`, `/v1/teach` events | `show_me` takes only `{ name, value }` and sets the value at once (review r4, TR-42: the timed `{ name, to, seconds }` form left the schema and the instructions). A timed glide needs either a field on the `lines` event or a new `control` op, and server design 6 lists only `pause`, `resume` and `seek`. Decide the protocol field, then add the timed form back and let the studio glide the value over the time |
+| TR-35 | `packages/teacher/src/loop/live.ts` | On a board, `draw` and `figure` run on a headless copy of the card in focus's script (the request's `script`). A card the same turn made with a `board` `figure` action is not in that copy, so a later `draw` of the turn is checked against the older script, and the client (card made last, else the one in focus) applies it again with its own checks. Fix by letting the request carry each card's script, or by giving the copy the `figure` action's lines |
+| TR-36 | `apps/studio/src/voice-audio.ts` | A sentence's clip is played when it has arrived whole, not as its first bytes come (the server does stream them). The next sentences are fetched ahead, so a pause shows only before the first sentence (about 1 to 2 s). Playing MP3 from a `MediaSource` and scheduling PCM chunks as they come would start the first sentence earlier |
+| TR-37 | `packages/server/src/providers/speech.ts` | HeyGen's PCM is read as 16-bit little-endian mono at the `x-sample-rate` of the answer (default 24,000). That is what OpenRouter documents for its speech route; no live capture was made. Round 5's smoke run should record one clip of each voice and check the head |
+| TR-38 | `/v1/teach` `history` | TR-9 holds for the new route: `history` is written by the client. The first message of each earlier user turn is inside `<material>`; earlier assistant turns are not |
+| TR-39 | `/v1/teach` studio client | The studio sends the whole script of the figure (up to 64 KB) on every turn. For a long lesson that is a few hundred KB over a session; send it only when it changed, or send the figure summary and the lines since the last turn |
+
+## Noted while fixing round 4 (review r4)
+
+| Id | Where | Note |
+|---|---|---|
+| TR-45 | `packages/server/src/errors.ts` (`fromStreamError`), `jobs/figure.ts`, `jobs/board.ts` | Review r4 ruled that a turn's own limits (8 model calls, 24 tool calls, 60 s) end with `turn_limit`, and TR-41 applied it to `/v1/teach` only. `/v1/figure/draw` and `/v1/board/ask` still map the teacher's `turn_limit` to `model_timeout` ("The AI took too long."), and earlier specs (`figure-draw.test.ts`, `board-ask.test.ts`, `stream.test.ts`) pin that. Server `errors.md` says so in the `model_timeout` row. Decide whether both jobs move to `turn_limit` too, then change `fromStreamError` and those specs together |
