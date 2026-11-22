@@ -27,6 +27,7 @@ const stateRules = (level) => ({
   'incantly/state-table-refuses': level,
   'incantly/state-no-stale-after-await': level,
   'incantly/state-no-shadow-null': level,
+  'incantly/state-no-io-flags': level,
 });
 
 export default defineConfig([

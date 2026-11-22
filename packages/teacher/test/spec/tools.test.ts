@@ -54,7 +54,7 @@ describe('draw: good lines (design 4, R2.3)', () => {
     const { target } = makeRig('geometry');
     const set = tools();
     const first = drawLines(set.call(target, 'draw', { lines: ['c = Circle((0, 0), 2)'] }));
-    const second = drawLines(set.call(target, 'draw', { lines: ['P = PointOn(c)', 't = Tangent(P, c)'] }));
+    const second = drawLines(set.call(target, 'draw', { lines: ['P = PointOn(c)', 'tg = Tangent(P, c)'] }));
     expect([...first, ...second].map((r) => r['ok'])).toEqual([true, true, true]);
   });
 

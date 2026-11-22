@@ -21,7 +21,8 @@ export function figureTarget(app: App, options: TargetOptions = {}): Target {
     },
     guard: new ToolGuard(options.onFault),
     lineLimit: DEFAULT_LIMITS.lineLength,
-    run: (lines) => app.run(lines),
+    // independent lines: a line that reads a name a failed line of the call was to make gets `blockedBy` (errors design 6, rule 2)
+    run: (lines) => app.run(lines, { independent: true }),
     objects() {
       const list = app.list();
       return { list, truncated: (list as { truncated?: boolean }).truncated === true };

@@ -39,8 +39,10 @@ Snippet:
 > "And a point on it, with its tangent."
 
 ```json
-{ "tool": "draw", "input": { "lines": ["P = PointOn(c)", "t = Tangent(P, c)"] } }
+{ "tool": "draw", "input": { "lines": ["P = PointOn(c)", "tg = Tangent(P, c)"] } }
 ```
+
+`t` is the film time, so it cannot name an object; the tangent is `tg`.
 
 ## 4. Prompt to figure
 

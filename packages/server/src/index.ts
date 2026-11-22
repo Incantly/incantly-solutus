@@ -8,7 +8,7 @@ export type { AcquireOptions, Admission, RateConfig } from './limits/rate';
 export { createLog, scrub, silentLog } from './log';
 export type { LogFn, LogStream } from './log';
 export { checkOrigin, corsHeaders, preflightHeaders } from './http/cors';
-export { BODY_LIMIT, BODY_LIMIT_PICTURE, PICTURE_BYTES, PICTURE_SIDE, checkPicture, parseJsonObject, readBody } from './http/body';
+export { BODY_LIMIT, BODY_LIMIT_PICTURE, DROP_LIMIT, PICTURE_BYTES, PICTURE_SIDE, checkPicture, parseJsonObject, readBody } from './http/body';
 export type { Picture } from './http/body';
 export { NDJSON_TYPE, ndjsonLine } from './http/ndjson';
 export { Job, SERVER_JOB_MACHINE } from './jobs/job';

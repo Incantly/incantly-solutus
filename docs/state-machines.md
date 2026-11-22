@@ -2170,7 +2170,7 @@ Written before the code of round 1 (branch `feat/teacher-r1`, `packages/teacher/
 ### TE1. Turn
 
 - **Where:** `loop/turn.ts` `Turn`, `TURN_MACHINE`; `runTurn`.
-- **States:** `idle` (made, not started), `calling` (a model call is open and no tool call has arrived in it yet, or the next call is about to open), `running_tool` (the open reply has given at least one tool call, which runs as soon as its arguments are complete), `done` (a reply ended with no tool calls, or the stream was cut and reported), `limited` (a limit was hit: 8 model calls, 24 tool calls or 60 s on the caller's clock), `stopped` (the caller's `AbortSignal` fired), `failed` (the model client reported an error). `done`, `limited`, `stopped` and `failed` are final.
+- **States:** `idle` (made, not started), `calling` (a model call is open and no tool call has arrived in it yet, or the next call is about to open), `running_tool` (the open reply has given at least one tool call, which runs as soon as its arguments are complete), `done` (a reply ended with no tool calls, or the stream was cut and reported), `limited` (a limit was hit: 8 model calls, 24 tool calls, or 60 s on the caller's clock or by the caller's `AbortSignal.timeout`, which aborts with a `TimeoutError` reason), `stopped` (the caller's `AbortSignal` fired), `failed` (the model client reported an error). `done`, `limited`, `stopped` and `failed` are final.
 
 | State | Holds |
 |---|---|
@@ -2194,8 +2194,8 @@ Written before the code of round 1 (branch `feat/teacher-r1`, `packages/teacher/
 | `running_tool` | `toolCall` | calls < 24 | `running_tool` | another call of the same reply runs |
 | `running_tool` | `results` | the reply ended | `calling` | the messages grow by the reply and its results; model calls < 8 |
 | `running_tool` | `cut` | the client reported `stream_cut` | `done` | the calls that ran stay; `done` event with a `stream_cut` notice |
-| `calling`, `running_tool` | `limit` | a counter or the clock passed its limit | `limited` | `turn_limit` error event |
-| `calling`, `running_tool` | `abort` | `signal.aborted` | `stopped` | `done` event |
+| `calling`, `running_tool` | `limit` | a counter or the clock passed its limit, or the signal fired with a `TimeoutError` reason, also while the model sends nothing | `limited` | `turn_limit` error event |
+| `calling`, `running_tool` | `abort` | `signal.aborted` with any other reason | `stopped` | `done` event |
 | `calling`, `running_tool` | `modelError` | the client sent an error event | `failed` | error event |
 
 - **Reachable invalid states or transitions:** none known. `start` in any state but `idle` has no row (`runTurn` makes a new `Turn` each call). `replyEnd` in `running_tool` has no row: a reply that gave tool calls ends with `results`. `toolCall`, `results`, `replyEnd` in a final state have no row; the loop returns before it could send one.
@@ -2233,7 +2233,7 @@ Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/s
 | `aborted` | the model call aborted; nothing more is written |
 | `failed` | `internal` (500 or a last event) with a fingerprint, or the job's own error |
 
-- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once, with the first event, so an error before the first event is still an HTTP error; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection.
+- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once, with the first event, so an error before the first event is still an HTTP error; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection; a handler that returns without answering is failed through the machine (`ensureEnded` sends `fail`, as `internal`), never answered from the response's own flags, which only the low-level writers (`write*`) read (`incantly/state-no-io-flags`).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |

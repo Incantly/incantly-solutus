@@ -103,6 +103,8 @@ export function createServer(options: ServerOptions): Server {
       const read = await readBody(req, route.bodyLimit);
       if (!read.ok) {
         job.refuse(read);
+        // a body refused before it ended is left unread: the answer is written, then the connection closes
+        if (read.kind === 'payload_too_large' && !req.readableEnded) req.socket.destroySoon();
         return;
       }
       const parsed = parseJsonObject(read.bytes);

@@ -308,6 +308,62 @@ export const noShadowNull = {
   },
 };
 
+/** Flags an I/O object keeps about itself: an answer's head sent, a stream ended, a connection closed. */
+const IO_FLAGS = new Set(['headersSent', 'writableEnded', 'writableFinished', 'destroyed', 'readyState']);
+/** `destroyed` is the flag of a Node stream, socket or response; in a file that imports no `node:` module it is a part's own state (an app handle, a view). */
+const NODE_ONLY_FLAGS = new Set(['destroyed']);
+
+/** The name a function is known by: its declaration, its method or property key, or the variable it is assigned to. */
+function functionName(fn) {
+  if (fn.type === 'FunctionDeclaration') return fn.id?.name;
+  const p = fn.parent;
+  if (p?.type === 'MethodDefinition' || p?.type === 'Property' || p?.type === 'PropertyDefinition') return keyName(p);
+  if (p?.type === 'VariableDeclarator' && p.id.type === 'Identifier') return p.id.name;
+  return undefined;
+}
+
+export const noIoFlags = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A file that makes a state machine does not read the flags of an I/O object outside its low-level writers.' },
+    schema: [],
+    messages: {
+      io: '`{{name}}` is a second record of whether an answer or a stream is over, next to this file\'s state machine, and the two can disagree. Ask the machine; only a function whose name starts with `write` may read it, as a last guard before a write.',
+    },
+  },
+  create(context) {
+    let makesMachine = false;
+    let importsNode = false;
+    const reads = [];
+    return {
+      ImportDeclaration(node) {
+        if (typeof node.source.value === 'string' && node.source.value.startsWith('node:')) importsNode = true;
+      },
+      NewExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === 'StateMachine') makesMachine = true;
+      },
+      MemberExpression(node) {
+        const name = memberName(node) ?? (node.computed && node.property.type === 'Literal' && typeof node.property.value === 'string' ? node.property.value : undefined);
+        if (name === undefined || !IO_FLAGS.has(name)) return;
+        // a getter of the class itself (`this.destroyed`) is derived from the machine, not a second record
+        if (node.object.type === 'ThisExpression') return;
+        // `x.destroyed = true` is a write, not a read of the flag
+        const parent = node.parent;
+        if (parent.type === 'AssignmentExpression' && parent.left === node) return;
+        const allowed = context.sourceCode.getAncestors(node).some((a) => FUNCTIONS.has(a.type) && /^write/.test(functionName(a) ?? ''));
+        if (!allowed) reads.push({ node, name });
+      },
+      'Program:exit'() {
+        if (!makesMachine) return;
+        for (const { node, name } of reads) {
+          if (NODE_ONLY_FLAGS.has(name) && !importsNode) continue;
+          context.report({ node, messageId: 'io', data: { name } });
+        }
+      },
+    };
+  },
+};
+
 export const noStaleAfterAwait = {
   meta: {
     type: 'problem',

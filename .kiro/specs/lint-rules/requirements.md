@@ -16,6 +16,7 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 8. In a class that holds a `StateMachine`, a field typed `X | null` or `X | undefined` that a method sets to a value when it sends a begin-like move (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) SHALL be set back to `null` or `undefined` somewhere in the class: it holds part of the state, so it is cleared when the machine leaves the state, or kept in the state's data (`incantly/state-no-shadow-null`).
 
 9. In `packages/board`, `packages/tiptap` and `tools`, `new StateMachine(table, initial)` SHALL take the third argument, `onRefused`, so a refused move is reported and never silent (`incantly/state-refusal-reported`). The board reports through its `onError` as `internal`; Tiptap through `reportError`.
+10. In a file that makes a `StateMachine`, reading `headersSent`, `writableEnded`, `writableFinished` or `readyState` (and `destroyed`, in a file that imports a `node:` module) off another object SHALL be an error outside a function whose name starts with `write` (`incantly/state-no-io-flags`): an I/O object's own flags are a second record of whether an answer or a stream is over, and the machine is the one record. A class's own getter (`this.destroyed`) derived from its machine is allowed.
 
 ### R2. Package rules (AGENTS.md)
 

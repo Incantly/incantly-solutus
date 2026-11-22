@@ -70,10 +70,7 @@ export class Job {
   /** The answer has no body (an answer to a preflight request). */
   empty(status: number, headers: Readonly<Record<string, string>> = {}): void {
     if (!this.machine.can('finish') || !this.machine.send('finish')) return;
-    const res = this.ctx.res;
-    if (res.writableEnded) return;
-    res.writeHead(status, { ...this.ctx.headers, ...headers, 'content-length': '0' });
-    res.end();
+    this.writeEmpty(status, headers);
   }
 
   /** One NDJSON event, flushed at once. The first one writes the head. Dropped when the job is final. */
@@ -121,12 +118,26 @@ export class Job {
     this.fail(internalError(fingerprint));
   }
 
-  /** Makes sure the response ended: a job that is final but whose response is still open is ended here. */
+  /**
+   * Makes sure the request ended with an answer. A job that is not final (a handler returned without answering) fails
+   * through the machine as `internal`; the response is then closed if it is still open (a job that was aborted).
+   */
   ensureEnded(): void {
+    if (this.machine.can('fail')) this.crash(new Error('no answer'));
+    this.writeEnd();
+  }
+
+  private writeEmpty(status: number, headers: Readonly<Record<string, string>>): void {
     const res = this.ctx.res;
     if (res.writableEnded) return;
-    if (!res.headersSent) this.writeError(internalError(fingerprintOf(new Error('no answer'))));
-    else res.end();
+    res.writeHead(status, { ...this.ctx.headers, ...headers, 'content-length': '0' });
+    res.end();
+  }
+
+  /** The last guard: ends a response that is still open. */
+  private writeEnd(): void {
+    const res = this.ctx.res;
+    if (!res.writableEnded) res.end();
   }
 
   private writeJson(status: number, body: unknown): void {

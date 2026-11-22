@@ -15,29 +15,46 @@ export const PICTURE_BYTES = 1.5 * 1024 * 1024;
 /** The most pixels along a side of a picture. */
 export const PICTURE_SIDE = 2048;
 
-/** Reads the whole body, or `payload_too_large` as soon as it passes `limit` bytes (reading stops there). */
+/** Past this many bytes of a refused body, the answer is written at once and the connection is closed. */
+export const DROP_LIMIT = 16 * 1024 * 1024;
+
+/**
+ * Reads the whole body, or `payload_too_large`. A body over `limit` is not kept: the rest is read and dropped until it
+ * ends (so the client, still uploading, receives the 413 and not a reset), and only past `DROP_LIMIT` bytes is the answer
+ * made at once, with the request left unread (`req.readableEnded` is then false and the caller closes the connection).
+ */
 export function readBody(req: IncomingMessage, limit: number): Promise<{ readonly ok: true; readonly bytes: Buffer } | ServerError> {
   const declared = Number(req.headers['content-length']);
-  if (Number.isFinite(declared) && declared > limit) return Promise.resolve(tooLarge('The request', limit));
+  const declaredOver = Number.isFinite(declared) && declared > limit;
   return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
+    let chunks: Buffer[] = [];
     let size = 0;
+    let over = declaredOver;
     const finish = (result: { readonly ok: true; readonly bytes: Buffer } | ServerError): void => {
       req.off('data', onData);
       req.off('end', onEnd);
       req.off('error', onError);
       resolve(result);
     };
+    const refused = (): void => finish(tooLarge('The request', limit));
     const onData = (chunk: Buffer): void => {
       size += chunk.length;
-      if (size > limit) {
-        finish(tooLarge('The request', limit));
+      if (!over && size > limit) {
+        over = true;
+        chunks = [];
+      }
+      if (over) {
+        if (size > DROP_LIMIT) refused();
         return;
       }
       chunks.push(chunk);
     };
-    const onEnd = (): void => finish({ ok: true, bytes: Buffer.concat(chunks, size) });
+    const onEnd = (): void => (over ? refused() : finish({ ok: true, bytes: Buffer.concat(chunks, size) }));
     const onError = (): void => finish(badRequest('The request could not be read.'));
+    if (declared > DROP_LIMIT) {
+      refused();
+      return;
+    }
     req.on('data', onData);
     req.on('end', onEnd);
     req.on('error', onError);
@@ -89,7 +106,7 @@ function jpegSize(b: Uint8Array): { width: number; height: number } | undefined 
 
 /** Checks a picture by its magic number, its byte size and its pixel size. */
 export function checkPicture(bytes: Uint8Array): Picture | ServerError {
-  if (bytes.length > PICTURE_BYTES) return picture(`The picture is over ${PICTURE_BYTES} bytes.`);
+  if (bytes.length > PICTURE_BYTES) return tooLarge('The picture', PICTURE_BYTES);
   let found: Picture | undefined;
   if (bytes.length >= 24 && PNG.every((v, i) => bytes[i] === v)) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -23,7 +23,7 @@ const RULES = `RULES FOR EVERY ANSWER
 const LIVE = `JOB: LIVE LESSON
 - Say one sentence, and call draw with the one or two lines it shows, in the same reply.
 - Call figure when you are not sure what is on screen.
-Example. "Take a circle of radius 2." -> draw lines: ["c = Circle((0, 0), 2)"]. Then "And a point on it, with its tangent." -> draw lines: ["P = PointOn(c)", "t = Tangent(P, c)"].`;
+Example. "Take a circle of radius 2." -> draw lines: ["c = Circle((0, 0), 2)"]. Then "And a point on it, with its tangent." -> draw lines: ["P = PointOn(c)", "tg = Tangent(P, c)"].`;
 
 const LIVE_FILM = `- Use show_me to move a slider or a free point while you explain it ("watch what happens as a grows").
 - Use pause before a question to the learner, and resume after the answer.`;

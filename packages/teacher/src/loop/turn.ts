@@ -16,7 +16,7 @@ import type { JobId } from '../prompt/jobs';
 import { builtinTool, toolset } from '../tools/toolset';
 import type { Target, ToolOutcome, ToolValue, Toolset, TurnOutput } from '../tools/types';
 import { RetryBook, STREAK_LIMIT, Streak, commandsIn, lineKey } from './book';
-import type { ChatMessage, ModelClient, ModelToolCall } from './model';
+import type { ChatEvent, ChatMessage, ModelClient, ModelToolCall } from './model';
 
 export type TurnState = 'idle' | 'calling' | 'running_tool' | 'done' | 'limited' | 'stopped' | 'failed';
 export type TurnMove = 'start' | 'toolCall' | 'replyEnd' | 'cut' | 'results' | 'limit' | 'abort' | 'modelError';
@@ -37,7 +37,7 @@ export interface TurnLimits {
   readonly modelCalls: number;
   /** Tool calls in a turn. */
   readonly toolCalls: number;
-  /** Turn time in milliseconds, on the caller's clock. */
+  /** Turn time in milliseconds, on the caller's clock; the caller's signal (`AbortSignal.timeout`) carries the same deadline. */
   readonly ms: number;
 }
 
@@ -66,6 +66,12 @@ export interface TurnOptions {
   /** The command table for the catalogue; default the SDK's. */
   readonly registry?: CommandRegistry;
 }
+
+/** Marks that the caller's signal fired while the loop waited for the model. */
+const ABORTED = Symbol('aborted');
+
+/** True when the signal's reason is a deadline (`AbortSignal.timeout`), which ends the turn as `turn_limit`, not as a stop. */
+const isTimeout = (reason: unknown): boolean => typeof reason === 'object' && reason !== null && (reason as { name?: unknown }).name === 'TimeoutError';
 
 const isOkResult = (r: unknown): boolean => typeof r === 'object' && r !== null && (r as { ok?: unknown }).ok === true;
 
@@ -114,6 +120,8 @@ class Turn {
   private readonly messages: ChatMessage[] = [];
   private readonly limits: TurnLimits;
   private readonly signal: AbortSignal;
+  /** Settles when the caller's signal fires (a stop or the deadline); each wait for the model races it. */
+  private readonly aborted: Promise<typeof ABORTED>;
   private readonly startedAt: number;
   private readonly figureOnly: Toolset | undefined;
   private modelCalls = 0;
@@ -125,6 +133,11 @@ class Turn {
     this.machine = new StateMachine(TURN_MACHINE, 'idle', refusedMove('turn', (e) => this.faults.push(e)));
     this.limits = { ...TURN_LIMITS, ...(o.limits ?? {}) };
     this.signal = o.signal ?? new AbortController().signal;
+    const signal = this.signal;
+    this.aborted = new Promise((resolve) => {
+      if (signal.aborted) resolve(ABORTED);
+      else signal.addEventListener('abort', () => resolve(ABORTED), { once: true });
+    });
     this.startedAt = o.now();
     const fig = toolset(['figure']);
     this.figureOnly = fig.ok ? fig.value : undefined;
@@ -166,7 +179,26 @@ class Turn {
       const results: ChatMessage[] = [];
       let text = '';
       const stream = this.o.client.chat({ system, messages: [...this.messages], tools: this.o.toolset.specs() }, this.signal);
-      for await (const ev of stream) {
+      const it = stream[Symbol.asyncIterator]();
+      for (;;) {
+        // each step races the caller's signal, so a model that sends nothing is still stopped (a stop, or the deadline)
+        const pending = it.next();
+        pending.catch(() => undefined);
+        let step: IteratorResult<ChatEvent> | typeof ABORTED;
+        try {
+          step = await Promise.race([pending, this.aborted]);
+        } catch (e) {
+          if (!this.signal.aborted) throw e;
+          step = ABORTED;
+        }
+        if (step === ABORTED) {
+          void Promise.resolve(it.return?.()).catch(() => undefined);
+          const halted = this.halt('none') ?? this.fault();
+          if (halted) yield halted;
+          return;
+        }
+        if (step.done === true) break;
+        const ev = step.value;
         if ('text' in ev) {
           text += ev.text;
           if (ev.text !== '') yield { say: ev.text };
@@ -218,12 +250,12 @@ class Turn {
 
   /** The event that ends the turn when a stop or a limit is reached, or undefined. `what` says which limit to read. */
   private halt(what: 'model' | 'tool' | 'none'): TurnEvent | undefined {
-    if (this.signal.aborted) {
+    if (this.signal.aborted && !isTimeout(this.signal.reason)) {
       this.machine.send('abort');
       return this.finish();
     }
     let limit: string | undefined;
-    if (this.o.now() - this.startedAt >= this.limits.ms) limit = `${this.limits.ms / 1000} s`;
+    if (this.signal.aborted || this.o.now() - this.startedAt >= this.limits.ms) limit = `${this.limits.ms / 1000} s`;
     else if (what === 'model' && this.modelCalls >= this.limits.modelCalls) limit = `${this.limits.modelCalls} model calls`;
     else if (what === 'tool' && this.toolCalls >= this.limits.toolCalls) limit = `${this.limits.toolCalls} tool calls`;
     if (limit === undefined) return undefined;
