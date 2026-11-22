@@ -21,7 +21,7 @@ Under the hood it is a small formula language and the engine that runs it. Each 
 **A voice-driven live blackboard.** The teacher talks, and the board draws itself.
 
 1. The teacher says: "Take a circle of radius 2, and a point on it."
-2. An AI model (Muse Spark, through our server) turns that into lines such as `c = Circle((0, 0), 2)` and `P = PointOn(c)`.
+2. An AI model (a free model on OpenRouter by default, or Muse Spark, through our server) turns that into lines such as `c = Circle((0, 0), 2)` and `P = PointOn(c)`.
 3. The kernel checks and applies each line in under a millisecond, and the figure appears.
 4. "Now drag the point and show its tangent": the figure changes live, while the teacher keeps talking.
 5. When a line is wrong, the error says exactly what to fix, so the model corrects itself on its next line.

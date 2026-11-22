@@ -19,7 +19,7 @@ packages/
   tiptap/     the Tiptap extension: figure and formula nodes
   board/      the endless, paged board: store, ink, shapes, tools, agent actions (core has no DOM)
   teacher/    the AI's draw and figure tools, catalogue, streaming apply
-  server/     Node service: Muse Spark calls, keys, rate limits, headless checks
+  server/     Node service: model calls (OpenRouter, Muse Spark), keys, rate limits, headless checks
 apps/
   studio/     the full web app, built on the SDK
 docs/
