@@ -42,7 +42,7 @@ const PLACE = {
 
 export const BOARD_READ_TOOL: AgentToolDef = Object.freeze({
   name: 'board_read',
-  description: `Reads the board: the items in an area (default: what is in view) in reading order, each { id, kind, box, text?, summary?, shape? }. At most ${ITEMS_MAX} items are listed; "more" counts the rest. Read before you write when the request names something on the board.`,
+  description: `Reads the board: the items in an area (default: what is in view) in reading order, each { id, kind, box, text?, summary?, shape?, madeBy? } ("madeBy" is "model" on what the agent made). At most ${ITEMS_MAX} items are listed; "more" counts the rest. Read before you write when the request names something on the board.`,
   inputSchema: { type: 'object', properties: { area: BOX, page: { type: 'string', description: 'A page id; default the current page.' } }, additionalProperties: false },
 });
 

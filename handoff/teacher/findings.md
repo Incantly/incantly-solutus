@@ -27,3 +27,11 @@ None. TR-8 was fixed in round 1: the SDK's `run(lines, { independent: true })` p
 | TR-21 | `jobs/figure.ts`, Tiptap `AiEvent`, board `BoardAgentEvent` | A `model_busy` or `rate_limited` answer carried its wait in `retry-after` and `detail.retryAfterMs`. Both clients keep only `kind` and `message`, and a `model_busy` is now a stream event with no header, so a client cannot back off by the number. The message holds the seconds. Add `retryAfterMs` to the clients' error shape if a client needs it |
 | TR-22 | `jobs/figure.ts` | A script over 64 KB is still `400 bad_request`; `errors.md` says `payload_too_large` covers the "text limits", and the review rules only the text and history limits. Decide whether a script over its limit is `413` too, and give the answer one status in the docs |
 | TR-23 | `jobs/figure.ts` | A superseded request is told only at the next event of its stream (the model's next event, or the abort that `AbortSignal.any` hands the teacher). A job whose stream already ended with `done` when the newer request arrived is not touched, which is right, but there is no test for the instant between the last line and `done` |
+
+## Noted while fixing round 3 (review: `review-r3.md`)
+
+| Id | Where | Note |
+|---|---|---|
+| TR-31 | `packages/teacher/src/loop/board.ts` | A circle that answers in words only (for example the `explain` choice, where an explanation is the natural answer) still ends with `model_bad_output`, and its words are dropped. TR-28 rules only the talk. Decide whether `explain` may end with `say` and `done` |
+| TR-32 | `packages/board/src/core/agent-service.ts` | The words of an answer are written as one `agent` line when the answer ends, after the lines about the actions. A long answer shows nothing of the words until it ends. Show the pieces as they come if that reads better |
+| TR-33 | `packages/server/test/spec/body.test.ts` | An `it.todo` still says "a request with a picture may be 2 MB" (the limit is now 2.5 MB). Reword it when its test is written |

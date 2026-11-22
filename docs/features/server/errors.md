@@ -6,7 +6,7 @@ Errors use the SDK shape `{ ok: false, kind, message, hint?, detail? }`. A check
 |---|---|---|---|---|
 | `config_invalid` | none (start) | A setting is wrong: a model id without `:free`, a bad port, an unknown provider | Names the setting and why | Fix `.env`; the server does not start |
 | `bad_request` | 400 | Not JSON, a missing or wrong field, an unknown mode | Names the field | Fix the request |
-| `payload_too_large` | 413 | Over the body, picture or text limits | Names the limit | Send less |
+| `payload_too_large` | 413 | Over the body (256 KB, 2.5 MB with a picture), picture (1.5 MB) or text (4,000 characters) limits | Names the limit | Send less |
 | `picture_invalid` | 400 | The picture is not PNG or JPEG, or too large in pixels | Names the reason | Send a PNG or JPEG |
 | `origin_blocked` | 403 | The browser origin is not in `ALLOWED_ORIGINS` | "This site may not use the server." | Add the origin |
 | `rate_limited` | 429 | Over `RATE_PER_MINUTE` for this client | "Too many requests; try again in {s} s." | `detail.retryAfterMs` |

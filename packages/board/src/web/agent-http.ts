@@ -1,6 +1,6 @@
 /**
  * The default agent transport (design 11.3): `POST {server}/v1/board/ask` with the request as JSON; the answer is NDJSON,
- * one event a line: `{ actions: [...] }`, then `{ done: true }`, or `{ error: { kind, message } }`. It follows Tiptap's
+ * one event a line: `{ say: "…" }`, `{ actions: [...] }`, then `{ done: true }`, or `{ error: { kind, message } }`. It follows Tiptap's
  * `httpTransport` (packages/tiptap/src/ai.ts). A network failure throws; the job turns it into `agent_unavailable` (or
  * `agent_partial` when something was made already). An aborted request ends quietly: the caller aborted it on purpose.
  */
@@ -16,6 +16,7 @@ export function parseAgentEvent(line: string): BoardAgentEvent | undefined {
   }
   if (typeof v !== 'object' || v === null) return undefined;
   const o = v as Record<string, unknown>;
+  if (typeof o['say'] === 'string') return { say: o['say'] };
   if (Array.isArray(o['actions'])) return { actions: o['actions'] };
   if (o['done'] === true) return { done: true };
   const e = o['error'];

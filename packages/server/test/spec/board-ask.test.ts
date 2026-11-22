@@ -10,18 +10,18 @@ import { SECRET_KEY, ask, getJson, makeClock, openStream, postJson, until } from
 import { controlled, hang, status } from './r2-helpers';
 
 describe('the contract with the board (R2.2: CircleRequest or TalkRequest in, the board\'s events out)', () => {
-  it('a circle to graph: one actions event with the figure card and the arrow, then done', async () => {
+  it('a circle to graph: one actions event with the figure card and the arrow, the words under it, then done', async () => {
     const b = await boot({ answers: boardOnce([FIGURE, ARROW]) });
-    expect(await events(b, circle())).toEqual([{ actions: [FIGURE, ARROW] }, { done: true }]);
+    expect(await events(b, circle())).toEqual([{ actions: [FIGURE, ARROW] }, { say: 'Done.' }, { done: true }]);
   });
 
-  it('a talk: the write comes as an actions event, then done', async () => {
+  it('a talk: the write comes as an actions event, then the words, then done', async () => {
     const write = { op: 'write', text: '$a^2 + b^2 = c^2$', at: { near: 'shape:t1', side: 'below' }, style: 'hand' };
     const b = await boot({ answers: boardOnce([write]) });
-    expect(await events(b, talk())).toEqual([{ actions: [write] }, { done: true }]);
+    expect(await events(b, talk())).toEqual([{ actions: [write] }, { say: 'Done.' }, { done: true }]);
   });
 
-  it('answers 200 with application/x-ndjson, one JSON object a line, each an event of the board (actions, done, error)', async () => {
+  it('answers 200 with application/x-ndjson, one JSON object a line, each an event of the board (say, actions, done, error)', async () => {
     const b = await boot({ answers: boardOnce([FIGURE, ARROW]) });
     const { reply, lines } = await post(b, circle());
     expect(reply.status).toBe(200);
@@ -30,17 +30,27 @@ describe('the contract with the board (R2.2: CircleRequest or TalkRequest in, th
     for (const l of lines) {
       const keys = Object.keys(l);
       expect(keys).toHaveLength(1);
-      expect(['actions', 'done', 'error']).toContain(keys[0]);
+      expect(['say', 'actions', 'done', 'error']).toContain(keys[0]);
     }
     expect(lines[lines.length - 1]).toEqual({ done: true });
   });
 
-  it('the server sends no text event: the model\'s words are not in the stream (agent.md 3)', async () => {
+  it('the model\'s words are sent as say events (TR-28, agent.md 3); a circle\'s come in one piece after its actions', async () => {
     const b = await boot({ answers: sequence(calls('board', { actions: [FIGURE] }), says('Here is your graph, enjoy it!')) });
-    const { reply } = await post(b, circle());
-    expect(reply.text).not.toContain('enjoy');
-    expect(reply.text).not.toContain('"say"');
-    expect(reply.text).not.toContain('"text"');
+    const { lines } = await post(b, circle());
+    expect(lines).toEqual([{ actions: [FIGURE] }, { say: 'Here is your graph, enjoy it!' }, { done: true }]);
+    const free = { op: 'write', text: 'hello', at: 'free' };
+    const t = await post(await boot({ answers: sequence(calls('board', { actions: [free] }), says('Here is your graph, enjoy it!')) }), talk());
+    expect(t.lines).toEqual([{ actions: [free] }, { say: 'Here is your graph, enjoy it!' }, { done: true }]);
+  });
+
+  it('a talk whose reply is words and no action ends with done (TR-28); the same for a circle is model_bad_output', async () => {
+    const t = await post(await boot({ answers: sequence(says('The slope is 2.')) }), talk());
+    expect(t.reply.status).toBe(200);
+    expect(t.lines).toEqual([{ say: 'The slope is 2.' }, { done: true }]);
+    const c = await post(await boot({ answers: sequence(says('The slope is 2.')) }), circle());
+    expect(c.lines).toHaveLength(1);
+    expect(c.lines[0]).toMatchObject({ error: { kind: 'model_bad_output' } });
   });
 
   it('a done event has no `notices` when there is none to report', async () => {
@@ -217,7 +227,12 @@ describe('every action is checked before it streams (R4.2, server design 5)', ()
     const none = await boot({ answers: boardOnce([mark]) });
     const e1 = await events(none, talk({ more: 0 }));
     expect(actionsIn(e1)).toEqual([]);
-    expect(errorIn(e1)?.kind).toBe('model_bad_output');
+    // the talk's words ("Done.") make it a valid answer with no action (TR-28); a circle that drew nothing is model_bad_output
+    expect(errorIn(e1)).toBeUndefined();
+    expect(e1[e1.length - 1]).toEqual({ done: true });
+    const circled = await events(await boot({ answers: boardOnce([mark]) }), circle({ more: 0 }));
+    expect(actionsIn(circled)).toEqual([]);
+    expect(errorIn(circled)?.kind).toBe('model_bad_output');
     const some = await boot({ answers: boardOnce([mark]) });
     expect(actionsIn(await events(some, talk({ more: 5 })))).toEqual([mark]);
   });
@@ -360,7 +375,7 @@ describe('picture checks by the bytes (design 7, errors.md picture_invalid, payl
     expect(b.fake.calls).toHaveLength(0);
   });
 
-  it('a picture of 1.4 MB is accepted: the route\'s limit is the picture one, 2 MB', async () => {
+  it('a picture of 1.4 MB is accepted: the route\'s limit is the picture one, 2.5 MB', async () => {
     const b = await boot({ answers: boardOnce([FIGURE]) });
     expect((await ndjsonOf(b, circle({ picture: dataUrl(png(100, 100, 1.4 * 1024 * 1024)) }))).reply.status).toBe(200);
   });
@@ -371,14 +386,14 @@ describe('picture checks by the bytes (design 7, errors.md picture_invalid, payl
     expect(r.reply.status).toBe(200);
   });
 
-  it('a request with no picture is held to 256 KB; with a picture the body may be 2 MB', async () => {
+  it('a request with no picture is held to 256 KB; with a picture the body may be 2.5 MB (TR-27)', async () => {
     const b = await boot({ answers: boardOnce([FIGURE]) });
     const big = await ndjsonOf(b, circle({ padding: 'x'.repeat(300 * 1024) }));
     expect(big.reply.status).toBe(413);
     expect(big.reply.json).toMatchObject({ kind: 'payload_too_large' });
     const withPicture = await ndjsonOf(b, circle({ picture: PNG_8, padding: 'x'.repeat(300 * 1024) }));
     expect(withPicture.reply.status).toBe(200);
-    const over = await ndjsonOf(b, circle({ picture: PNG_8, padding: 'x'.repeat(2 * 1024 * 1024 + 10) }));
+    const over = await ndjsonOf(b, circle({ picture: PNG_8, padding: 'x'.repeat(2.5 * 1024 * 1024 + 10) }));
     expect(over.reply.status).toBe(413);
   });
 
@@ -524,7 +539,7 @@ describe('a newer request replaces the older one; Stop and a closed connection a
     const first = await openStream(b.run.port, { method: 'POST', path: '/v1/board/ask', body: body(circle()), headers });
     expect(await until(() => b.fake.calls.length === 1)).toBe(true);
     const newer = await events(b, circle({ choice: 'formula' }));
-    expect(newer).toEqual([{ actions: [FIGURE] }, { done: true }]);
+    expect(newer).toEqual([{ actions: [FIGURE] }, { say: 'Done.' }, { done: true }]);
     const lines: string[] = [];
     for (let line = await first.next(2000); line !== undefined; line = await first.next(2000)) lines.push(line);
     const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
@@ -555,7 +570,7 @@ describe('a newer request replaces the older one; Stop and a closed connection a
     stop.abort();
     await pending;
     expect(await until(() => b.fake.calls[0]?.signal?.aborted === true, 2000)).toBe(true);
-    expect(await events(b, circle())).toEqual([{ actions: [FIGURE] }, { done: true }]);
+    expect(await events(b, circle())).toEqual([{ actions: [FIGURE] }, { say: 'Done.' }, { done: true }]);
   });
 
   it('closing the connection aborts the call to the model', async () => {

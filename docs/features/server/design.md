@@ -55,7 +55,7 @@ All from `packages/server/.env` (ignored by git); `.env.example` lists them.
 
 - On start, every setting is checked. A model id that does not end in `:free` is refused: the server does not start (`config_invalid`). This keeps every call free, as `tech.md` requires.
 - A missing key does not stop the server. Model endpoints then answer `model_unavailable`, and `/v1/check` and `/v1/export/svg` still work.
-- `/v1/health` lists the provider, the model ids and whether a key is set (`true` or `false`), never the key.
+- `/v1/health` lists the provider, the model ids, whether a key is set (`keySet`, `true` or `false`, never the key) and `ready`: `true` when a model client is set and its key is there, which is what the studio reads to choose between the server and the demo agent.
 
 ## 4. Providers
 
@@ -93,7 +93,7 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 | Endpoint | Events |
 |---|---|
 | `/v1/figure/draw` | `{ "lines": [...] }`, then `{ "done": true, "notices"? }` |
-| `/v1/board/ask` | `{ "actions": [...] }`, then `{ "done": true, "notices"? }` (no `say`: the board's protocol has none) |
+| `/v1/board/ask` | `{ "say": "..." }` pieces (a talk's words as they come; a circle's in one piece before `done`, only when it drew something), `{ "actions": [...] }`, then `{ "done": true, "notices"? }` |
 | `/v1/teach` | `{ "say": "..." }`, `{ "lines": [...] }`, `{ "actions": [...] }`, `{ "control": { "op": "pause" \| "resume" \| "seek", "t"? } }`, then `{ "done": true, "notices"? }` |
 | any | `{ "error": { "kind", "message", "hint"?, "detail"? } }`, which ends the stream |
 
@@ -105,7 +105,7 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 - `/v1/export/svg` answers `image/svg+xml`, painted by the SDK export.
 - `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters, and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish, or `audio/pcm` with `x-sample-rate` from HeyGen. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models, counts toward the client's rate limit at one tenth of a model request, and answers `model_busy` or `model_unavailable` when no voice is free, so the studio uses the browser's voice.
 
-`/v1/board/ask` request: the board's `CircleRequest` or `TalkRequest` (board agent 3) with `items` at most 60 (each `{ id, kind, box, text?, summary?, shape?, madeBy? }`), `more`, `page`, and for a circle `choice`, `circle` and `text?` (needed for `ask`), for a talk `text` and `allowEdit`. A `picture` is a PNG or JPEG data URL, checked by its bytes (`checkPicture`), and sends the turn to `OPENROUTER_VISION_MODELS`. The route's body limit is the picture one (2 MB); a request with no picture is held to 256 KB. A turn that sends no action that passed ends with `model_bad_output`.
+`/v1/board/ask` request: the board's `CircleRequest` or `TalkRequest` (board agent 3) with `items` at most 60 (each `{ id, kind, box, text?, summary?, shape?, madeBy? }`), `more`, `page`, and for a circle `choice`, `circle` and `text?` (needed for `ask`), for a talk `text` and `allowEdit`. A `picture` is a PNG or JPEG data URL, checked by its bytes (`checkPicture`), and sends the turn to `OPENROUTER_VISION_MODELS`. The route's body limit is the picture one (2.5 MB: a picture of 1.5 MB is 2 MB as base64, and the JSON around it comes on top); a request with no picture is held to 256 KB. The action results the model reads are `{ ok: true }` or an error, one for each action and without an `id`: ids are made by the client, and the model names the shape the previous action made as `$last`. A talk that ends with words and no action ends with `done`; a talk with neither, and a circle that drew nothing, end with `model_bad_output` ("The AI could not draw this.").
 
 `/v1/teach` request:
 
@@ -119,7 +119,7 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 
 | Limit | Value |
 |---|---|
-| Request body | 2 MB with a picture, 256 KB without |
+| Request body | 2.5 MB with a picture (1.5 MB of picture is 2 MB as base64), 256 KB without |
 | Picture | PNG or JPEG by magic number, at most 1.5 MB, at most 2,048 px a side |
 | Spoken or typed text | 4,000 characters (`413 payload_too_large`) |
 | Script | the SDK's script limit; a caller option of the model job, default that limit (the figure route passes 64 KB less the request's script) |

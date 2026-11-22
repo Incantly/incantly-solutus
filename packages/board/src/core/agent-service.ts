@@ -49,6 +49,7 @@ export type BoardAgentRequest = CircleRequest | TalkRequest;
 
 /** One line of the server's answer. */
 export type BoardAgentEvent =
+  | { readonly say: string }
   | { readonly actions: readonly unknown[] }
   | { readonly done: true }
   | { readonly error: { readonly kind: string; readonly message: string } };
@@ -297,10 +298,18 @@ export class AgentService {
     // the whole answer is one gesture: one undo takes all of it back
     const gesture = beginGesture(this.runner.core, 'model');
     const allow = request.kind === 'talk' ? request.allowEdit : EDITS_MINE.includes(request.choice);
+    // the pieces of the agent's words, joined into one line of the conversation when the answer ends
+    const said: string[] = [];
     try {
       for await (const event of transport(request, job.controller.signal)) {
         if (!job.live) break;
-        if ('actions' in event) {
+        if ('say' in event) {
+          if (typeof event.say !== 'string') {
+            job.fail('bad_stream', 'The server sent words that are not text.');
+            break;
+          }
+          said.push(event.say);
+        } else if ('actions' in event) {
           if (!Array.isArray(event.actions)) {
             job.fail('bad_stream', 'The server sent actions that are not a list.');
             break;
@@ -324,7 +333,10 @@ export class AgentService {
     // an answer that ended with no `done` and was not stopped did not finish
     if (job.live) job.fail('ended', 'The answer ended before it was finished.');
     gesture.commit();
-    const outcome = this.#outcome(job);
+    // a replaced job's words are not shown: a newer request has begun and its lines follow the user's
+    const words = job.state === 'replaced' ? '' : said.join('').trim();
+    if (words !== '') this.say('agent', words);
+    const outcome = this.#outcome(job, words !== '');
     this.#changed();
     return outcome;
   }
@@ -351,10 +363,10 @@ export class AgentService {
     });
   }
 
-  #outcome(job: AgentJob): BoardResult<AgentOutcome> {
+  #outcome(job: AgentJob, spoke: boolean): BoardResult<AgentOutcome> {
     const outcome: AgentOutcome = { made: [...job.made], failed: [...job.failed] };
     if (job.state === 'done') {
-      if (job.made.length === 0 && job.failed.length === 0) this.say('notice', 'The agent made nothing.');
+      if (job.made.length === 0 && job.failed.length === 0 && !spoke) this.say('notice', 'The agent made nothing.');
       return ok(outcome);
     }
     const detail = { made: outcome.made, failed: outcome.failed.map((f) => ({ kind: f.kind, message: f.message })) };

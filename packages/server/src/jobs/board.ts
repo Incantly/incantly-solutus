@@ -1,6 +1,6 @@
 /**
  * `POST /v1/board/ask` (docs/features/server/design.md 1, 5, 6; R2.2, R3.3, R4.2, R7.2): the board's `CircleRequest` or
- * `TalkRequest` in, NDJSON out: `{ actions }` events, then `{ done: true, notices? }`, or `{ error }`. The teacher's
+ * `TalkRequest` in, NDJSON out: `{ say }` pieces (the model's words), `{ actions }` events, then `{ done: true, notices? }`, or `{ error }`. The teacher's
  * `boardTurn` runs the model against a board target built from the request's items; every action is checked before it
  * leaves (the board core's checks, and a figure's lines on a headless app), so only actions that passed reach the client,
  * which checks again as it applies them. A request with a `picture` is sent to the vision models.
@@ -158,7 +158,9 @@ export async function boardAsk(ctx: Context): Promise<void> {
         job.fail(supersededError());
         break;
       }
-      if ('actions' in ev) {
+      if ('say' in ev) {
+        job.event({ say: ev.say });
+      } else if ('actions' in ev) {
         job.event({ actions: ev.actions });
       } else if ('done' in ev) {
         job.event(ev.notices !== undefined && ev.notices.length > 0 ? { done: true, notices: ev.notices } : { done: true });
@@ -168,7 +170,7 @@ export async function boardAsk(ctx: Context): Promise<void> {
         ctx.log('board.error', { kind: error.kind });
         job.fail(error);
       }
-      // `say`, `lines` and `control` have no place in the board's protocol: the board shows what its actions did
+      // `lines` and `control` have no place in the board's protocol: the board shows what its actions did
     }
   } finally {
     slot.release();

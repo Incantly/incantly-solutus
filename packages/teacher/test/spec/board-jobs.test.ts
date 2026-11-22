@@ -251,16 +251,19 @@ describe('the turn over the board target (design 6, 9; board agent.md 3)', () =>
     expect(actionsOf(run.events)).toEqual([write]);
   });
 
-  it('a model that sends no action ends with model_bad_output (agent.md 3: no action that passed)', async () => {
+  it('a talk with words and no action ends with done, the words as say (TR-28); a circle with no action ends with model_bad_output', async () => {
     const run = await runBoard(talkRequest(), [{ text: 'I would draw a circle for you.' }]);
-    const last = lastEvent(run.events);
-    expect(last).toMatchObject({ error: { kind: 'model_bad_output' } });
+    expect(lastEvent(run.events)).toEqual({ done: true });
+    expect(run.events.filter((e) => 'say' in e)).toEqual([{ say: 'I would draw a circle for you.' }]);
     expect(actionsOf(run.events)).toEqual([]);
-    expect(run.events.some((e) => 'done' in e)).toBe(false);
+    const circled = await runBoard(circleRequest(), [{ text: 'I would draw a circle for you.' }]);
+    expect(lastEvent(circled.events)).toMatchObject({ error: { kind: 'model_bad_output', message: 'The AI could not draw this.' } });
+    expect(actionsOf(circled.events)).toEqual([]);
+    expect(circled.events.some((e) => 'done' in e || 'say' in e)).toBe(false);
   });
 
-  it('all its actions refused: the model is told why in the next call and the turn ends with model_bad_output', async () => {
-    const run = await runBoard(talkRequest({ allowEdit: false }), [boardReply([{ op: 'delete', id: 'shape:t1' }]), { text: 'Sorry.' }]);
+  it('all its actions refused: the model is told why in the next call and the turn ends with model_bad_output (a circle)', async () => {
+    const run = await runBoard(circleRequest({ choice: 'graph', items: [userItem('shape:t1', { kind: 'triangle' })] }), [boardReply([{ op: 'delete', id: 'shape:t1' }]), { text: 'Sorry.' }]);
     expect(lastEvent(run.events)).toMatchObject({ error: { kind: 'model_bad_output' } });
     const seen = toolMessages(run.model.requests[1] as ChatRequest)[0]?.content ?? '';
     expect(seen).toContain('agent_refused');
