@@ -15,8 +15,10 @@ import type { Context, Route } from '../jobs/context';
 import { figureDraw } from '../jobs/figure';
 import { health } from '../jobs/health';
 import { Job } from '../jobs/job';
+import { lessonEnd, lessonStart, lessonTurn } from '../jobs/lesson';
 import { speech } from '../jobs/speech';
 import { teach } from '../jobs/teach';
+import { LessonStore } from '../lessons/store';
 import { RateLimiter } from '../limits/rate';
 import { silentLog } from '../log';
 import type { LogFn } from '../log';
@@ -34,6 +36,9 @@ export const ROUTES: readonly Route[] = [
   { method: 'POST', path: '/v1/board/ask', bodyLimit: BODY_LIMIT_PICTURE, handle: boardAsk },
   { method: 'POST', path: '/v1/teach', bodyLimit: BODY_LIMIT, handle: teach },
   { method: 'POST', path: '/v1/speech', bodyLimit: BODY_LIMIT_SPEECH, handle: speech },
+  { method: 'POST', path: '/v1/lesson/start', bodyLimit: BODY_LIMIT, handle: lessonStart },
+  { method: 'POST', path: '/v1/lesson/turn', bodyLimit: BODY_LIMIT, handle: lessonTurn },
+  { method: 'POST', path: '/v1/lesson/end', bodyLimit: BODY_LIMIT, handle: lessonEnd },
 ];
 
 const routeNames = (routes: readonly Route[]): string[] => routes.map((r) => `${r.method} ${r.path}`);
@@ -57,6 +62,8 @@ export interface Listening {
 
 export interface Server {
   readonly limiter: RateLimiter;
+  /** The lessons held in memory. */
+  readonly lessons: LessonStore;
   /** `METHOD path` of every route. */
   readonly routes: readonly string[];
   /** Starts listening. A failure to listen (the port is taken) is `config_invalid`, not a throw. */
@@ -84,6 +91,7 @@ export function createServer(options: ServerOptions): Server {
   const log = options.log ?? silentLog;
   const now = options.now ?? Date.now;
   const limiter = new RateLimiter({ ratePerMinute: settings.ratePerMinute, dailyModelCalls: settings.dailyModelCalls }, now);
+  const lessons = new LessonStore(now, { onFault: (from, event) => log('internal', { machine: 'lesson', from, event, fingerprint: `internal:lesson.${from}.${event}` }) });
   let nextId = 0;
 
   const dispatch = async (req: IncomingMessage, job: Job, id: number): Promise<void> => {
@@ -126,7 +134,7 @@ export function createServer(options: ServerOptions): Server {
       }
       body = parsed.value;
     }
-    const ctx: Context = { job, settings, client: options.client, speech: options.speech, limiter, log, clientId: clientOf(req, settings.trustProxy), body, now };
+    const ctx: Context = { job, settings, client: options.client, speech: options.speech, limiter, lessons, log, clientId: clientOf(req, settings.trustProxy), body, now };
     log('request', { id, method, path });
     await route.handle(ctx);
   };
@@ -153,6 +161,7 @@ export function createServer(options: ServerOptions): Server {
 
   return {
     limiter,
+    lessons,
     routes: routeNames(ROUTES),
     listen(port = settings.port, host = settings.host) {
       return new Promise((resolve) => {

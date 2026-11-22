@@ -1,6 +1,7 @@
 /** What a route handler gets (docs/features/server/design.md 2): the job that owns the response, and the server's parts. */
 import type { ModelClient } from '@incantly/teacher';
 import type { Settings } from '../env';
+import type { LessonStore } from '../lessons/store';
 import type { LogFn } from '../log';
 import type { RateLimiter } from '../limits/rate';
 import type { SpeechClient } from '../providers/speech';
@@ -14,6 +15,8 @@ export interface Context {
   /** The voices of `/v1/speech`, or undefined when the provider has no key or no voice (the route answers `model_unavailable`). */
   readonly speech: SpeechClient | undefined;
   readonly limiter: RateLimiter;
+  /** The lessons held in memory (`/v1/lesson/*`). */
+  readonly lessons: LessonStore;
   readonly log: LogFn;
   /** The client's address, for the rate limits. */
   readonly clientId: string;

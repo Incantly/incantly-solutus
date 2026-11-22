@@ -67,7 +67,10 @@ The server keeps each lesson in memory, so the browser sends only what the learn
 | A summary of older turns | At most 1,200 characters, rewritten by the teacher's `lesson` tool |
 | What the learner found hard | At most 10 short notes |
 
-- A lesson lives in the server's memory only, never on disk. It ends after 15 minutes without a turn, or at 200 turns. The server holds at most 100 lessons; a new one past that ends the oldest idle one.
+- A lesson lives in the server's memory only, never on disk. It ends after 15 minutes without a turn, or when its 200th turn ends. The server holds at most 100 lessons; a new one past that ends the oldest idle one.
+- The 200th turn runs like any other. Before its `done` (which carries `ended: true`) the server adds one `say`: "That's the end of this lesson. Start a new one to go on."
+- A turn that was interrupted (the learner spoke over it, or a newer turn replaced it) is kept in the memory: the learner's words, and what the teacher had said so far followed by "(interrupted)". The next turn so knows what was asked and that the answer was not finished.
+- Sizes the table does not list: a kept turn holds at most 800 characters a side, a hard note 80, the topic 120 and a plan step 80.
 - A lesson id is a random 128-bit value (`crypto.randomUUID`), held by the browser for that board. Another client cannot guess it.
 - The browser may end a lesson at any time; the server forgets it then.
 
@@ -88,7 +91,7 @@ Board rules the lesson adds (board agent.md 4 still holds):
 - Notes go down the left of the page, sketches and figures to their right (`near` with `side: 'right'`).
 - A note is at most 80 characters. A list is one `write` a line.
 - Pen sketches use `stroke` with at most 64 points, or the shape kinds, arrows and marks, which read better than freehand.
-- An action that passed is done: never send it again in the same answer (TR-49).
+- An action that passed is done: never send it again in the same answer on the same page (TR-49). The same note on a new page is a new action.
 
 ## 6. States
 
@@ -99,9 +102,14 @@ The lesson on the server is one field over `LESSON_MACHINE` (written in `docs/st
 | `new` | first turn | `planning` |
 | `planning` | `lesson_plan` passed | `teaching` |
 | `planning`, `teaching` | turn ended with a check | `waiting` |
-| `waiting` | the learner speaks | `teaching` |
+| `waiting` | the learner speaks, and the lesson has a plan | `teaching` |
+| `waiting` | the learner speaks, and the lesson has no plan yet (`replan`) | `planning` |
 | `teaching` | turn ended | `waiting` |
 | `new`, `planning`, `teaching`, `waiting` | `end`, idle 15 min, 200 turns, evicted | `ended` |
+
+`replan` is for a first turn that ended with no plan (the model never called `lesson_plan`, or the call failed): the lesson asks for a plan again, so `teaching` always has one.
+
+The turn that runs is the machine being in `planning` or `teaching`. A turn from the same client while one runs replaces it (the older ends with `superseded`); the store ends the old turn and begins the new one in one step.
 
 The studio's conversation is one field over `CONVERSATION_MACHINE`, which replaces the single-turn use of `VOICE_MACHINE` on the board:
 
@@ -128,7 +136,8 @@ The studio's conversation is one field over `CONVERSATION_MACHINE`, which replac
 | `POST /v1/lesson/turn` | `{ lessonId, text, board: { items, more, page } }` | NDJSON: `say`, `actions`, `lesson` (`{ plan, step, state }`), `done`, `error` |
 | `POST /v1/lesson/end` | `{ lessonId }` | `200` `{ ok: true }` |
 
-- Limits and errors are those of `/v1/teach` (server design 6, 7). New errors: `lesson_unknown` (404, the id is not held: it ended or never was) and `lesson_busy` (409, a turn of this lesson is still running; the client aborts it first).
+- Limits and errors are those of `/v1/teach` (server design 6, 7). New errors: `lesson_unknown` (404, the id is not held: it ended or never was) and `lesson_busy` (409, a turn from another client address is running on this lesson). A newer turn from the same client replaces the running one, which ends with `superseded`, so the studio's barge-in needs no abort-first round trip.
+- `/start` needs the server's model key: without one it answers `model_unavailable` (503), since a lesson that cannot have a turn should not start.
 - Every turn is a teacher turn of the `lesson` job, under the turn limits (teacher design 6).
 - The `done` event of a turn that ended the lesson carries `ended: true`.
 

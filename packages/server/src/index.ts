@@ -19,6 +19,10 @@ export { figureDraw, REQUEST_CHARS, SCRIPT_CHARS, AROUND_CHARS } from './jobs/fi
 export { boardAsk, readBoardRequest, BOARD_ITEMS_MAX, BOARD_TEXT_CHARS, ITEM_CHARS } from './jobs/board';
 export { teach, readTeachRequest, TEACH_TEXT_CHARS, HISTORY_TURNS, HISTORY_CHARS, FILM_MAX } from './jobs/teach';
 export type { TeachRequest } from './jobs/teach';
+export { lessonStart, lessonTurn, lessonEnd, readLessonStart, readLessonTurn } from './jobs/lesson';
+export type { LessonStartRequest, LessonTurnRequest } from './jobs/lesson';
+export { Lesson, LessonStore, LESSON_MACHINE, LESSON_STORE_LIMITS } from './lessons/store';
+export type { LessonLimits, LessonMove, LessonState, StoreOptions } from './lessons/store';
 export { speech, SPEECH_CHARS, INSTRUCTION_CHARS, SPEECH_WEIGHT, SPEECH_MS } from './jobs/speech';
 export { TURN_MS, jobSignal, meteredClient } from './jobs/model';
 export { readSse, chatEvents, ChunkJoiner, streamCut, providerError } from './providers/sse';

@@ -14,7 +14,7 @@ import type { PromptOptions, TurnRequest } from '../prompt/build';
 import { catalogueFor } from '../prompt/catalogue';
 import type { JobId } from '../prompt/jobs';
 import { builtinTool, toolset } from '../tools/toolset';
-import type { Target, ToolOutcome, ToolValue, Toolset, TurnOutput } from '../tools/types';
+import type { LessonView, Target, ToolOutcome, ToolValue, Toolset, TurnOutput } from '../tools/types';
 import { RetryBook, STREAK_LIMIT, Streak, commandsIn, lineKey } from './book';
 import type { ChatEvent, ChatMessage, ModelClient, ModelToolCall } from './model';
 
@@ -49,7 +49,8 @@ export type TurnEvent =
   | { readonly lines: readonly string[] }
   | { readonly actions: readonly unknown[] }
   | { readonly control: { readonly op: 'pause' | 'resume' | 'seek'; readonly t?: number } }
-  | { readonly done: true; readonly notices?: readonly TurnNotice[] }
+  | { readonly lesson: LessonView }
+  | { readonly done: true; readonly notices?: readonly TurnNotice[]; readonly ended?: true }
   | { readonly error: StreamError };
 
 export interface TurnOptions {

@@ -3,9 +3,9 @@
  * Parts that name a tool are added only when the job's toolset has that tool.
  */
 
-export type JobId = 'live' | 'figure' | 'circle' | 'talk';
+export type JobId = 'live' | 'figure' | 'circle' | 'talk' | 'lesson';
 
-export const JOB_IDS: readonly JobId[] = ['live', 'figure', 'circle', 'talk'];
+export const JOB_IDS: readonly JobId[] = ['live', 'figure', 'circle', 'talk', 'lesson'];
 
 export const isJobId = (x: unknown): x is JobId => typeof x === 'string' && (JOB_IDS as readonly string[]).includes(x);
 
@@ -53,6 +53,24 @@ const TALK = `JOB: TALKING AGENT
 - Answer the person's message by changing the board with board actions; the board in view is in THE BOARD NOW.
 - Write, draw or move things on the board only as the person asked.`;
 
+/** Lesson agent.md 1: the lesson job's instructions, word for word. */
+const LESSON = `JOB: LESSON
+You are a patient tutor teaching one learner on a whiteboard. The lesson is a conversation: it goes on, turn after turn, until the learner ends it.
+1. In the first turn, call lesson_plan with 3 to 8 short steps, say the plan in one or two sentences, and write it on the board as a list. Then start step 1.
+2. Teach one idea a turn. Speak one to three short sentences, as a person would.
+3. Show every idea on the board: a short note (write), and a sketch when a picture helps (shape, arrow, mark, stroke). Use a figure only when a value must move or a graph must be exact.
+4. End every turn with one question for the learner, or "Shall we go on?". Then stop.
+5. When the learner answers, say whether it is right and why. If it is wrong, explain again another way, with another picture.
+6. When a step is understood, call lesson_step with to: 'next', a one-line summary, and start the next step on a new page.
+7. When the learner asks something else, answer it, then come back to the plan.
+8. Never send the same board action twice in the same answer on the same page. An action that passed is done.
+9. Say only what the board results report.
+10. Names: t, x, y, z, e, pi and the unit names are taken. Name objects v, w, A, tg, c1.`;
+
+/** The instruction of the turn in which the learner ends the lesson (design 3, last row): it comes after the job's rules and wins over them. */
+export const LESSON_END_INSTRUCTION =
+  'The learner has ended the lesson, so this turn is different from the rules above: say a summary in two spoken sentences (what the lesson covered, and what you would teach next time), and say goodbye. Ask no question, call no tool that changes the board.';
+
 /** The instruction text of a job for a toolset with the tools in `tools`; `mode` is the mode a board job's figure cards use. */
 export function jobInstructions(job: JobId, tools: readonly string[], mode?: string): string {
   const has = (name: string): boolean => tools.includes(name);
@@ -71,6 +89,10 @@ export function jobInstructions(job: JobId, tools: readonly string[], mode?: str
       break;
     case 'talk':
       parts.push(TALK, boardRules);
+      break;
+    case 'lesson':
+      parts.push(LESSON);
+      if (has('board')) parts.push(boardRules);
       break;
   }
   return parts.join('\n\n');

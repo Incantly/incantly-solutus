@@ -17,6 +17,9 @@ Errors use the SDK shape `{ ok: false, kind, message, hint?, detail? }`. A check
 | `turn_limit` | stream only | A teach turn passed its own limit: 8 model calls, 24 tool calls or 60 s (teacher `errors.md` T003) | "This answer stopped after {what}." (`{what}` is "8 model calls", "24 tool calls" or "60 s") | What was drawn stays; ask again for the rest |
 | `model_bad_output` | stream | The model wrote no line or action that passed, after the repair call | "The AI could not draw this." | Rephrase |
 | `superseded` | stream | A newer request from the same client replaced this one after the stream began | "A newer request replaced this one." | The client keeps or drops what it applied, as for any error |
+| `lesson_unknown` | 404 | `/v1/lesson/turn` or `/end` with an id the server does not hold: the lesson ended (the learner, 15 minutes idle, its 200th turn, evicted) or never was | "This lesson has ended." | Start a new lesson |
+| `lesson_busy` | 409 | `/v1/lesson/turn` from another client address while a turn of the lesson runs (the same client's newer turn replaces the older with `superseded`) | "The teacher is still answering." | Wait, then send |
+| `lesson_full` | 503 | `/v1/lesson/start` with 100 lessons held and every one running a turn | "The server is teaching too many lessons; try again in a minute." | Retry after `detail.retryAfterMs` (60,000) |
 | `not_found` | 404 | An unknown route | Lists the routes | — |
 | `internal` | 500 or stream | A bug | "Something went wrong in the server; nothing was changed." | Report; the log has the fingerprint |
 

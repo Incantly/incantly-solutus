@@ -21,7 +21,8 @@ RULES
   A circle from an equation needs a number radius. With a slider a, x^2 + y^2 == a^2 is a Curve; use Circle(O, a).
   Lists [1,2,3] [1..10] [0..1 step 0.1]; L[1] is the first item. Points (x, y).
   Text: "m = {m:2}" shows a live value. if(cond, a, b). 0 < x < 5 is allowed.
-  Names: letters, digits, _ ; P_1 ; Greek ok. Not a command, function, or: t x y z e pi tau deg inf.`;
+  Names: letters, digits, _ ; P_1 ; Greek ok. Not a command, function, keyword, or: t bt beat x y z e pi tau deg turn grad inf undefined xaxis yaxis zaxis.
+  Taken names: t (the film time), e, pi, tau, and the angle units deg, turn, grad. Free names for objects: v, w, A, B, tg, c1.`;
 
 export const FUNCTIONS_LINE = `FUNCTIONS (lowercase, pure): sin cos tan sec csc cot asin acos atan atan2(y,x) sinh cosh tanh asinh acosh atanh
 sqrt cbrt nroot(x,n) hypot(a,b) exp ln log10 log2 log(base,x) abs sign floor ceil round(x[,d]) trunc fract

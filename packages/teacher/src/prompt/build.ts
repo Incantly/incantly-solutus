@@ -36,6 +36,8 @@ export interface TurnRequest {
   readonly history?: readonly HistoryItem[];
   /** Pictures the person sent (a circled area): they go with the first message and the call uses the vision models. */
   readonly images?: readonly ChatImage[];
+  /** What the job kept from earlier turns, already fenced and cut (a lesson's memory block). It goes in the system text, so the catalogue's room shrinks by its size. */
+  readonly memory?: string;
 }
 
 export interface PromptOptions {
@@ -99,11 +101,11 @@ export function describeTarget(target: Target): string {
  * The system text: instructions, grammar, mode card and the catalogue groups that fit. An unknown mode is
  * `bad_argument`. `request.text` and the types of the figure's objects choose which groups load first.
  */
-export function buildSystem(job: JobId, target: Target, request: Pick<TurnRequest, 'text' | 'instruction'>, options: PromptOptions = {}): Result<SystemPrompt> {
+export function buildSystem(job: JobId, target: Target, request: Pick<TurnRequest, 'text' | 'instruction' | 'memory'>, options: PromptOptions = {}): Result<SystemPrompt> {
   const catalogue = options.registry === undefined ? catalogueFor(target.mode) : catalogueFor(target.mode, options.registry);
   if (!catalogue.ok) return catalogue;
   const config = MODES[target.mode as keyof typeof MODES];
-  const fixed = [jobInstructions(job, options.tools ?? ['draw', 'figure'], target.mode), `LANGUAGE\n${GRAMMAR}`, `APP MODE\n${modeCard(config)}`].join('\n\n');
+  const fixed = [jobInstructions(job, options.tools ?? ['draw', 'figure'], target.mode), `LANGUAGE\n${GRAMMAR}`, `APP MODE\n${modeCard(config)}`, ...(request.memory !== undefined && request.memory !== '' ? [request.memory] : [])].join('\n\n');
   const types = target.figureSummary().sample.map((o) => o.type);
   const words = request.instruction === undefined ? request.text : `${request.instruction}\n${request.text}`;
   const wanted = [...(options.groups ?? []), ...catalogue.value.groupsFor(words, types)];
