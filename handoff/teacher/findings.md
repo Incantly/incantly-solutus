@@ -52,3 +52,15 @@ None. TR-8 was fixed in round 1: the SDK's `run(lines, { independent: true })` p
 | Id | Where | Note |
 |---|---|---|
 | TR-45 | `packages/server/src/errors.ts` (`fromStreamError`), `jobs/figure.ts`, `jobs/board.ts` | Review r4 ruled that a turn's own limits (8 model calls, 24 tool calls, 60 s) end with `turn_limit`, and TR-41 applied it to `/v1/teach` only. `/v1/figure/draw` and `/v1/board/ask` still map the teacher's `turn_limit` to `model_timeout` ("The AI took too long."), and earlier specs (`figure-draw.test.ts`, `board-ask.test.ts`, `stream.test.ts`) pin that. Server `errors.md` says so in the `model_timeout` row. Decide whether both jobs move to `turn_limit` too, then change `fromStreamError` and those specs together |
+
+## Found in the round 5 live run (`live-run.md`)
+
+| Id | Where | Note |
+|---|---|---|
+| TR-46 | `packages/teacher/src/stream/apply.ts` (prompt to figure) | The first line reached the client 9 to 23 s after the request, because the plan call is a whole model reply before the script call starts. The voice lesson, with no plan call, drew its first line in 1.5 s. Skip the plan call for short requests, or ask for the plan and the script in one reply |
+| TR-47 | `packages/teacher/src/prompt/grammar.ts` | Asked for a tangent, the model named it `t` twice (the film time, `reserved_name`), then `t_1`, and the tangent was left out (`retry_spent`). The grammar summary should list the reserved names (`t`, `x`, `y`, `z`, `e`, `pi`, the unit names) and the hint of K003 should offer a free name |
+| TR-48 | `packages/server/src/log.ts`, the jobs | The log does not say which model answered, how long it took, or which fell back. Add one line per model call: model id, time to first event, total time, fallback reason. No bodies |
+| TR-49 | `/v1/board/ask` circle | In one of three runs the model sent the same `arrow` and `write` twice over three `board` calls, so the board got two arrows and two captions. The tool results said each passed. The circle instructions should say an action that passed is done, and the server could drop an action equal to one already sent in the answer |
+| TR-50 | `apps/studio/src/voice*.ts` | Opening the Talk panel starts the microphone at once. Where the page has no microphone permission (or the person says no), the first line of the panel is a red "The microphone stopped: not-allowed." Start listening only on the microphone button, and say plainly that typing works |
+| TR-51 | live run | A circle with a picture (the vision list) was not run live in round 5: a safety rule blocks sending a local file off this computer from the agent's shell. The vision models were checked by hand on 2026-11-22 with a handwritten equation |
+| TR-52 | live run | The error test set and its fix rate (teacher R8.3, 9 in 10) were not measured. The live runs show one fix failure (TR-47) |
