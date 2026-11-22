@@ -18,7 +18,7 @@ import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { endLesson, startLesson, streamLessonTurn } from './lesson-client';
 import type { LessonBoard, LessonView } from './lesson-client';
-import { SentenceQueue, TRANSCRIPT_MAX, speakSentence } from './voice';
+import { SentenceQueue, TRANSCRIPT_MAX, microphoneRefused, speakSentence } from './voice';
 import type { BrowserVoice, Clip, ClipSource, Recogniser, VoiceLine } from './voice';
 
 export type ConversationState = 'off' | 'listening' | 'thinking' | 'speaking' | 'paused';
@@ -98,7 +98,7 @@ const browserTimer: SilenceTimer = (fire, ms) => {
 
 /** What to tell the learner when the microphone failed: the reason, and that typing works. */
 export function microphoneMessage(failure: string): string {
-  if (failure === 'not-allowed' || failure === 'service-not-allowed') return 'The microphone is blocked on this page. Allow it in the browser, or type your answer.';
+  if (microphoneRefused(failure)) return 'The microphone is blocked on this page. Allow it in the browser, or type your answer.';
   return `The microphone stopped (${failure}). You can type your answer.`;
 }
 
@@ -371,9 +371,12 @@ export class LessonConversation {
           this.#changed();
         } else if ('error' in ev) {
           if (ev.error.kind === 'lesson_unknown') {
-            run.outcome = 'gone';
+            // the lesson is gone on the server: playing on would teach into nothing, so everything stops at once (LE2, LR-9)
             this.#note('notice', 'This lesson has ended. Start a new lesson to go on.');
-          } else this.#note('notice', ev.error.message);
+            this.#goOff();
+            return;
+          }
+          this.#note('notice', ev.error.message);
           break;
         } else {
           if (ev.ended === true) run.outcome = 'ended';

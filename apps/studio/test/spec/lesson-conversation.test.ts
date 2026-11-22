@@ -719,6 +719,18 @@ describe('ending the lesson (R1.1, R1.5, design 6 "End, or the server says the l
     expect(await until(() => r.conversation.state === 'off', 500)).toBe(true);
   });
 
+  it('LR-9: lesson_unknown while a sentence plays stops the clip and drops the queue at once, with the notice shown', async () => {
+    const r = rig();
+    const turn = await toSpeaking(r);
+    turn.say('A second sentence that must never be spoken.');
+    turn.push({ error: { kind: 'lesson_unknown', message: 'This lesson has ended.' } });
+    expect(await until(() => r.conversation.state === 'off', 500)).toBe(true);
+    expect(r.audio.clips.some((c) => c.playing)).toBe(false);
+    expect(r.audio.clips.some((c) => c.stoppedBySignal)).toBe(true);
+    expect(r.conversation.micOpen).toBe(false);
+    expect(r.conversation.transcript.some((l) => l.who === 'notice' && l.text.toLowerCase().includes('start a new lesson'))).toBe(true);
+  });
+
   it('a lesson that ended by lesson_unknown can be started again as a new one: a new id', async () => {
     const r = rig();
     r.conversation.start('Teach me about vectors');

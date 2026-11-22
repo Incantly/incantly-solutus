@@ -597,6 +597,14 @@ describe('TR-50: a microphone that is refused says plainly that typing works', (
     expect(lines.some((t) => t.toLowerCase().includes('microphone'))).toBe(true);
     expect(lines.some((t) => t.toLowerCase().includes('type'))).toBe(true);
   });
+
+  it('LR-10: the refused microphone of the single-turn voice says exactly that it is off and where to type', () => {
+    listensWith();
+    const p = open({ board: false });
+    p.button('Talk')?.click();
+    Recognition.all.find((r) => r.open)?.onerror?.({ error: 'not-allowed' });
+    expect(logText(p)).toContain('The microphone is off. Type your question below.');
+  });
 });
 
 describe('the single-turn voice of a graph or geometry view is not the lesson (design 6, LE2 "Where")', () => {
