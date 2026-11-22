@@ -2382,6 +2382,47 @@ Written before the code of round 4 (branch `feat/teacher-r4`).
 - **The audio answer** is a `Job` (SV1) answer of another kind, with the same machine and no new row: the checks pass (`checked`, `running`), nothing is written until the first byte of audio arrives, then the head (`200`, `audio/mpeg` or `audio/pcm` with `x-sample-rate`) and the byte go out (`firstEvent`, `streaming`), the stream ends with `finish`. An error before the first byte is an HTTP error (`model_busy` 503 with `retry-after`, `model_unavailable` 503, `model_timeout` 504), because nothing has been sent: the studio then uses the browser's voice. An error after the first byte cannot change the head: the response is ended where it is (`fail` in `streaming` ends the response with no error line, since the body is not NDJSON), and the client plays what it has.
 - **Invariants:** the audio bytes are passed on as they arrive, never held back for the whole clip; the client closing the connection moves the job to `aborted` and aborts the provider request at once (no bytes are fetched for a closed client); the key goes only in the `Authorization` header; the provider's own text never reaches the client; the sentence is at most 500 characters; a request counts one tenth in the client's minute (`weight: 0.1`) and does not take the client's model slot (`exclusive` is not set: sentences of one lesson are fetched ahead, several at once); the day's model-call counter is not used, since the voice models are not chat calls.
 
+## lesson
+
+### Round 1 (branch `feat/lesson-r1`): the teacher and the server
+
+Written before the code of round 1. The server's lesson is one machine (LE1). The studio's `CONVERSATION_MACHINE` is written before the code of round 2.
+
+| Part | Where | States come from |
+|---|---|---|
+| `LessonMemory` (topic, plan, step, last turns, summary, hard notes) | `packages/teacher/src/lesson/memory.ts` | Plain data, rewritten by the tools and `recordTurn`. It holds no state: whether a plan exists is `plan.length`, and the server's machine (LE1) says what the lesson is doing. |
+| `lesson_plan`, `lesson_step` | `packages/teacher/src/lesson/tools.ts` | The tool guard of the target (TE2). They write into the memory the job gives them and hold nothing of their own. |
+| Repeated board actions in a turn (TR-49) | `packages/teacher/src/lesson/turn.ts` | A set of the actions that passed in the turn, emptied when a `page` action passes. Data of the turn, not a state. |
+| `lessonTurn` | `packages/teacher/src/lesson/turn.ts` | The turn (TE1). It forwards the turn's events, makes `say` pieces whole sentences, adds the `lesson` event when a tool changed the plan or the step, and puts `ended` on `done` when the learner asked to end. |
+| `POST /v1/lesson/start`, `/turn`, `/end` | `packages/server/src/jobs/lesson.ts` | `/turn` is the request job (SV1) and the model call (SV2), as `/v1/teach`. `/start` and `/end` are JSON answers of the same job. |
+
+### LE1. Lesson (server)
+
+- **Where:** `packages/server/src/lessons/store.ts` `LessonStore`, `LESSON_MACHINE`. One machine for each lesson held. The store (the map of lessons by id) is data: it holds at most 100 lessons, and it has no timer; every call reads the injected clock.
+- **States:** `new` (made by `/start`, no turn yet), `planning` (a turn runs and the lesson has no plan yet), `teaching` (a turn runs and the lesson has a plan), `waiting` (no turn runs; the learner is to speak), `ended` (final; the lesson is dropped from the store at once, so a later call finds no lesson: `lesson_unknown`).
+
+| State | Holds |
+|---|---|
+| `new` | the topic, the mode, the memory (empty), the time of the last call |
+| `planning`, `teaching` | the same, and the running turn: its number, the client that started it, and the function that stops it. These are one record, `run`, which is the idle record (turn number 0) in every other state |
+| `waiting` | the memory with the last turn recorded; the time of the last call |
+| `ended` | nothing; the lesson has left the store |
+
+- **Invariants:** `planning` and `teaching` are the states that have a running turn, so "a turn runs" is read from the machine and nowhere else (`lesson_busy`); a lesson has at most one turn running; `run` is the idle record in `new`, `waiting` and `ended`, and a turn's number is never reused, so a turn that was replaced and finishes late finds a different number and changes nothing (it does not move the machine, it records nothing in the memory); the plan exists exactly when the lesson has passed `planned` since its last `replan` (a lesson that left `planning` without a plan goes back to `planning` on its next turn, so `teaching` always has a plan); the idle time and the turn count are checked from the injected clock when a call reaches the store (`start`, `turn`, `end`), never by a timer: a lesson idle for 15 minutes, or with 200 turns done, is ended before the call is answered; at most 100 lessons are held, and a new one past that ends the idle lesson (state `new` or `waiting`) with the oldest last call; when every held lesson has a turn running, `/start` answers `lesson_full`; the lesson id is `crypto.randomUUID()`; the memory is in the server's memory only.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `new` | `begin` | the first turn begins | `planning` | a turn number and `run` are set; the turn count rises; the last call time is set |
+| `planning` | `planned` | `lesson_plan` passed in the running turn (the turn's `lesson` event shows a plan) | `teaching` | |
+| `planning`, `teaching` | `turnEnd` | the running turn ended (`done`, an error, a stop, a replaced turn) | `waiting` | `run` is idle; the last call time is set; the turn is recorded in the memory when it ended with `done` and was not stopped |
+| `waiting` | `speak` | a turn begins and the memory has a plan | `teaching` | as `begin` |
+| `waiting` | `replan` | a turn begins and the memory has no plan | `planning` | as `begin` |
+| `new`, `planning`, `teaching`, `waiting` | `end` | `/v1/lesson/end`, a turn that ended with `ended` (the learner stopped it), 200 turns done, 15 minutes idle, or evicted | `ended` | the running turn is stopped; the lesson leaves the store |
+
+- **A turn that arrives while one runs** is not a move of its own. From the client that started the running turn it is a barge-in: the store sends `turnEnd` for the old turn (its function stops it), then `speak` or `replan` for the new one, in one call, so the old turn finishes with `superseded` and records nothing. From another client it is refused with `lesson_busy` and the lesson does not change.
+- **Reachable invalid states or transitions:** `planned` in `teaching` has no row (a plan that is replaced later in the lesson changes the memory, not the state; the store asks `can` first). `turnEnd` in `waiting` or `new` has no row (a late end of a replaced turn is dropped by its number, and the store asks `can` first). `speak`, `replan` and `begin` in `planning` or `teaching` have no row (the takeover sends `turnEnd` first). Nothing is accepted in `ended`.
+
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
 Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same. `GRID_MACHINE` and `ERROR_MACHINE` first had one row copied into every state; `incantly/state-table-refuses` found them (board review BR-1) and their rows now list only the moves that may happen.
