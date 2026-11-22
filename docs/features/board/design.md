@@ -370,7 +370,6 @@ How:
 
 ## Sources studied
 
-- tldraw SDK public documentation on performance (viewport culling, reactive updates, batched store changes, steady zoom, geometry caching, level of detail, performance events) and on its store. Ideas only; we read no tldraw source, and use none of its code or names.
 - MDN: `PointerEvent.getCoalescedEvents()`, `getPredictedEvents()`, `pressure`, `tiltX`, `tiltY`; the WICG ink-enhancement explainer on predicted points.
 - React Native Gesture Handler and React Native Skia public documentation, for section 14.
 - The pressure-stroke outline method (smoothing, pressure to width, offset, round caps), as described in public articles; our code is our own.
