@@ -82,7 +82,7 @@ export interface TargetClock {
   seek(t: number): void;
 }
 
-/** What the tools act on (design 9). A figure today; the board adds its own in round 3. */
+/** What the tools act on (design 9). A figure, or a board (the request's items on the server). */
 export interface Target {
   readonly kind: 'figure' | 'board';
   /** The app mode id, for the catalogue and the mode card. */
@@ -97,4 +97,24 @@ export interface Target {
   figureSummary(): FigureSummary;
   undefinedObjects(): readonly UndefinedObject[];
   readonly clock: TargetClock;
+  /** What `board_read` and `board` use; set on a board target only. */
+  readonly board?: BoardPort;
+}
+
+/** What a board target gives the board tools (design 9): the board as the request describes it, and the checks of an answer. */
+export interface BoardPort {
+  /** The page the items are from. */
+  readonly page: string;
+  /** `board_read`: the items of an area, at most 60, and how many were left out. Never throws. */
+  read(input: unknown): Result<ToolValue>;
+  /** `board`: checks each action as the board would, one result each, in order. Never throws. */
+  check(actions: readonly unknown[]): readonly BoardCheck[];
+  /** The board as the first message shows it: a head line and the items, one a line (user text inside; the prompt fences it). */
+  describe(): { readonly head: string; readonly items: string };
+}
+
+/** One checked action: what the model is told, and the action to send on (the checked form) when it passed. */
+export interface BoardCheck {
+  readonly result: object;
+  readonly send?: unknown;
 }

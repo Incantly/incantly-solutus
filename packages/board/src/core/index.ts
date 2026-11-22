@@ -105,7 +105,7 @@ export { ITEM_TEXT_MAX, boundsOfBox, boxOf, describeShape, itemsOf, readBoard, r
 export type { FigureHost, ReadEnv } from './agent-read';
 export { ACTIONS_MAX, ITEMS_MAX, MARK_HOWS, OPS, SHAPE_KINDS, SIDES, readAction, readActions } from './agent-types';
 export type { ActionOk, ActionResult, AgentItem, AgentShapeKind, BoardAction, BoardOp, Box, MarkHow, Place, ReadResult, Side, Target } from './agent-types';
-export { AgentJob, AgentService, CIRCLE_CHOICES, ENTRIES_MAX, JOB_MACHINE, describeResult } from './agent-service';
+export { AgentJob, AgentService, CIRCLE_CHOICES, EDITS_MINE, ENTRIES_MAX, JOB_MACHINE, describeResult } from './agent-service';
 export type {
   AgentEntry, AgentOutcome, AgentServiceOptions, BoardAgentEvent, BoardAgentRequest, BoardAgentTransport, CircleChoice, CircleRequest, TalkRequest,
 } from './agent-service';

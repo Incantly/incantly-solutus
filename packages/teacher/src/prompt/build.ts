@@ -5,7 +5,7 @@
  */
 import type { CommandRegistry, Result } from '@incantly/kernel';
 import { MODES, modeCard } from '@incantly/modes';
-import type { ChatMessage } from '../loop/model';
+import type { ChatImage, ChatMessage } from '../loop/model';
 import type { Target } from '../tools/types';
 import { catalogueFor } from './catalogue';
 import { GRAMMAR } from './grammar';
@@ -28,10 +28,14 @@ export interface HistoryItem {
 export interface TurnRequest {
   /** What the person said or typed. It goes in the material block. */
   readonly text: string;
+  /** What the job asks for, in our words (a circle's chosen answer). It goes before the material, outside it, so it is an instruction. */
+  readonly instruction?: string;
   /** More of what people wrote (document text, board text, a circled item's text), one block each. */
   readonly material?: readonly string[];
   /** The last turns, oldest first. */
   readonly history?: readonly HistoryItem[];
+  /** Pictures the person sent (a circled area): they go with the first message and the call uses the vision models. */
+  readonly images?: readonly ChatImage[];
 }
 
 export interface PromptOptions {
@@ -73,8 +77,9 @@ export function materialBlock(text: string): string {
   return `<material>\n${escapeMaterial(text)}\n</material>`;
 }
 
-/** The figure's own data for the first message, cut to `TARGET_DATA_TOKENS`. */
+/** The target's own data for the first message, cut to `TARGET_DATA_TOKENS`: a figure's summary, or a board's head line. */
 export function describeTarget(target: Target): string {
+  if (target.board !== undefined) return target.board.describe().head;
   const s = target.figureSummary();
   const head = `mode: ${s.mode}; objects: ${s.objects}; t: ${s.t}; window: x ${s.view.x0}..${s.view.x1}, y ${s.view.y0}..${s.view.y1}`;
   const lines = [head];
@@ -90,13 +95,14 @@ export function describeTarget(target: Target): string {
  * The system text: instructions, grammar, mode card and the catalogue groups that fit. An unknown mode is
  * `bad_argument`. `request.text` and the types of the figure's objects choose which groups load first.
  */
-export function buildSystem(job: JobId, target: Target, request: Pick<TurnRequest, 'text'>, options: PromptOptions = {}): Result<SystemPrompt> {
+export function buildSystem(job: JobId, target: Target, request: Pick<TurnRequest, 'text' | 'instruction'>, options: PromptOptions = {}): Result<SystemPrompt> {
   const catalogue = options.registry === undefined ? catalogueFor(target.mode) : catalogueFor(target.mode, options.registry);
   if (!catalogue.ok) return catalogue;
   const config = MODES[target.mode as keyof typeof MODES];
-  const fixed = [jobInstructions(job, options.tools ?? ['draw', 'figure']), `LANGUAGE\n${GRAMMAR}`, `APP MODE\n${modeCard(config)}`].join('\n\n');
+  const fixed = [jobInstructions(job, options.tools ?? ['draw', 'figure'], target.mode), `LANGUAGE\n${GRAMMAR}`, `APP MODE\n${modeCard(config)}`].join('\n\n');
   const types = target.figureSummary().sample.map((o) => o.type);
-  const wanted = [...(options.groups ?? []), ...catalogue.value.groupsFor(request.text, types)];
+  const words = request.instruction === undefined ? request.text : `${request.instruction}\n${request.text}`;
+  const wanted = [...(options.groups ?? []), ...catalogue.value.groupsFor(words, types)];
   const room = SYSTEM_TARGET - tokensOf(fixed) - 2;
   const picked = catalogue.value.withGroups(wanted, room);
   const system = `${fixed}\n\n${picked.text}`;
@@ -109,8 +115,19 @@ export function buildMessages(target: Target, request: TurnRequest): ChatMessage
   for (const h of request.history ?? []) {
     messages.push(h.role === 'user' ? { role: 'user', content: materialBlock(h.text) } : { role: 'assistant', content: h.text });
   }
-  const blocks = [request.text, ...(request.material ?? [])].map(materialBlock);
-  messages.push({ role: 'user', content: `THE FIGURE NOW\n${describeTarget(target)}\n\n${blocks.join('\n\n')}` });
+  const board = target.board?.describe();
+  const first =
+    board === undefined
+      ? `THE FIGURE NOW\n${describeTarget(target)}`
+      : `THE BOARD NOW\n${board.head}\n\n${materialBlock(board.items === '' ? '(nothing in view)' : board.items)}`;
+  const texts = request.instruction === undefined ? [request.text, ...(request.material ?? [])] : [request.text, ...(request.material ?? [])].filter((t) => t.trim() !== '');
+  const blocks = texts.map(materialBlock).join('\n\n');
+  const ask = request.instruction === undefined ? '' : `\n\nTHE REQUEST\n${request.instruction}`;
+  messages.push({
+    role: 'user',
+    content: `${first}${ask}${blocks === '' ? '' : `\n\n${blocks}`}`,
+    ...(request.images !== undefined && request.images.length > 0 ? { images: request.images } : {}),
+  });
   return messages;
 }
 

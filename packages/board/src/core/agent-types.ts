@@ -53,6 +53,8 @@ export interface AgentItem {
   readonly text?: string;
   readonly summary?: string;
   readonly shape?: string;
+  /** `model` when the agent made it; the server's check of `edit`, `move` and `delete` reads it (agent.md 2). */
+  readonly madeBy?: 'model';
 }
 
 export interface ReadResult {

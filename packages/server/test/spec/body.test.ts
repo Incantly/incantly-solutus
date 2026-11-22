@@ -56,9 +56,9 @@ function jpeg(width: number, height: number, size?: number): Uint8Array {
 const text = (s: string): Uint8Array => new TextEncoder().encode(s);
 
 describe('the documented numbers (design 7 table)', () => {
-  it('request body: 256 KB without a picture, 2 MB with one', () => {
+  it('request body: 256 KB without a picture, 2.5 MB with one (a picture of 1.5 MB is 2 MB as base64, TR-27)', () => {
     expect(BODY_LIMIT).toBe(256 * 1024);
-    expect(BODY_LIMIT_PICTURE).toBe(2 * 1024 * 1024);
+    expect(BODY_LIMIT_PICTURE).toBe(2.5 * 1024 * 1024);
   });
 
   it('picture: at most 1.5 MB and 2,048 px a side', () => {

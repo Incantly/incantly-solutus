@@ -8,8 +8,8 @@ What the model reads, per job, and the rules it follows. The prompt builder (des
 |---|---|---|---|
 | `live` | The studio's voice lesson (`POST /v1/teach`) | `draw`, `figure`, `pause`, `resume`, `seek_beat`, `show_me`; on a board also `board_read`, `board` | `say` text and tool calls, mixed |
 | `figure` | Tiptap and the studio's AI panel (`POST /v1/figure/draw`) | Plan, script and repair calls (design 7) | Lines |
-| `circle` | Circle to ask (`POST /v1/board/ask`, `kind: "circle"`) | `board_read`, `board`, `draw`, `figure` | Board actions |
-| `talk` | The board's agent panel (`POST /v1/board/ask`, `kind: "talk"`) | `board_read`, `board`, `draw`, `figure` | Board actions and short text |
+| `circle` | Circle to ask (`POST /v1/board/ask`, `kind: "circle"`) | `board_read`, `board` (a figure card's lines are checked by its `figure` action) | Board actions, and `say` text under them |
+| `talk` | The board's agent panel (`POST /v1/board/ask`, `kind: "talk"`) | `board_read`, `board` | Board actions and `say` text (words with no action are a valid answer) |
 
 ## 2. Rules for every job
 
@@ -61,6 +61,6 @@ The rules of `docs/features/board/agent.md` 4 apply. In short: read before writi
 | `live` on a figure | about 2,300 tokens |
 | `live` on a board | about 2,800 tokens, plus `board_read` |
 | `figure` | about 2,000 tokens |
-| `circle`, `talk` | about 2,500 tokens, plus the items |
+| `circle`, `talk` | about 3,300 tokens (3,189 to 3,498 with the board tools, the mode's catalogue and the example), plus the items |
 
 Every job stays under 4,000 tokens before the target's own data (design 5).

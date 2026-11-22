@@ -97,6 +97,11 @@ export interface ToolSource {
   readonly name: string;
   readonly description: string;
   readonly schema: JsonSchema;
+  /**
+   * The schema the whole call is checked against, when it is looser than `schema` (the model still reads `schema`). A tool
+   * whose parts fail on their own, as the actions of `board` do, checks only the outer shape here and each part in its body.
+   */
+  readonly callSchema?: JsonSchema;
   /** A check the schema cannot say; returns the problem in a sentence, or undefined. */
   readonly check?: (input: Record<string, unknown>, target: Target) => string | undefined;
   /** Runs on an input that passed the schema and `check`. */
@@ -110,7 +115,7 @@ export interface ToolSource {
  */
 export function defineTool(source: ToolSource): ToolDef {
   const run: ToolRun = (target, input) => {
-    const problem = checkSchema(source.schema, input);
+    const problem = checkSchema(source.callSchema ?? source.schema, input);
     if (problem !== undefined || !isObject(input)) return toolInputError(source.name, source.schema, problem ?? 'The input must be an object.');
     try {
       const extra = source.check?.(input, target);

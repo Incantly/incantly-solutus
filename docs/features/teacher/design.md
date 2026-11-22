@@ -21,7 +21,7 @@ Every job ends as lines of the formula language or board actions. Nothing the mo
 |---|---|
 | Turn | One request and everything the model does to answer it: model calls, tool calls, spoken text |
 | Tool | A named action the model may call, with a JSON schema for its input and a plain-data result |
-| Toolset | The tools one job offers, such as `draw` and `figure` for Tiptap, or `board_read`, `board`, `draw` and `figure` for the board |
+| Toolset | The tools one job offers, such as `draw` and `figure` for Tiptap, or `board_read` and `board` for the board's `circle` and `talk` jobs (a `figure` action carries a card's lines; the live teacher on a board also keeps `draw` and `figure`) |
 | Target | What the tools act on: a figure (an SDK `App`) or a board (`@incantly/board/core`) |
 | Catalogue | The command forms the model may use, one line each, filtered by the app mode |
 | Model client | The interface the server gives the loop: one streamed chat call with tools. The teacher package never opens a socket |
@@ -48,7 +48,7 @@ May import: `@incantly/kernel`, `@incantly/modes`, the SDK's headless app (`crea
 | `draw` | `{ lines: string[] }`, 1 to 5 | Per line: `{ ok: true, name, type, summary }` or the line's error object, plus `undefined` (names and reasons) | Core design 10 |
 | `figure` | `{}` | Every object: name, type, value summary, visible, undefined reason | Core design 10 |
 | `board_read` | `{ area?, page? }` | Items in reading order | Board agent 1 |
-| `board` | `{ actions }`, 1 to 20 | Per action `{ ok: true, id }` or an error | Board agent 2 |
+| `board` | `{ actions }`, 1 to 20 | Per action `{ ok: true, id }` or an error (on the server `{ ok: true }`: ids are the client's, and the model names the previous shape `$last`) | Board agent 2 |
 | `pause`, `resume` | `{}` | `{ ok: true, t }` | Core design 10 |
 | `seek_beat` | `{ t: number }` | `{ ok: true, t }` | Core design 10 |
 | `show_me` | `{ name, value }` or `{ name, to, seconds }` | The `draw` result of the `SetValue` line it writes | Core design 10 |
@@ -157,7 +157,9 @@ Fish is tried first, HeyGen second. No library is added: playback uses the brows
 | Figure | `figureTarget(app)` over an SDK `App` or headless app | Tiptap, the studio's AI panel, a board figure card, the server's checks |
 | Board | `boardTarget(board)` over `@incantly/board/core` | The board's agents |
 
-An adapter gives the tools `run`, `figureSummary`, `undefinedObjects`, the clock and, for the board, `readBoard` and `applyAction`. The server keeps a headless copy of the target to run the tools and check each line before it streams (server design 5).
+An adapter gives the tools `run`, `figureSummary`, `undefinedObjects`, the clock and, for the board, `board_read` and the checks of `board`. The server keeps a headless copy of the target to run the tools and check each line before it streams (server design 5).
+
+`boardTarget(data, options)` (round 3) is the board as a request: the items in view, the page, `more`, the circle's area, whether the user allows edits, and the mode of the catalogue (a circle's choice sets it: `geometry` for `measure` and `geometry`, `graphing` for the rest). It has no figure of its own, so the jobs `circle` and `talk` offer only `board_read` and `board`; a figure card's lines go through the `figure` action, whose result lists each line. A target over a live board (the runner's `BoardAgent`, which applies actions and is asynchronous) is left for round 4's live job.
 
 ## 10. Performance
 

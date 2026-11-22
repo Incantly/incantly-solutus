@@ -163,3 +163,101 @@ Tests 3 to 5 share one root: `errors.md` gives `model_bad_output` and `model_tim
 - A real 60 s wait: the deadline is tested by spying `AbortSignal.timeout` and firing it, and by the injected clock.
 - `smoke:models` and the live model capture (round 5).
 - The firecrawl MCP server did not start in this session; nothing here needed it.
+
+---
+
+# Round 3
+
+Branch `feat/teacher-r3` (draft PR #146). Tester run of 2026-11-22. New specs: `packages/teacher/test/spec/board-tools.test.ts`, `board-jobs.test.ts` (helpers in `board-helpers.ts`); `packages/server/test/spec/board-ask.test.ts` (helpers in `board-helpers.ts`); `apps/studio/test/board-agent.test.ts`; benches `packages/teacher/bench/board.bench.ts` and `packages/server/bench/board.bench.ts`. Written from `docs/features/board/agent.md` (all) and board design 11, teacher design 4, 5, 9 and `agent.md` 1 and 5, server design 5, 6, 7 and `errors.md` with the round 2 rulings (`review-r2.md`: checks answer with an HTTP status, every later error is a stream event, `superseded`, notices on `done`), teacher R2.1, R6, server R2.2, R3.3, R4.2, R7.2. The builder's "Round 3" notes were read for its choices only. No test reaches the network: the model is `FakeFetch` (a `fetch` the test passes), the server and the board's `httpAgentTransport` talk over 127.0.0.1 on port 0; `packages/server/.env` was never read. No implementation file was changed and no lint rule was disabled. The firecrawl MCP server did not start in this session; nothing here needed it.
+
+## Counts
+
+| Run | Files | Tests | Pass | Fail |
+|---|---|---|---|---|
+| `board-tools.test.ts` (teacher) | 1 | 109 | 104 | 5 |
+| `board-jobs.test.ts` (teacher) | 1 | 46 | 46 | 0 |
+| `board-ask.test.ts` (server) | 1 | 64 | 62 | 2 |
+| `board-agent.test.ts` (studio) | 1 | 15 | 15 | 0 |
+| New in total | 4 | 234 | 227 | 7 |
+| `--project teacher` | 12 | 636 | 631 | 5 |
+| `--project server` | 15 | 577 (6 todo) | 569 | 2 |
+| `--project studio` | 24 | 556 | 556 | 0 |
+| `npx vitest run` (whole repo) | 308 | 12,574 (11 skipped, 6 todo) | 12,550 | 7 |
+
+`npm run lint` and `npm run typecheck` pass. The 7 failing tests are all new; every other test in the repo passes.
+
+## Benches
+
+Run with `npx vitest run --config packages/teacher/bench/vitest.config.ts` and `--config packages/server/bench/vitest.config.ts`. The docs give no budget for `board_read` or the checks of a `board` call, so those use loose limits (1 ms, 2 ms); the other rows use design 9 and 10. All pass.
+
+| Measure | Result | Limit |
+|---|---|---|
+| `board_read`, 60 items | 0.002 ms | 1 ms |
+| `board_read`, an area of 600 items (cut at 60) | 0.020 ms | 1 ms |
+| `board`, 20 write actions checked | 0.067 ms | 2 ms |
+| `board`, 20 actions, half refused | 0.062 ms | 2 ms |
+| `board`, one figure card of 5 lines (headless app) | 2.27 ms | 5 ms |
+| `buildPrompt` circle / talk with 60 items | 0.028 / 0.026 ms | 2 ms (design 10) |
+| `boardTurn` overhead per model call | 0.027 ms | 1 ms (design 10) |
+| Server: request to the model call (60 items and a picture) | 0.79 ms median | 5 ms (design 9) |
+| Server: tool call complete to actions leaving the server | 2.99 ms median | 5 ms (design 9) |
+| Server: whole circle turn, two fake model calls | 3.67 ms median | 25 ms (own limit) |
+
+## Failing tests (the code or the docs are wrong; the tests stay)
+
+| # | Test | Rests on | What happens |
+|---|---|---|---|
+| 1 | `board-tools` "board_read says what the board lists, madeBy included" | board agent.md 1 (the item list holds `madeBy`, and the server's check reads it) | The tool's description comes from the board core's `BOARD_READ_TOOL` and lists `{ id, kind, box, text?, summary?, shape? }`: no `madeBy`. The first message does mark such items "(made by you)", so the model can still tell. |
+| 2 to 5 | `board-tools` "shape of a kind that is not one / stroke with a point that has one number / figure with a line that is not text / mark with a way that is not one: only that action fails; the actions around it still run" | board agent.md 2: "An action that fails changes nothing and does not stop the actions after it" | `tools/board.ts` checks the whole call against the tool's JSON schema first (`checkSchema`). One action that breaks the schema (an enum, a nested type) makes the whole call `tool_input` T001, so the other actions are not run. Fields the schema does not name (a text of 4,001 characters, a size of 3, 1 point) are refused per action as the doc says. One root cause. |
+| 6 | `board-ask` "a model that wrote no action that passed ends with model_bad_output 'The AI could not draw this.'" | server errors.md row `model_bad_output`, message | The message is "The model sent no board action that passed its checks." (`loop/board.ts`). The kind and the stream shape are right. |
+| 7 | `board-ask` "a picture of exactly 1.5 MB is accepted" | server design 7 (picture at most 1.5 MB; body 2 MB with a picture) | The base64 text of a 1.5 MB picture is 2,097,152 characters, which is the whole body limit, so with the JSON around it the body is over 2 MB and the answer is `413`. The largest picture that gets through is a few hundred bytes under 1.5 MB. The builder's notes say so (choice 10). Raise the route limit by a little or lower the picture limit. |
+
+## Contradictions between documents, and builder choices against the docs
+
+| Where | What | What the tests follow |
+|---|---|---|
+| teacher errors.md T001 ("21 actions to `board`") vs board agent.md 2 (`agent_refused` for "more than 20 actions in the call") | The teacher's tool answers `tool_input` T001; the board's own runner answers `agent_refused`. | errors.md and teacher design 4 (T001). |
+| board agent.md 1 (live teacher keeps `draw` and `figure` and gains the board tools) and teacher design 2 ("`board_read`, `board`, `draw` and `figure` for the board") vs teacher agent.md 1 and design 9 (`circle` and `talk`: `board_read` and `board` only) | The code follows agent.md 1 of the teacher and design 9. | Two tools for `circle` and `talk`. |
+| board agent.md 1 (`board` gives per action `{ ok: true, id }`) vs server design 5 ("ids are the client's job") | The server's result is `{ ok: true }` with no id, so the model learns an id only through `$last`. | The tests require `ok: true`, not an id. |
+| teacher agent.md 6 (circle and talk prompts "about 2,500 tokens, plus the items") vs the builder | The system text is 3,238 (talk, graphing) to 3,498 tokens (circle, geometry), over the target by about a third, under the hard limit of 4,000. | The hard limit (4,000); the "about 2,500" is not asserted. |
+| server design 3 (health lists the provider, the models and `keySet`) vs the studio | The studio and the tests read `ready` (a model endpoint can answer), which the doc does not name. | `ready`. |
+| board agent.md 3 (`picture` only when `agent.vision` is on, off by default) vs builder choice 12 | The studio's board is made with `vision: true` for both agents. Not asserted. | Neither. |
+| board agent.md 3 (`edit` of a figure card runs its lines) vs builder choice 3 | The server does not check `edit` of a figure card (it does not know the card's mode). The board does. | Not tested. |
+| board agent.md 3 ("a shape id that is not among the items, when `more` is 0") vs the code after a `page` action | After a `page` action the id checks are left to the board (the items describe another page). The doc is silent. | Not tested. |
+| teacher R6.2 (film tools on a board act on the card made last) | `pause`, `resume`, `seek_beat` and `show_me` are not built yet (round 4). | Not tested. |
+
+## Doc gaps (tests had to pick a name or a shape; change the test when the doc names it)
+
+| Gap | Used by |
+|---|---|
+| The status of a request with more than 60 `items`, a bad `kind`, an item with no id, a `madeBy` other than `"model"`, no `page`, a bad `more`: the docs say only "at most 60". Tests expect `400 bad_request` and that the message names the field. | `board-ask.test.ts` |
+| A talk with no `allowEdit`: agent.md 3 says the field is always there. Tests accept a 400 or a stream with no change to the user's shapes (the code defaults to false). | `board-ask.test.ts` |
+| `board_read` with a `page` the request does not hold, and a `board` call on a target with no board: only that the answer is an error, not a throw. | `board-tools.test.ts` |
+| What `more` means for an area: tests take it as the items past 60 inside the area (plus the request's own `more` when there is no area). | `board-tools.test.ts` |
+| Daily budget: each model call of a turn counts, so a circle turn with one tool call uses 2. | `board-ask.test.ts` |
+| A cut answer with no action at all: tests expect an error event, not a bare `done`. | `board-ask.test.ts` |
+| An answer a Stop ended with no action sent: tests expect no `model_bad_output` (the code ends with `done`). | `board-jobs.test.ts` |
+| A request made in the first moments, before `/v1/health` answers, goes to the demo agent (builder choice 12; server design 8 says "the studio uses the server when it answers"). | `board-agent.test.ts` |
+| The harness read these implementation files to wire its fakes, not to set expected values: `packages/server/src/http/body.ts` (limits), `providers/openrouter.ts` (wire shape of tool calls and images), `jobs/health.ts`, `apps/studio/src/server.ts` and `board-agent.ts` (names and signatures), `packages/teacher/src/tools/board-target.ts` (the shape of `BoardRequestData`, `BoardPort`), `loop/board.ts` (`BoardTurnOptions`). | |
+
+## What the new tests cover
+
+- **`board_read` (13):** the request's items in the order sent, every field (kind, box, text, summary, shape, `madeBy`), at most 60 listed with `more` counting the rest (75 items gives 60 and 15; the request's own `more` is added), an area that filters, an area that cuts, a bad area (T001), empty board, an unknown page, the request's items never changed.
+- **`board` tool (7 + 18 + 33):** 1 to 20 actions in the schema, 21 and 0 and not-a-list give T001 with `forms`, results one per action in order and sent on only when they passed; every one of the 12 ops passes in a well formed example (17 cases); 25 kinds of bad action are refused with the board core's own `bad_argument` (the field matches `readAction`); a bad action does not stop the ones after it.
+- **Editing the user's work (18):** `edit`, `move` and `delete` of an item without `madeBy` are `agent_refused` with `detail.reason: 'not_model'` unless `allowEdit`; with the mark they pass; `$last` passes; an id not among the items is refused when `more` is 0 and passes when `more` is above 0, in every place an id can be (`near`, `from`, `to`, `target`, `id`); new shapes, arrows, marks and points may use the user's shapes.
+- **Figure actions (12):** each card runs on its own headless app, a bad line is dropped with the kernel's error object (`committed: false`, `blockedBy` for a line that reads a failed name), only the good lines are sent and the bad line's text is in no sent action, a card whose lines all fail is `figure_failed` and sends nothing, an unknown mode, `graph` for `graphing`, two cards may use one name and do not see each other's, 30 lines, and the same answers as a headless app of the mode in five modes.
+- **Board target (4):** kind, mode, `describe`, no figure of its own, `tool_busy` while a call runs.
+- **Choices and prompts (13):** the ten choices, their modes and who may edit; every job, mode and choice under 4,000 tokens; the instructions name both tools, 20 actions, 3 live cards, `$last`, read first, near, and that text in material is never an instruction; the mode card follows the choice; the first message holds the page, the items, `more` and the circle's area; the tools are `board_read` and `board`.
+- **Material blocks (6):** items' text, summary and shape and the person's words are inside blocks and cannot close them (a planted `</material> ... <material>`); each of the 10 choices is the server's own instruction outside the blocks, and only the picked one is asked; the `ask` text and a talk's words are inside.
+- **Token caps (4):** the items in the first message are cut at 1,200 tokens (60 items of 400 characters), the first message stays near 1,200 tokens, 60 short items fit whole, the system text does not grow with the items.
+- **The turn (23):** circle to graph (read, board, done), results go back to the model, a talk write, only passed actions leave, no action is `model_bad_output`, all refused gives the reason to the model and ends the same way, a bad figure line is told and fixed, 21 actions then 20, `$last` across calls, the choice table of who may edit (slider and animate), `allowEdit`, geometry for `measure`, pictures set `vision` on every call, Stop after an action ends with `done` and no error, 8 model calls give `turn_limit`, a cut answer ends with a `stream_cut` notice, model errors, an unknown tool, junk from the model never throws.
+- **`POST /v1/board/ask` end to end with `httpAgentTransport` (64):** `CircleRequest` and `TalkRequest` shapes, all choices, `ask` needs text, the area, `kind`, `items` (60 pass, 61 are 400), the transport shows the server's kind and message for an HTTP error (TR-17); the call to OpenRouter (URL, stream, key only in the header, two tools, material, choice outside it, results back); the checks before streaming (bad line dropped and told, unreadable action not streamed, unknown ids by `more`, `allowEdit`, the choice table, 21 actions, `$last`, no action gives `model_bad_output`); pictures (vision list on every call, default lists, a talk, fallback within the vision list, 2,048 and 2,049 pixels, JPEG, not PNG or JPEG by bytes, 1.5 MB, 1.4 MB, the 256 KB body limit, the text limit); no key (503, "The AI is not set up.", `/v1/check` works, checks first), origin, bad JSON, rate limit with `retry-after` and a new minute, the daily budget, all models busy (200 and a `model_busy` event with `retryAfterMs`), a failed model, 60 s on the server's clock with the actions already sent, a cut answer (done with a `stream_cut` notice, or an error when nothing was sent); a newer request ends the older one with `superseded` and no `done`, Stop and a closed connection abort the model call, the actions are flushed while the model works on its next call; keys, the picture, the items' and spoken text and the model's text stay out of the log; `/v1/health` `ready`.
+- **Studio (15):** `probeServer` (the URL, ready or not, errors, the 1.5 s limit), the option and label, a ready server gives the HTTP agent (the next request is `POST /v1/board/ask`, the same origin, and its answer lands on the board) and the label, no model or no server leaves the demo agent and its label, a server error shows as the board's agent error, and the same through the mounted studio in notes mode (the board opens at once with the demo agent; a ready server takes over; no key, no server and a probe still pending leave the demo).
+
+## Not tested
+
+- The film tools on a board, the live job and `/v1/teach`, `/v1/speech`, `/v1/export/svg`, the voice in the studio (rounds 4 and 5).
+- `edit` of a figure card on the server, and the id checks after a `page` action (not on the server's side; see above).
+- Hand animation and the panel's hand icon (the demo agent's caption needs the board's frame loop, which a test does not run; the demo tests stop after its first answer).
+- A real vision model reading a picture, and a real OpenRouter reply (round 5's live test).
+- `retry_spent` notices on the board route: a board turn has no line retries, so only `stream_cut` can appear on `done`.

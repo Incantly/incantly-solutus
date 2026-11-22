@@ -34,34 +34,38 @@ const FIGURE = `JOB: PROMPT TO FIGURE
 - Repair call: you get each failed line and its error. Write a replacement line for each, or nothing for a line that cannot be fixed.`;
 
 const BOARD = `BOARD RULES
-- Read the board before you write on it. Place new things near what they explain.
-- Maths that moves is a figure. At most 20 actions a call and 3 live figure cards.`;
+- Read the board before you write on it (board_read) when the request names something there. Place new things near what they explain; use the ids from the board, and $last for the shape your previous action made.
+- Maths that moves or can be dragged is a figure action: its lines are lines of the formula language, and it names its mode. A fixed formula is a write with $...$.
+- At most 20 actions a call and 3 live figure cards. Never edit, move or delete what the person made unless the request says you may.
+- The result of board lists every action, and every line of a figure. Fix a figure's lines that failed and send the figure again. Say only what the results report.
+Example. The person drew a parabola (shape:a1) and asked for it as a graph: board actions [{"op":"figure","lines":["f(x) = (x - 1)^2 - 2"],"mode":"graphing","at":{"near":"shape:a1","side":"right"}},{"op":"arrow","from":"shape:a1","to":"$last"}].`;
 
 const CIRCLE = `JOB: CIRCLE TO ASK
-- A person circled something on the board and asked about it. The circled items are in the material block.
-- Answer with board actions: for a graph, a solve, a measurement or an animation, make a figure card beside the circle and draw into it.`;
+- A person circled something on the board and chose what they want. The circle's items are in THE BOARD NOW and the choice is under THE REQUEST.
+- Answer with one board call: normally a figure card placed near the circle and an arrow from the circle to it. Do not answer in words alone.`;
 
 const TALK = `JOB: TALKING AGENT
-- Answer the person's message with board actions and, where it helps, one or two short sentences.
+- Answer the person's message by changing the board with board actions; the board in view is in THE BOARD NOW.
 - Write, draw or move things on the board only as the person asked.`;
 
-/** The instruction text of a job for a toolset with the tools in `tools`. */
-export function jobInstructions(job: JobId, tools: readonly string[]): string {
+/** The instruction text of a job for a toolset with the tools in `tools`; `mode` is the mode a board job's figure cards use. */
+export function jobInstructions(job: JobId, tools: readonly string[], mode?: string): string {
   const has = (name: string): boolean => tools.includes(name);
+  const boardRules = mode === undefined ? BOARD : `${BOARD}\n- Figure cards of this job use the mode "${mode}" and the commands of the catalogue below.`;
   const parts: string[] = [INTRO, RULES];
   switch (job) {
     case 'live':
       parts.push(has('pause') || has('show_me') ? `${LIVE}\n${LIVE_FILM}` : LIVE);
-      if (has('board')) parts.push(BOARD);
+      if (has('board')) parts.push(boardRules);
       break;
     case 'figure':
       parts.push(FIGURE);
       break;
     case 'circle':
-      parts.push(CIRCLE, BOARD);
+      parts.push(CIRCLE, boardRules);
       break;
     case 'talk':
-      parts.push(TALK, BOARD);
+      parts.push(TALK, boardRules);
       break;
   }
   return parts.join('\n\n');

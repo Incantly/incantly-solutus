@@ -5,14 +5,15 @@
 import { err } from '@incantly/kernel';
 import type { Result } from '@incantly/kernel';
 import { faultError, toolUnknownError } from '../errors';
+import { boardReadTool, boardTool } from './board';
 import { drawTool } from './draw';
 import { figureTool } from './figure';
 import { toolInputError } from './schema';
 import type { Target, ToolDef, ToolOutcome, ToolSpec, ToolValue, Toolset } from './types';
 
-const BUILTIN: readonly ToolDef[] = [drawTool, figureTool];
+const BUILTIN: readonly ToolDef[] = [drawTool, figureTool, boardReadTool, boardTool];
 
-/** The names of the tools this package ships (round 1: `draw` and `figure`). */
+/** The names of the tools this package ships (`draw`, `figure`, `board_read`, `board`; round 4 adds the film tools). */
 export const BUILTIN_TOOL_NAMES: readonly string[] = BUILTIN.map((t) => t.name);
 
 const WHOLE = { line: 0, col: 1, endCol: 1 } as const;

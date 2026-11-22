@@ -8,8 +8,8 @@ import type { ServerError } from '../errors';
 
 /** The most bytes of a request body without a picture. */
 export const BODY_LIMIT = 256 * 1024;
-/** The most bytes of a request body with a picture. */
-export const BODY_LIMIT_PICTURE = 2 * 1024 * 1024;
+/** The most bytes of a request body with a picture: a picture of 1.5 MB is 2 MB as base64, and the JSON around it comes on top. */
+export const BODY_LIMIT_PICTURE = 2.5 * 1024 * 1024;
 /** The most bytes of a picture. */
 export const PICTURE_BYTES = 1.5 * 1024 * 1024;
 /** The most pixels along a side of a picture. */

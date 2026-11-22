@@ -10,6 +10,7 @@ import { badRequest, notFound, serverError } from '../errors';
 import type { ServerError } from '../errors';
 import type { Settings } from '../env';
 import { check } from '../jobs/check';
+import { boardAsk } from '../jobs/board';
 import type { Context, Route } from '../jobs/context';
 import { figureDraw } from '../jobs/figure';
 import { health } from '../jobs/health';
@@ -17,7 +18,7 @@ import { Job } from '../jobs/job';
 import { RateLimiter } from '../limits/rate';
 import { silentLog } from '../log';
 import type { LogFn } from '../log';
-import { BODY_LIMIT, parseJsonObject, readBody } from './body';
+import { BODY_LIMIT, BODY_LIMIT_PICTURE, parseJsonObject, readBody } from './body';
 import { checkOrigin, corsHeaders, preflightHeaders } from './cors';
 import { onClientClose } from './ndjson';
 
@@ -26,6 +27,8 @@ export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/health', bodyLimit: 0, handle: health },
   { method: 'POST', path: '/v1/check', bodyLimit: BODY_LIMIT, handle: check },
   { method: 'POST', path: '/v1/figure/draw', bodyLimit: BODY_LIMIT, handle: figureDraw },
+  // the board may send a picture of the circled area: the handler holds a request without one to `BODY_LIMIT`
+  { method: 'POST', path: '/v1/board/ask', bodyLimit: BODY_LIMIT_PICTURE, handle: boardAsk },
 ];
 
 const routeNames = (routes: readonly Route[]): string[] => routes.map((r) => `${r.method} ${r.path}`);
