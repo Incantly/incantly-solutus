@@ -141,8 +141,8 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 
 ### 6.3 Drawing it with no lag
 
-- The stroke being drawn is on its own **live layer**. Each frame draws only the new segment onto it; nothing else on the board redraws.
-- Predicted samples (`getPredictedEvents`) draw a short tail on the overlay, cleared every frame and never stored.
+- The stroke being drawn is on its own **live layer**. On the web it is a WebGL 2 canvas of its own: each frame the stroke's triangles go to the GPU from the outliner's own typed arrays and are drawn in one colour, so nothing else on the board redraws and no number object is made per call (the stroke's opacity is the canvas's CSS opacity). Where the browser has no WebGL 2 the layer is a Canvas 2D canvas that draws only the new groups.
+- Predicted samples (`getPredictedEvents`) draw a short tail on the same layer, a strip of triangles at half strength that is made again every frame and never stored.
 - On the web the live layer's canvas asks for a low-latency context (`desynchronized: true`) where the browser offers it.
 - On release, the outline is built, the stroke joins the page, and its tile is redrawn once.
 
@@ -228,7 +228,7 @@ When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from th
 1. **Camera**: `x, y, zoom` per page; zoom from 0.05 to 20. Wheel and pinch zoom about the pointer; Space-drag, middle-drag and two fingers pan.
 2. **Spatial index**: a sparse grid of 512-unit cells per page, each holding the ids of shapes whose bounds touch it. Insert, move and remove cost the cells a shape touches. Queries for the viewport, a hit point, a lasso or a box read only those cells.
 3. **Culling**: only shapes in the viewport (plus a 256-pixel margin) are drawn. Selected shapes and the shape being edited are always drawn.
-4. **Tiles**: finished content is drawn into 512 × 512 device-pixel tiles at power-of-two zoom steps. Panning draws tiles. A changed shape marks only the tiles it touches. Tiles are kept in a least-recently-used cache with a memory cap (64 MB default, 24 MB on a device with 4 GB or less). A tile is drawn in order on the GPU: strokes as triangles, each run of shapes and the page's paper with Canvas 2D on one canvas that is copied to a texture and drawn over what the tile holds so far, so a tile of ten thousand strokes and a few shapes costs the strokes' triangles. Tiles are drawn until a frame has spent 4 ms (at least one, at most 6), and a frame that draws no tile and changes no camera composes nothing.
+4. **Tiles**: finished content is drawn into 512 × 512 device-pixel tiles at power-of-two zoom steps. Panning draws tiles. A changed shape marks only the tiles it touches. Tiles are kept in a least-recently-used cache with a memory cap (64 MB default, 24 MB on a device with 4 GB or less). A tile is drawn in order on the GPU in one draw call: strokes as triangles, and the fills and lines of every shape as triangles too (the view package's path tessellation: fan or ear clipping for a fill, quads with round joins and caps and dashes for a line, each fill and line with its own depth so it blends once), and text as quads from a glyph atlas. Only the page's paper, pictures, shapes inside a frame and a shape the tessellator refuses are drawn with Canvas 2D on a canvas that is copied to a texture and drawn over what the tile holds so far. Tiles are drawn until a frame has spent 4 ms (at least one, at most 6), a tile with many shapes is drawn in slices that stop at that budget and go on in the next frame, and a frame that draws no tile and changes no camera composes nothing.
 5. **Steady zoom**: while the zoom changes, tiles of the nearest step are scaled; the exact step is drawn 150 ms after the zoom stops. A view that would need more than 48 tiles at the steady step (zoomed out far from it) uses the step of the zoom as it is now, so tiles are not drawn twice. Stroke widths and text use that steady zoom, so nothing re-tessellates mid-zoom.
 6. **Level of detail**: below a shape's size threshold on screen, kinds draw less (sticky notes without a shadow, dashed lines solid, text under 4 px as a grey bar, images at a lower resolution, figure cards as their picture).
 
@@ -319,19 +319,19 @@ All of `docs/design/performance.md` applies. The board's own budgets, measured i
 
 | What | Budget | Measured (Chrome, CPU ×4) | Measured (Node) |
 |---|---|---|---|
-| Pen sample to pixel on screen | under 16 ms; 8 ms on a 120 Hz screen | 10.4 ms mean (95%: 15.8 ms) at 60 Hz | needs a screen |
+| Pen sample to pixel on screen | under 16 ms; 8 ms on a 120 Hz screen | 7.3 to 10.2 ms mean (95%: 15.2 to 17.0 ms) at 60 Hz | needs a screen |
 | Core work per input sample | under 0.1 ms | 0.04 ms (the whole pointer-move handler) | 0.0004 ms |
-| One frame while drawing a stroke | under 2 ms of script | 0.32 ms mean, 0.9 ms at 95% | 0.011 ms |
-| Pan and zoom with 10,000 shapes on the page | 60 fps; frame under 8 ms | pan 1.1 ms at 95%, 60 frames a second; zoom 10.2 ms at 95% (7.1 ms with strokes only): over | 0.16 ms |
+| One frame while drawing a stroke | under 2 ms of script | 0.25 to 0.42 ms mean, 0.8 to 1.0 ms at 95% | 0.0094 ms |
+| Pan and zoom with 10,000 shapes on the page | 60 fps; frame under 8 ms | pan 1.0 to 1.2 ms at 95%, 60 frames a second; zoom 5.4 to 5.5 ms at 95% (10.2 ms before shapes were drawn on the GPU) | 0.15 ms |
 | Hit test at a point | under 0.1 ms | needs no screen | 0.002 ms |
-| Lasso of 2,000 strokes | under 4 ms | 3.8 to 4.3 ms | 1.14 ms |
-| Open a 1,000-shape board | under 200 ms to first picture | 51 ms | 6.3 ms (load, index and the draw lists of the tiles in view) |
-| Switch to a page of 2,000 shapes | under 100 ms | 65 ms to the last tile, 11 to 14 ms to the first frame | 4.6 ms |
+| Lasso of 2,000 strokes | under 4 ms | 2.6 to 3.3 ms, the slowest of four runs | 0.39 ms |
+| Open a 1,000-shape board | under 200 ms to first picture | 62 to 68 ms | 6.2 ms (load, index and the draw lists of the tiles in view) |
+| Switch to a page of 2,000 shapes | under 100 ms | 42 to 51 ms to the last tile, 8 to 10 ms to the first frame | 4.8 ms |
 | Undo of a 500-shape paste | under 16 ms | needs no screen | 0.18 ms (0.31 ms with bindings) |
-| Garbage while drawing | none (0 collections over a 10 s stroke) | 4 collections: over (2 with the browser's coalesced events hidden) | 0 |
+| Garbage while drawing | none (0 collections over a 10 s stroke) | 3 collections against 0 on a blank page that calls `getCoalescedEvents()` as the board does: over (BR-77) | 0 |
 | Memory for 100,000 ink points | under 8 MB in the store | needs no screen | 3.1 MB |
 
-The numbers, how they are measured and the causes of the three rows that are over are in `handoff/board/bench.md`; the scripts are `packages/board/bench/*.bench.ts` (Node) and `packages/board/bench/chrome-board.mjs` (Chrome).
+The numbers, how they are measured and the cause of the row that is over are in `handoff/board/bench.md`; the scripts are `packages/board/bench/*.bench.ts` (Node) and `packages/board/bench/chrome-board.mjs` (Chrome).
 
 How:
 
