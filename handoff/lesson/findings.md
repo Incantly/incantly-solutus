@@ -14,3 +14,9 @@ Bugs and gaps found while fixing round 1 (LR-1 to LR-8) that are not in `review-
 
 - `state-no-shadow-null` (a field set to a `NO_*`, `NONE_*`, `EMPTY_*` or `IDLE_*` constant counts as its null): no site in any package. The only class with such a field is the lesson `Lesson` (`run = NO_RUN`), now set in one method and cleared in one.
 - `state-refusal-reported` (already an error for `packages/server` and `packages/teacher` in `eslint.config.js`; now it also refuses a third argument that can be nothing): one site, the lesson's `StateMachine`, fixed. Nothing is left for a later batch.
+
+## Found while fixing round 2 (LR-9 to LR-12)
+
+| Id | Where | Problem | Suggested fix |
+|---|---|---|---|
+| LF-6 | `apps/studio/src/voice.ts` (single-turn voice) | LR-10 changed only the refused microphone (`not-allowed`, `service-not-allowed`). Any other microphone failure (`audio-capture`, `network`, `no-speech` with an error) still shows "The microphone stopped: <reason>." with no word that typing works. | Add "Type your question below." to that line too, as the lesson's `microphoneMessage` already does. |

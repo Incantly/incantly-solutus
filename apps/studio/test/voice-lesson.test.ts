@@ -417,10 +417,19 @@ describe('TE4 rows: listening', () => {
   it('listening --fail--> idle: a recognition error shows its reason in the transcript', () => {
     const r = rig();
     r.lesson.listen();
+    r.recognisers[0]?.end('network');
+    expect(r.lesson.state).toBe('idle');
+    const note = r.lesson.transcript.find((l) => l.who === 'notice');
+    expect(note?.text).toContain('network');
+  });
+
+  it('listening --fail--> idle: a refused microphone says it is off and where to type (LR-10)', () => {
+    const r = rig();
+    r.lesson.listen();
     r.recognisers[0]?.end('not-allowed');
     expect(r.lesson.state).toBe('idle');
     const note = r.lesson.transcript.find((l) => l.who === 'notice');
-    expect(note?.text).toContain('not-allowed');
+    expect(note?.text).toBe('The microphone is off. Type your question below.');
   });
 
   it('listening --type--> thinking: typing while the microphone is open closes it and sends the typed text', async () => {

@@ -52,3 +52,58 @@ None of these fail a test, because each was tested as the docs and the builder's
 - `apps/studio/src/lesson-client.ts` (round 1 item 8): not in the list for this round; studio tests belong with round 2's UI.
 - `CONVERSATION_MACHINE`, the Talk panel and TR-50 are round 2.
 - The live run (R7.2) is round 2.
+
+
+# Lesson: test report, round 2
+
+Tester for `feat/lesson-r2` (draft PR #151). Tests were written from `docs/features/lesson/design.md` (1, 3, 6 `CONVERSATION_MACHINE`, 7, 8), `.kiro/specs/lesson/requirements.md` R1 and R7.1, `handoff/lesson/plan.md` Round 2, `docs/state-machines.md` LE2 and `handoff/teacher/findings.md` TR-50, using the public API only (`LessonConversation`, `CONVERSATION_MACHINE`, `boardConversation`, `mountVoice`, `mountStudio`). The builder's notes were read for choices; where a choice differs from the docs the docs were tested. No implementation was changed. No break-the-code checks. No network, microphone or speaker: a fake server (NDJSON fed by hand), fake recogniser, fake silence timer (and `vi.useFakeTimers` for the panel), fake clips and audio elements, a fake `SpeechRecognition`, and a real board in happy-dom for the undo steps.
+
+## Counts
+
+| File | Tests | Failing |
+|---|---|---|
+| `apps/studio/test/spec/lesson-conversation-machine.test.ts` (the 22 LE2 rows read from `docs/state-machines.md`, every other pair refused and reported, the public calls in every state, no fault) | 62 | 0 |
+| `apps/studio/test/spec/lesson-conversation.test.ts` (start, thinking, speaking, microphone by itself, closed while speaking, barge-in, 8 s silence, no recogniser, End, `ended`, `lesson_unknown`, failed start, plan view, `say`, `actions`) | 76 | 1 |
+| `apps/studio/test/spec/lesson-board.test.ts` (`boardConversation` on a real board: one undo step for each answer) | 9 | 0 |
+| `apps/studio/test/spec/lesson-panel.test.ts` (Talk panel: TR-50, Start/End lesson, plan and step, microphone, Space, silence, text box, single-turn voice, the opened studio) | 33 | 1 |
+| Total new | 180 | 2 |
+| Helper file (no tests) | `apps/studio/test/spec/lesson-helpers.ts` | |
+
+Full run, once at the end (before the last test, the TR-50 one, was added): 329 files, 13,375 passed, 1 failed, 11 skipped, 6 todo. The TR-50 test was then run on its own file (32 pass, 1 fail). `npm run lint` (eslint and check-repo) and `npm run typecheck` pass (lint fixed once during the work: `incantly/state-no-flag-soup` on a fake clip, now a `StateMachine`). The studio benches (`npx vitest run --config apps/studio/bench/vitest.config.ts`) pass: one line 0.0004 ms (target 0.01), one event 0.0026 ms (0.2), a turn of 10 events and 3 board actions 0.23 ms (5), a turn after 320 turns 0.026 ms (flat).
+
+## Failing tests
+
+1. `lesson-conversation.test.ts`: "lesson_unknown while a sentence plays ends the lesson at once, by LE2". LE2 says an error `lesson_unknown` is handled "at once". The conversation keeps the sentence playing and goes `off` only when the end marker is reached (the sentences already queued are spoken first). With no sentence queued it is off at once and that case passes. The docs are ambiguous (see contradiction 1); the review should rule it, then either the code or the doc changes.
+2. `lesson-panel.test.ts`: "TR-50: a microphone that is refused says plainly that typing works" (single-turn voice). TR-50 asks for the microphone to start only on its button (that holds, tested) and for a plain line that typing works. In the single-turn voice (graph and geometry views) the refused microphone still shows only "The microphone stopped: not-allowed." with no word about typing. The lesson's conversation does say it (`microphoneMessage`, tested and passing).
+
+## Where a builder choice differs from, or goes beyond, the docs
+
+1. **`lesson_unknown` "at once" (failing test 1).** LE2 invariants say `lesson_unknown` "is the same, at once" as the server's `ended`; the transitions table lists it as its own guard of `end`, apart from "the end marker of a turn the server ended". The code treats it as the end marker case (the sentences already queued are spoken, then `end`). Either reading is a doc ruling; I tested the one the table lists.
+2. **Design 6 table and LE2 disagree.** Design 6 has no `pause` by a tap, no `listen` from `off`, no `type` from `paused` to `thinking` as its own row (it says "`listening` or `thinking`"), and no `end` from `paused` as such. LE2 has all of them. LE2 was tested. Design 6 should gain the rows or say "see LE2".
+3. **Space.** Design 6 says "learner taps the microphone or presses Space". The panel acts on Space only while the panel is open, only while the teacher thinks or speaks, and not from a text box or a button (builder choice 4). Tested: Space interrupts while speaking; a space typed in the text box does not. Not tested: Space with the panel closed (the docs are silent).
+4. **Closing the panel pauses** (builder choice 3). LE2's `pause` row lists "the panel was closed", so this is the doc and was tested as such. The builder's open point (end instead of pause) is a product ruling.
+5. **A failed `/start` ends the lesson** (builder choice 2). LE2 says so ("a lesson that is over: the notice is shown and the conversation goes `off`"). Tested as the doc says.
+6. **Recognition that ends on words not marked final sends them** (builder choice 6). Not in LE2 (it says an end of recognition with nothing heard pauses). Not tested.
+7. **The plan view is cleared by a new lesson, not by `end`** (builder choice 10). LE2 says the plan view is cleared on `start` and on `listen` from `off`; tested as that, and that the ended lesson's transcript stays until then.
+8. **Design 8 studio rows.** The doc names `apps/studio/bench/lesson.bench.ts`; the three studio rows hold in it. They are not repeated as spec tests.
+9. **`lesson_busy`.** The studio never meets it from the same address (round 1 report, contradiction 1); no studio test, since the barge-in sends a new turn and the old one is aborted.
+
+## What is covered
+
+- **LE2:** the 22 rows are parsed from the doc and compared with the table both ways (no row missing, none extra); the other 23 pairs are refused, reported once, and leave the state; the doc's "reachable invalid" pairs have no row; every public call in every state does what the table says (33 combinations) and reports no fault.
+- **Start lesson to listening:** off to thinking at once, `/start` with the board, then `/turn` with the id, the words and the board; thinking to speaking when the first clip plays; sentences in order, one at a time, audio asked for at once; a missing clip spoken by the browser's voice; after the queue drains the microphone opens by itself (not before, not while the stream is open, not while a clip plays); a turn with only actions goes to listening; the id is kept (no second `/start`).
+- **Microphone closed while speaking:** no recogniser open when any clip starts, over three turns; never open in `thinking` or `speaking`; a result that arrives after the learner was answered is dropped.
+- **Barge-in:** a tap or Space while speaking or thinking stops the clip, drops the queue, aborts the turn, commits the board's gesture as stopped (once) and opens the microphone; typing does the same and starts the next turn at once; events of the old turn that arrive late (a stream that ignores the abort) add no line, sound, action or plan, and do not end the new turn.
+- **Silence:** the 8 s timer starts when the microphone opens, is cancelled by any heard words, none while the teacher thinks or speaks; fired, the conversation pauses and the microphone closes; the browser's own end with nothing heard pauses; a failed microphone pauses and says typing works; a tap while listening pauses; from `paused` a tap, Space or typing goes on with the same lesson id. Also through the panel with faked `setTimeout`: 7.999 s nothing, 8 s paused.
+- **No recogniser:** `listen()` refused; the lesson starts by typing; `listening` has nothing open, no timer and never pauses; the text box takes the focus; typing goes on turn after turn; a tap or Space still interrupts.
+- **End:** End in each state; the server is told with the lesson id; `done: { ended: true }` speaks the last sentences, then off, no microphone, no `/end` call; `lesson_unknown` in the stream and as the server's 404 is off with "Start a new lesson" and no `/end` call; a new lesson gets a new id and an empty transcript and plan view; a failed start (503 with a message, unreachable, begun by the microphone) shows the message and goes off; another error shows its notice and the lesson goes on; a cut stream or junk waits for the learner.
+- **Plan view:** the last `lesson` event as it came, replaced by the next, applied in any state without a move, kept through a turn, a pause and the next words, cleared by a new lesson; shown in the panel with the step marked (`aria-current="step"`) and before the transcript.
+- **Board:** `say` is a teacher line in order, transcript capped at 60; `actions` are applied when they arrive while the teacher still speaks; one `begin` and one `finish` for each answer however many `actions` events; a barge-in finishes once as stopped; late actions after a barge-in are not run; on a real board three `actions` events are one undo step, two answers are two steps, a stopped answer is one step, and a new answer begun before the last was finished commits the last first.
+- **Talk panel and TR-50:** opening the panel (on a board, in a graph view, reopened, in the opened studio notes and graphing modes) starts no recognition; the microphone starts only on its button or on Start lesson with an empty box; where nothing can listen there is no microphone button and the text box has the focus; Start lesson, End lesson, Enter, the plan, "Start a new lesson", the failed-start message, transcript text (not HTML), click on the microphone and Space interrupt, Space in the text box does not, closing the panel pauses, and the single-turn voice goes idle and does not reopen the microphone.
+
+## Not covered
+
+- The live run (R7.2) is Opus's (plan Round 2 item 6); no screenshots here.
+- Space with the panel closed, and the studio's own Space (pan) when the teacher is silent: the docs say nothing precise.
+- `/v1/speech` details (audio formats, sample rate) belong to the round 4 voice tests.
+- The three studio design 8 rows are measured by the builder's bench, which was run, not copied.

@@ -555,3 +555,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 .voice-row { display: flex; gap: 6px; align-items: center; }
 .voice-row .voice-input { flex: 1; min-width: 0; border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 8px; }
 .voice-mic.on { background: var(--accent-soft); color: var(--accent); }
+.voice-panel [hidden] { display: none; }
+.voice-lesson-row { display: flex; gap: 6px; }
+.voice-lesson-row .voice-start { flex: 1; }
+.voice-plan { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--tab); }
+.voice-step { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.voice-steps { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); max-height: 96px; overflow: auto; }
+.voice-steps .voice-step-now { color: var(--ink); font-weight: 600; }
+.voice-panel[data-mode='lesson'][data-state='paused'] .voice-status { color: var(--muted); font-style: italic; }

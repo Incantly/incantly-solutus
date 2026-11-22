@@ -16,7 +16,7 @@ import { boardAgentOption, connectBoardAgent } from './board-agent';
 import { probeServer } from './server';
 import { mountVoice } from './voice-ui';
 import type { VoiceUi } from './voice-ui';
-import { boardLesson, figureLesson } from './voice-targets';
+import { boardConversation, figureLesson } from './voice-targets';
 import { mountExamScreens } from './modes/exam-ui';
 import type { ScientificView } from './modes/scientific';
 import type { MathKeyboard } from './modes/keyboard';
@@ -742,7 +742,9 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   modeRef.current = modes;
   // the voice lesson (teacher design 8): the Talk button in the views that hold a figure or the board
   const voice = mountVoice({
-    target: () => (boardPane.isOpen() && boardRef.current !== undefined ? boardLesson(boardRef.current) : figureLesson(session, () => modes.mode.id)),
+    target: () => figureLesson(session, () => modes.mode.id),
+    // on the board the Talk panel holds a lesson (lesson design 6); in a graph or geometry view it is the single-turn voice
+    conversation: () => (boardPane.isOpen() && boardRef.current !== undefined ? boardConversation(boardRef.current) : undefined),
   });
   const talkable = (m: { readonly views: { readonly available: readonly string[] } }): boolean => m.views.available.includes('graphics') || m.views.available.includes('board');
   voice.setAvailable(talkable(modes.mode));

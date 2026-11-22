@@ -2423,6 +2423,60 @@ Written before the code of round 1. The server's lesson is one machine (LE1). Th
 - **A turn that arrives while one runs** is not a move of its own. From the client that started the running turn it is a barge-in: the store sends `turnEnd` for the old turn (its function stops it), then `speak` or `replan` for the new one, in one call, so the old turn finishes with `superseded` and its words are in the memory as interrupted. From another client it is refused with `lesson_busy` and the lesson does not change.
 - **Reachable invalid states or transitions:** `planned` in `teaching` has no row (a plan that is replaced later in the lesson changes the memory, not the state; the store asks `can` first). `turnEnd` in `waiting` or `new` has no row (a late end of a replaced turn is dropped by its number, and the store asks `can` first). `speak`, `replan` and `begin` in `planning` or `teaching` have no row (the takeover sends `turnEnd` first). Nothing is accepted in `ended`.
 
+### Round 2 (branch `feat/lesson-r2`): the conversation on the board
+
+Written before the code of round 2. The studio's conversation is one machine (LE2); the server's machine (LE1) is not changed.
+
+| Part | Where | States come from |
+|---|---|---|
+| The conversation | `apps/studio/src/lesson.ts` `LessonConversation`, `CONVERSATION_MACHINE` | LE2 |
+| The lesson's plan and step shown at the top of the panel | `LessonConversation.view` | Data: the last `lesson` event of the server (`{ plan, step, state }`), shown as it came. It holds no state of the studio: the server's machine (LE1) says what the lesson is doing |
+| The lesson's id | `LessonConversation.#lessonId` | Data: set when `/v1/lesson/start` answered, put back to undefined when the conversation moves to `off` (the field is read only while the conversation is not `off`) |
+| The board's side of a turn (the gesture of the answer) | `apps/studio/src/voice-targets.ts` `boardConversation` | The gesture's own machine (B25). The target holds the answer's gesture in a record `{ gesture }` made by `begin` and committed (and dropped) by `finish`, so every `actions` event of one turn is one undo step |
+| The Talk panel's lesson controls (Start lesson, End lesson, plan, step) | `apps/studio/src/voice-ui.ts` | Hold no state: they read the conversation. Whether the panel is open is the only thing the panel keeps |
+
+### LE2. Conversation (studio)
+
+- **Where:** `apps/studio/src/lesson.ts` `LessonConversation`, `CONVERSATION_MACHINE`. It replaces the single-turn `VOICE_MACHINE` (TE4) on the board; the Talk panel of a graph or geometry view keeps `VoiceLesson` and TE4, which no longer opens the microphone when the panel opens (TR-50). The conversation reuses `SentenceQueue`, `Clip`, `ClipSource`, `BrowserVoice` and `Recogniser` of `voice.ts`, and the lesson client of `lesson-client.ts`.
+- **States:** `off` (no lesson is running here; the panel offers Start lesson), `listening` (it is the learner's turn: the microphone is open where the browser can listen; where it cannot, the text box has the turn and nothing is open), `thinking` (a turn is open and no sentence is playing: the lesson is being started, the model is working, or the next sentence's audio is being made), `speaking` (a sentence's audio, or the browser's voice, is playing), `paused` (the lesson is on but nothing listens and nothing runs: 8 seconds of silence, a microphone that failed, the learner paused it, or the panel was closed).
+
+| State | Holds |
+|---|---|
+| `off` | the transcript of the lesson that ended, if any; no lesson id, no turn |
+| `listening` | the lesson id (when the first turn has been made), the open recognition and the text heard so far (interim, never sent), the 8 s silence timer; none of these where the browser cannot listen |
+| `thinking` | the lesson id (when started), the turn's `AbortController`, the sentence queue (audio fetched ahead), the board's gesture of the answer |
+| `speaking` | the same, and the clip that plays now |
+| `paused` | the lesson id and the transcript |
+
+- **Invariants:**
+  - The turn's `AbortController`, the queue, the board target and what the server said about the turn's end are one record, `run`, made when a turn begins and dropped when the conversation leaves `thinking` or `speaking` for any other state (the field and the machine cannot disagree). The recognition and its silence timer are one record, `ear`, made on the move into `listening` and closed on every move out of it.
+  - **The microphone is closed while the teacher speaks:** the recognition exists only in `listening`, and the teacher's sentences are played only in `thinking` and `speaking`, so the two never overlap and the microphone cannot hear the teacher. A barge-in is a tap on the microphone or Space (the `listen` move), never speech.
+  - **The queue** is as the voice lesson's: each sentence keeps its text and the promise of its audio, started when the sentence is queued; the end of the turn is a marker queued when the turn ends, so `drained` is sent only when the marker is reached. A sentence whose audio failed is spoken with the browser's voice, in its place.
+  - **Listening again by itself:** `drained` moves to `listening` and opens the microphone; where the browser cannot listen it opens nothing, the panel puts the focus in the text box, and the lesson waits for `type`.
+  - **Silence:** the timer starts when the microphone opens and is cleared when any words are heard; when it fires the conversation moves with `pause`. The browser's own end of recognition with nothing heard is the same `pause`. Where nothing listens there is no timer.
+  - **The end of the lesson comes from the server:** a `done` event with `ended: true` (the learner said "stop the lesson", or the 200th turn) is kept in `run`; the turn's last sentences are spoken, and at the end marker the conversation sends `end` instead of `drained` (LF-5). An error `lesson_unknown` is the same, at once: the notice is shown and the panel offers Start a new lesson.
+  - **A new lesson:** the first words start it. `/v1/lesson/start` is asked inside the first turn (`thinking`), so a lesson id exists from the first turn's start; a start that failed is a lesson that is over: the notice (the server's message) is shown and the conversation goes `off`, so the panel offers Start lesson again. A turn that begins with no lesson id (a lesson begun by the microphone) asks `/start` first.
+  - **Barge-in** (`listen`, `type`, `pause`, `end` out of `thinking` or `speaking`) stops the clip, drops the queue, aborts the turn and commits the board's gesture first, and an event of the old turn that arrives later is ignored because its `run` is no longer the current one. The server records the interrupted turn in the lesson's memory (LR-3).
+  - **The board:** `actions` events of one turn go through the board's agent runner inside one gesture made when the turn begins and committed when it ends or is stopped, so the whole answer is one undo step. `say` goes into the transcript and the voice, `lesson` replaces the plan view; all three are applied when they arrive, whatever the state.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `off` | `start` | the learner typed or said the first words | `thinking` | the plan view is cleared; the turn begins (`/start`, then the first turn) |
+| `off` | `listen` | the browser can listen and the box is empty | `listening` | the microphone opens; the plan view is cleared |
+| `listening` | `heard` | the final text is not empty | `thinking` | the microphone and timer close; the turn begins |
+| `listening`, `paused` | `type` | the text box has text | `thinking` | the microphone and timer close if open; the turn begins |
+| `thinking`, `speaking` | `type` | the text box has text (barge-in by typing) | `thinking` | clip stopped, queue dropped, turn aborted, gesture committed; the new turn begins |
+| `thinking` | `play` | the next sentence is ready to play | `speaking` | the clip starts |
+| `speaking` | `play` | the clip ended and a sentence is next | `speaking` | the next clip starts |
+| `speaking` | `wait` | the clip ended and the queue has no sentence yet | `thinking` | nothing plays |
+| `thinking`, `speaking` | `drained` | the end marker was reached and the server did not end the lesson | `listening` | the run is dropped; the microphone opens (or the text box takes the focus) |
+| `thinking`, `speaking`, `paused` | `listen` | the tap on the microphone or Space | `listening` | clip stopped, queue dropped, turn aborted, gesture committed; the microphone opens (or the text box takes the focus) |
+| `listening`, `thinking`, `speaking` | `pause` | 8 s of silence, the recognition ended with nothing heard, the microphone failed (the reason is shown, and that typing works), the tap on the microphone while listening, or the panel was closed | `paused` | everything stopped as in a barge-in; the lesson id stays |
+| `listening`, `thinking`, `speaking`, `paused` | `end` | the End button, the end marker of a turn the server ended, `lesson_unknown`, or a `/start` that failed | `off` | everything stopped; `/v1/lesson/end` is asked when the learner ended it and the server has not; the lesson id is dropped |
+
+- **Reachable invalid states or transitions:** `play` and `wait` in `listening`, `paused` and `off` have no row (a late event of an old run is ignored by comparing `run`, and the player asks `can` first). `heard` outside `listening` has no row (a late recognition result after a barge-in is dropped). `listen` in `listening` has no row (the tap pauses), and `pause` in `paused` and `off` has none; the buttons ask `can`. `start` outside `off` has no row (the panel shows Start lesson only in `off`). `end` in `off` has no row. The turn's own `done` or `error` event is not a move: it queues the end marker, and the player moves with `drained` or `end`.
+
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
 Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same. `GRID_MACHINE` and `ERROR_MACHINE` first had one row copied into every state; `incantly/state-table-refuses` found them (board review BR-1) and their rows now list only the moves that may happen.

@@ -27,6 +27,11 @@ export const VOICE_MACHINE: MachineTable<VoiceState, VoiceMove> = {
   speaking: { play: 'speaking', wait: 'thinking', drained: 'idle', listen: 'listening', type: 'thinking', stop: 'idle', fail: 'idle' },
 };
 
+/** True when the browser or the learner refused the microphone (the recogniser's `not-allowed` failures). */
+export function microphoneRefused(failure: string): boolean {
+  return failure === 'not-allowed' || failure === 'service-not-allowed';
+}
+
 /** A sentence of the teacher's voice, ready to play. */
 export interface Clip {
   /** Plays the clip; resolves when it ends or `signal` aborts. Rejects when the audio cannot be played. */
@@ -253,7 +258,7 @@ export class VoiceLesson {
     this.#closeRecogniser();
     if (failure === undefined) {
       if (this.#machine.can('stop')) this.#machine.send('stop');
-    } else this.#fail(`The microphone stopped: ${failure}.`);
+    } else this.#fail(microphoneRefused(failure) ? 'The microphone is off. Type your question below.' : `The microphone stopped: ${failure}.`);
     this.#changed();
   }
 
@@ -388,18 +393,26 @@ export class VoiceLesson {
   }
 
   /** Plays the sentence's clip; the browser's voice speaks it when there is no clip or the clip cannot play. */
-  async #speak(text: string, clip: Clip | undefined, signal: AbortSignal): Promise<void> {
-    try {
-      if (clip !== undefined) {
-        await clip.play(signal);
-        return;
-      }
-    } catch {
-      // the audio could not be played: the browser's voice says it instead
-    } finally {
-      clip?.dispose();
-    }
-    if (signal.aborted) return;
-    await this.#options.browserVoice?.say(text, signal);
+  #speak(text: string, clip: Clip | undefined, signal: AbortSignal): Promise<void> {
+    return speakSentence(text, clip, signal, this.#options.browserVoice);
   }
+}
+
+/**
+ * Plays one sentence: its clip when there is one, else (or when the clip cannot play) the browser's voice. Resolves when
+ * the sentence ends or `signal` aborts. The clip is disposed. Shared by the single-turn voice lesson and the conversation.
+ */
+export async function speakSentence(text: string, clip: Clip | undefined, signal: AbortSignal, voice: BrowserVoice | undefined): Promise<void> {
+  try {
+    if (clip !== undefined) {
+      await clip.play(signal);
+      return;
+    }
+  } catch {
+    // the audio could not be played: the browser's voice says it instead
+  } finally {
+    clip?.dispose();
+  }
+  if (signal.aborted) return;
+  await voice?.say(text, signal);
 }

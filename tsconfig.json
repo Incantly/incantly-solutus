@@ -8,6 +8,7 @@
     "packages/*/test",
     "packages/*/bench",
     "apps/*/src",
+    "apps/*/bench",
     "*.config.ts"
   ]
 }

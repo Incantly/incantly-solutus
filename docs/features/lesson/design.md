@@ -116,17 +116,29 @@ The studio's conversation is one field over `CONVERSATION_MACHINE`, which replac
 | From | Event | To |
 |---|---|---|
 | `off` | start lesson | `thinking` |
+| `off` | learner taps the microphone (where the browser can listen, box empty) | `listening` |
 | `listening` | heard | `thinking` |
-| `listening` | silence for 8 s | `paused` |
+| `listening` | silence for 8 s, the browser ends the recognition with nothing heard, the microphone fails, or a second tap on the microphone (pause) | `paused` |
+| `listening` | learner types | `thinking` |
 | `thinking` | first sentence | `speaking` |
 | `speaking` | queue drained | `listening` |
 | `thinking`, `speaking` | learner taps the microphone or presses Space (barge-in) | `listening` |
-| `paused` | learner taps the microphone or types | `listening` or `thinking` |
-| any but `off` | End, or the server says the lesson ended | `off` |
+| `thinking`, `speaking` | learner types (barge-in), or the panel is closed (pause) | `thinking`, `paused` |
+| `paused` | learner taps the microphone or presses Space | `listening` |
+| `paused` | learner types | `thinking` |
+| any but `off` | End, the server says the lesson ended, `lesson_unknown`, or a `/start` that fails | `off` |
+
+`docs/state-machines.md` LE2 is the full table (22 rows); this one lists the moves in the learner's words.
 
 - The microphone is closed while the teacher speaks, so it does not hear the teacher's voice. A barge-in is a tap or Space, not speech.
 - Where the browser cannot listen, the text box is the way in, and the conversation goes on the same way.
 - Opening the Talk panel does not start the microphone (TR-50); "Start lesson" does.
+- **`lesson_unknown`** (the lesson is gone on the server) wins at once: the playing sentence stops, the queue is dropped, the conversation goes `off`, and the panel offers "Start a new lesson". Playing on would teach into nothing.
+- **Space** acts only with the Talk panel open, only while the teacher thinks or speaks, and never from a text box or a button.
+- **Closing the panel** pauses the lesson. Opening it again shows the paused lesson and its plan.
+- **A failed `/start`** puts the lesson `off` with the server's message and offers Start lesson again.
+- **Words the browser ended without marking final** are sent as the answer, as a final result would be: the learner stopped speaking.
+- **A refused microphone** in the single-turn voice (graph and geometry views) says "The microphone is off. Type your question below."; the lesson's own wording is in `microphoneMessage`.
 
 ## 7. Server
 
@@ -148,6 +160,9 @@ The studio's conversation is one field over `CONVERSATION_MACHINE`, which replac
 | Server work per turn, before the model | under 5 ms |
 | Memory per lesson | under 64 KB |
 | From the end of the learner's words to the teacher's first spoken sentence | under 3 s with the free models (measured in the live run) |
+| Studio work for one line of the answer, read | under 0.01 ms (`apps/studio/bench/lesson.bench.ts`) |
+| Studio work for one event of a turn (read, transcript, queue, plan view) | under 0.2 ms, with the fake model |
+| Studio work for a whole turn of 10 events and 3 board actions on a headless board, from the learner's words to waiting again | under 5 ms, with the fake model |
 
 ## 9. Open questions
 
