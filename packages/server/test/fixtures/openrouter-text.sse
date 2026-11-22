@@ -1,0 +1,18 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","content":"A circle of radius 2"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","content":" is every point two units"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","content":" from the centre."},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"stop","logprobs":null}]}
+
+data: {"id":"gen-1700000000-aaaaaaaaaaaaaaaaaaaa","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000000,"choices":[],"usage":{"prompt_tokens":3120,"completion_tokens":17,"total_tokens":3137}}
+
+data: [DONE]
+

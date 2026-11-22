@@ -11,6 +11,7 @@ import type { ServerError } from '../errors';
 import type { Settings } from '../env';
 import { check } from '../jobs/check';
 import type { Context, Route } from '../jobs/context';
+import { figureDraw } from '../jobs/figure';
 import { health } from '../jobs/health';
 import { Job } from '../jobs/job';
 import { RateLimiter } from '../limits/rate';
@@ -20,10 +21,11 @@ import { BODY_LIMIT, parseJsonObject, readBody } from './body';
 import { checkOrigin, corsHeaders, preflightHeaders } from './cors';
 import { onClientClose } from './ndjson';
 
-/** The route table. A later round adds the model endpoints here. */
+/** The route table. Later rounds add the board, teach, speech and export routes here. */
 export const ROUTES: readonly Route[] = [
   { method: 'GET', path: '/v1/health', bodyLimit: 0, handle: health },
   { method: 'POST', path: '/v1/check', bodyLimit: BODY_LIMIT, handle: check },
+  { method: 'POST', path: '/v1/figure/draw', bodyLimit: BODY_LIMIT, handle: figureDraw },
 ];
 
 const routeNames = (routes: readonly Route[]): string[] => routes.map((r) => `${r.method} ${r.path}`);

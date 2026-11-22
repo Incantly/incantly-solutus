@@ -4,6 +4,7 @@
  * an error holds a key, a request body or a provider's raw answer.
  */
 import { createHash } from 'node:crypto';
+import type { JsonLike, StreamError } from '@incantly/teacher';
 
 export type ServerErrorKind =
   | 'config_invalid'
@@ -72,6 +73,35 @@ export const modelBusy = (retryAfterMs: number): ServerError =>
   serverError('model_busy', `The AI is busy; try again in ${seconds(retryAfterMs)} s.`, { detail: { retryAfterMs } });
 
 export const originBlocked = (): ServerError => serverError('origin_blocked', 'This site may not use the server.', { hint: 'Add its origin to ALLOWED_ORIGINS.' });
+
+export const modelTimeout = (): ServerError => serverError('model_timeout', 'The AI took too long.', { hint: 'Try again.' });
+
+export const modelBadOutput = (): ServerError => serverError('model_bad_output', 'The AI could not draw this.', { hint: 'Say it in other words.' });
+
+/**
+ * An error as the teacher's stream carries it (the SDK shape with plain-data `detail`). The server's own error and the
+ * teacher's stream error have the same fields; this keeps only the `detail` values that survive JSON.
+ */
+export function toStreamError(e: ServerError): StreamError {
+  const detail: Record<string, JsonLike> = {};
+  for (const [k, v] of Object.entries(e.detail ?? {})) {
+    if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') detail[k] = v;
+  }
+  return { ok: false, kind: e.kind, message: e.message, ...(e.hint !== undefined ? { hint: e.hint } : {}), ...(Object.keys(detail).length > 0 ? { detail } : {}) };
+}
+
+/**
+ * The server's error for an error event that came out of the teacher's stream. The kinds of `errors.md` pass through;
+ * `turn_limit` (the turn passed 60 s) is `model_timeout`; anything else is `internal` with a fingerprint of its kind.
+ */
+export function fromStreamError(e: StreamError): ServerError {
+  if (e.kind === 'turn_limit') return modelTimeout();
+  if (Object.hasOwn(STATUS, e.kind)) {
+    const detail = e.detail === undefined ? undefined : { ...e.detail };
+    return serverError(e.kind as ServerErrorKind, e.message, { ...(e.hint !== undefined ? { hint: e.hint } : {}), ...(detail !== undefined ? { detail } : {}) });
+  }
+  return internalError(`internal:stream.${e.kind.slice(0, 40)}`);
+}
 
 export const notFound = (routes: readonly string[]): ServerError => serverError('not_found', `There is no such route. The routes are: ${routes.join(', ')}.`, { detail: { routes } });
 

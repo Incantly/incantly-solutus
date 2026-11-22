@@ -1,0 +1,6 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1700000002-cccccccccccccccccccc","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000002,"choices":[{"index":0,"delta":{"role":"assistant","content":"c = Circle((0, 0), 2)\nP = Poin"},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1700000002-cccccccccccccccccccc","provider":"Baidu","model":"baidu/ernie-5.5-flash-preview:free","object":"chat.completion.chunk","created":1700000002,"choices":[{"index":0,"delta":{"role":"assistant","content":"tOn("},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+

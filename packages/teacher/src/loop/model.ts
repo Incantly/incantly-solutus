@@ -12,8 +12,14 @@ export interface ModelToolCall {
   readonly args: string;
 }
 
+/** A picture the person sent (circle to ask, a photo of a page): PNG or JPEG bytes as base64. */
+export interface ChatImage {
+  readonly mime: 'image/png' | 'image/jpeg';
+  readonly data: string;
+}
+
 export type ChatMessage =
-  | { readonly role: 'user'; readonly content: string }
+  | { readonly role: 'user'; readonly content: string; readonly images?: readonly ChatImage[] }
   | { readonly role: 'assistant'; readonly content: string; readonly toolCalls?: readonly ModelToolCall[] }
   | { readonly role: 'tool'; readonly toolCallId: string; readonly name: string; readonly content: string };
 

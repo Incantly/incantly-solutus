@@ -1,7 +1,8 @@
 /** The notes demo: a Tiptap editor with the Incantly extension and a page about a parabola (tiptap R1 to R9). */
 import { Editor, Node } from '@tiptap/core';
 import type { JSONContent } from '@tiptap/core';
-import { Incantly } from '@incantly/tiptap';
+import { Incantly, httpTransport } from '@incantly/tiptap';
+import { probeServer } from './server';
 
 // The smallest document a page needs: `doc`, `paragraph`, `heading` and `text`.
 const Doc = Node.create({ name: 'doc', topNode: true, content: 'block+' });
@@ -74,6 +75,8 @@ const START: JSONContent = {
 const host = document.getElementById('editor');
 const toggle = document.getElementById('readonly');
 let editor: Editor | undefined;
+/** True when `/v1/health` answered with a model ready: the AI panel then talks to the server at this origin. */
+let useServer = false;
 
 function open(content: JSONContent, readOnly: boolean): void {
   if (!host) return;
@@ -81,18 +84,22 @@ function open(content: JSONContent, readOnly: boolean): void {
   editor = new Editor({
     element: host,
     editable: !readOnly,
-    extensions: [Doc, Paragraph, Heading, Text, Incantly.configure({ readOnly, liveLimit: 3 })],
+    extensions: [Doc, Paragraph, Heading, Text, Incantly.configure({ readOnly, liveLimit: 3, ...(useServer ? { aiTransport: httpTransport('') } : {}) })],
     content,
   });
   (window as unknown as { editor: Editor }).editor = editor;
 }
 
 if (host) {
-  open(START, false);
-  if (toggle instanceof HTMLInputElement) {
-    toggle.addEventListener('change', () => {
-      // a new editor with the same document: the extension's read-only option is fixed when it is made
-      open(editor?.getJSON() ?? START, toggle.checked);
-    });
-  }
+  // ask the server first, so the extension is made once with the right options
+  void probeServer().then((health) => {
+    useServer = health?.ready === true;
+    open(START, false);
+    if (toggle instanceof HTMLInputElement) {
+      toggle.addEventListener('change', () => {
+        // a new editor with the same document: the extension's read-only option is fixed when it is made
+        open(editor?.getJSON() ?? START, toggle.checked);
+      });
+    }
+  });
 }
