@@ -34,3 +34,12 @@ Taken in Chrome 158 (headless, 1280 × 800 at 1:1, WebGL 2) in the studio's Boar
 | Stop | `final-stop.png` | The agent stopped part way through drawing a wave: the panel says "Stopped. What the agent drew so far stays." |
 | Undo of the agent's work | `final-undo-agent-work.png` | One undo takes back everything the agent did. |
 | A stroke over a live card | `final-stroke-over-live-card.png` | A pen stroke drawn across a live card shows over it. |
+
+## Fix round: drag and garbage (BR-82, BR-83)
+
+Taken by `packages/board/bench/chrome-drag.mjs --picture 3000x2000 --shots <dir>` (Chrome, CPU ×4, 2× pixel ratio), in the middle of shaking a picture over 2,000 strokes.
+
+| What | File | Shows |
+|---|---|---|
+| Before | `fix-drag-before.png`, `fix-drag-before-detail.png` | Mid-drag on the old code: the strokes round the picture are frayed and broken in the tiles drawn again under it. |
+| After | `fix-drag-after.png`, `fix-drag-after-detail.png` | The same moment with the fix: the picture moves on the overlay, no tile is drawn again, every stroke is whole. |

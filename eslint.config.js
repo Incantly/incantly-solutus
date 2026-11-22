@@ -57,12 +57,19 @@ export default defineConfig([
       'incantly/allowed-imports': 'error',
       'incantly/no-throw-export': 'error',
       'incantly/no-imported-mutation': 'error',
+      // a WebGL clear sets the masks it needs: the last draw may have left them off (BR-83)
+      'incantly/gl-clear-masks': 'error',
     },
   },
   {
     // a refused move is reported, never silent
     files: ['packages/board/**/*.ts', 'packages/tiptap/**/*.ts', 'tools/**/*.js'],
     rules: { 'incantly/state-refusal-reported': 'error' },
+  },
+  {
+    // a list filled again every frame keeps its storage (BR-77); the other areas' lists are on the fix-later list (BR-84)
+    files: ['packages/board/src/**/*.ts'],
+    rules: { 'incantly/no-length-reset': 'error' },
   },
   {
     files: ['packages/server/src/**/*.ts'],

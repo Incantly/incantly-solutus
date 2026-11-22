@@ -181,14 +181,58 @@ export class TileCache {
   /** The view the last call of `visible` answered, and its tiles: the same view again is answered from them. */
   readonly #seen = { valid: false, k: 0, tx0: 0, ty0: 0, tx1: 0, ty1: 0 };
   readonly #seenTiles: Tile[] = [];
+  /** The camera and screen of the last call of `visible`: x, y, zoom, steady zoom, width, height, pixel ratio. */
+  readonly #lastView = new Float64Array(7);
+
+  /** True when no tile of the last answer has left the cache. */
+  #keptLive(): boolean {
+    const kept = this.#seenTiles;
+    for (let i = 0; i < kept.length; i++) if ((kept[i] as Tile).state === 'gone') return false;
+    return true;
+  }
 
   /**
    * Fills `out` with the tiles that cover the screen `width × height` CSS pixels at the camera's steady zoom (made
    * blank when new), and marks them used in this frame. Returns how many.
    */
   visible(camera: CameraView & { readonly steadyZoom: number }, width: number, height: number, dpr: number, out: Tile[]): number {
-    out.length = 0;
-    if (!(width > 0) || !(height > 0)) return 0;
+    if (!(width > 0) || !(height > 0)) {
+      out.length = 0;
+      return 0;
+    }
+    // `out` is written by index and cut to its count at the end: emptying it with `length = 0` first would drop its storage, and
+    // every frame would make a new one (BR-77)
+    let n = 0;
+    // the same camera and screen as the last call (a stroke being drawn): its tiles again, with nothing worked out; the numbers are
+    // kept in a typed array, so comparing them makes nothing
+    const last = this.#lastView;
+    if (
+      this.#seen.valid &&
+      last[0] === camera.x &&
+      last[1] === camera.y &&
+      last[2] === camera.zoom &&
+      last[3] === camera.steadyZoom &&
+      last[4] === width &&
+      last[5] === height &&
+      last[6] === dpr &&
+      this.#keptLive()
+    ) {
+      const kept = this.#seenTiles;
+      for (let i = 0; i < kept.length; i++) {
+        const tile = kept[i] as Tile;
+        tile.lastUsed = this.#frame;
+        out[n++] = tile;
+      }
+      if (out.length !== n) out.length = n;
+      return n;
+    }
+    last[0] = camera.x;
+    last[1] = camera.y;
+    last[2] = camera.zoom;
+    last[3] = camera.steadyZoom;
+    last[4] = width;
+    last[5] = height;
+    last[6] = dpr;
     let k = stepOf(camera.steadyZoom, dpr);
     let span = tileSpan(k);
     let tx0 = Math.floor(camera.x / span);
@@ -215,9 +259,10 @@ export class TileCache {
       for (let i = 0; i < kept.length; i++) {
         const tile = kept[i] as Tile;
         tile.lastUsed = this.#frame;
-        out.push(tile);
+        out[n++] = tile;
       }
-      return out.length;
+      if (out.length !== n) out.length = n;
+      return n;
     }
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
@@ -225,18 +270,19 @@ export class TileCache {
         let tile = this.#tiles.get(id);
         if (tile === undefined) this.#tiles.set(id, (tile = new Tile(k, tx, ty, this.#report)));
         tile.lastUsed = this.#frame;
-        out.push(tile);
+        out[n++] = tile;
       }
     }
+    if (out.length !== n) out.length = n;
     seen.valid = true;
     seen.k = k;
     seen.tx0 = tx0;
     seen.ty0 = ty0;
     seen.tx1 = tx1;
     seen.ty1 = ty1;
-    this.#seenTiles.length = 0;
-    for (let i = 0; i < out.length; i++) this.#seenTiles.push(out[i] as Tile);
-    return out.length;
+    for (let i = 0; i < n; i++) this.#seenTiles[i] = out[i] as Tile;
+    this.#seenTiles.length = n;
+    return n;
   }
 
   /** The painter drew the tile: it holds a picture now. */
@@ -399,15 +445,18 @@ export class DrawList {
   /**
    * The strokes and shapes that meet `box`, made in slices: the shapes are found and put in order at once (the cheap part),
    * and their items are made `count` shapes at a time by `more`, which appends them to `items`. `itemsIn` is this and all
-   * of it at once.
+   * of it at once. The shapes in `leave` are left out (the ones a gesture holds above the tiles, BR-82).
    */
-  plan(box: Bounds, scale: number): { readonly items: DrawItem[]; readonly total: number; readonly more: (count: number) => boolean } {
+  plan(box: Bounds, scale: number, leave?: ReadonlySet<string>): { readonly items: DrawItem[]; readonly total: number; readonly more: (count: number) => boolean } {
     this.#ids.length = 0;
     this.cull(box, 0, this.#ids);
     const under: ShapeRecord[] = [];
     const over: ShapeRecord[] = [];
+    const skip = leave !== undefined && leave.size > 0 ? leave : undefined;
     for (let i = 0; i < this.#ids.length; i++) {
-      const s = this.#index.shape(this.#ids[i] as string);
+      const id = this.#ids[i] as string;
+      if (skip?.has(id) === true) continue;
+      const s = this.#index.shape(id);
       if (s !== undefined) (layerOf(s) === 0 ? under : over).push(s);
     }
     under.sort(byOrder);
@@ -543,11 +592,14 @@ function layerOf(shape: ShapeRecord): 0 | 1 {
   return isInk(shape) && shape.props.nib === 'highlighter' ? 0 : 1;
 }
 
-/** The page boxes a diff changed on `page`: before and after of every shape that moved, was added or removed. */
-export function diffRegions(diff: Diff, page: string, kinds?: KindRegistry): Bounds[] {
+/**
+ * The page boxes a diff changed on `page`: before and after of every shape that moved, was added or removed. A shape in
+ * `leave` is left out: it is held above the tiles (BR-82), so no tile shows it and none has to be drawn again for it.
+ */
+export function diffRegions(diff: Diff, page: string, kinds?: KindRegistry, leave?: ReadonlySet<string>): Bounds[] {
   const out: Bounds[] = [];
   const add = (s: ShapeRecord): void => {
-    if (s.page !== page) return;
+    if (s.page !== page || leave?.has(s.id) === true) return;
     const b = shapeBounds(s, kinds);
     if (b !== undefined) out.push(b);
   };
@@ -653,8 +705,11 @@ export interface BoardPainter {
   beginFrame(camera: CameraView, dpr: number): BoardResult<undefined>;
   /** Shows a tile. With `content` the tile's picture is drawn (again) first; without, its cached picture is reused. */
   drawTile(tile: Tile, content: TileContent | null, until?: number): BoardResult<undefined>;
-  /** Items not in a tile (what an agent animates, a dragged shape), drawn this frame only. */
-  drawItems(items: readonly DrawItem[]): BoardResult<undefined>;
+  /**
+   * Items not in a tile (what an agent animates, a dragged shape), drawn this frame only, over the tiles. With `clip` they
+   * show only inside those page boxes (a shape settling back into tiles is drawn over the tiles that do not hold it yet).
+   */
+  drawItems(items: readonly DrawItem[], clip?: readonly Bounds[]): BoardResult<undefined>;
   drawLiveStroke(stroke: LiveStrokeView | null): BoardResult<undefined>;
   drawOverlay(overlay: OverlayItems): BoardResult<undefined>;
   endFrame(): BoardResult<undefined>;

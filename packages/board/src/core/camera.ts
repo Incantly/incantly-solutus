@@ -187,6 +187,11 @@ export class Cameras {
   }
 
   /** The camera of a page; `bad_argument` when there is no such page. */
+  /** The camera of `page` when it has been made, else undefined. */
+  known(page: string): Camera | undefined {
+    return this.#cameras.get(page);
+  }
+
   forPage(page: string): BoardResult<Camera> {
     const known = this.#cameras.get(page);
     if (known !== undefined) return ok(known);

@@ -278,6 +278,10 @@ export class WebGL2Backend implements GpuBackend {
       const w = Math.floor(size.width * size.dpr);
       const h = Math.floor(size.height * size.dpr);
       gl.viewport(0, 0, w, h);
+      // a clear writes only what the masks let through: the last draw may have left depth writes off (a quad drawn over
+      // the picture), and then the depth of the target's last picture would stay and hide parts of the new one
+      gl.depthMask(true);
+      gl.colorMask(true, true, true, true);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       const frame: GlFrame = {
@@ -345,6 +349,7 @@ export class WebGL2Backend implements GpuBackend {
       const t = target as GlTarget;
       gl.disable(gl.SCISSOR_TEST);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.colorMask(true, true, true, true);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.bindFramebuffer(gl.READ_FRAMEBUFFER, t.fbo);

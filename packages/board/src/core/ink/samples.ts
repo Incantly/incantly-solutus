@@ -41,6 +41,21 @@ export class PointBuffer {
   }
 
   push(x: number, y: number, pressure: number, tiltX = 0, tiltY = 0): void {
+    const at = this.reserve();
+    this.#data[at] = x;
+    this.#data[at + 1] = y;
+    this.#data[at + 2] = pressure;
+    if (this.stride === 5) {
+      this.#data[at + 3] = tiltX;
+      this.#data[at + 4] = tiltY;
+    }
+  }
+
+  /**
+   * Makes room for one more point, counts it, and returns where its numbers go in `array` (read `array` after the call: a
+   * growth replaces it). A hot caller writes the numbers itself, so none is boxed as an argument (BR-77).
+   */
+  reserve(): number {
     const s = this.stride;
     if ((this.#count + 1) * s > this.#data.length) {
       const grown = new Float32Array(this.#data.length * 2);
@@ -48,14 +63,8 @@ export class PointBuffer {
       this.#data = grown;
     }
     const at = this.#count * s;
-    this.#data[at] = x;
-    this.#data[at + 1] = y;
-    this.#data[at + 2] = pressure;
-    if (s === 5) {
-      this.#data[at + 3] = tiltX;
-      this.#data[at + 4] = tiltY;
-    }
     this.#count++;
+    return at;
   }
 
   /** The last point's number `k` (0 x, 1 y, 2 pressure), or 0 when empty. */
@@ -94,8 +103,8 @@ export class InkSampler {
   #lastTime = 0;
   #pressure = SIM_START;
 
-  constructor(stride: Stride) {
-    this.buffer = new PointBuffer(stride);
+  constructor(stride: Stride, capacity?: number) {
+    this.buffer = new PointBuffer(stride, capacity);
   }
 
   /** Forgets the stroke so far. */
@@ -122,12 +131,17 @@ export class InkSampler {
       pressure = SIM_START;
     } else {
       const dt = Math.max(1, s.time - this.#lastTime);
-      const speed = Math.hypot(s.x - this.#lastSx, s.y - this.#lastSy) / dt;
+      const sx = s.x - this.#lastSx;
+      const sy = s.y - this.#lastSy;
+      const speed = Math.sqrt(sx * sx + sy * sy) / dt;
       const target = 1 - (1 - SIM_MIN) * Math.pow(clamp(speed / SIM_FAST, 0, 1), 0.7);
       pressure = this.#pressure + (target - this.#pressure) * SIM_EASE;
     }
     if (!first) {
-      const moved = Math.hypot(s.x - this.#lastSx, s.y - this.#lastSy);
+      // written out: `Math.hypot` puts its answer on the heap (BR-77)
+      const mx = s.x - this.#lastSx;
+      const my = s.y - this.#lastSy;
+      const moved = Math.sqrt(mx * mx + my * my);
       const steady = Math.abs(pressure - this.buffer.last(2)) <= MIN_PRESSURE_STEP;
       if (moved < MIN_DISTANCE_PX && steady) return false;
     } else {
@@ -138,7 +152,17 @@ export class InkSampler {
     this.#lastSx = s.x;
     this.#lastSy = s.y;
     this.#lastTime = s.time;
-    this.buffer.push(px - this.originX, py - this.originY, pressure, clamp(s.tiltX, -90, 90), clamp(s.tiltY, -90, 90));
+    // the numbers are written straight into the buffer: as arguments of a call they would be boxed at every sample (BR-77)
+    const buf = this.buffer;
+    const at = buf.reserve();
+    const a = buf.array;
+    a[at] = px - this.originX;
+    a[at + 1] = py - this.originY;
+    a[at + 2] = pressure;
+    if (buf.stride === 5) {
+      a[at + 3] = clamp(s.tiltX, -90, 90);
+      a[at + 4] = clamp(s.tiltY, -90, 90);
+    }
     return true;
   }
 }

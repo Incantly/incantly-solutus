@@ -16,6 +16,9 @@ export class LiveGl {
   readonly #gl: WebGL2RenderingContext;
   readonly #program: WebGLProgram;
   readonly #xf: WebGLUniformLocation | null;
+  /** The transform and the colour as the uniforms take them, written again for each draw. */
+  readonly #xfv = new Float32Array(4);
+  readonly #colv = new Float32Array(4);
   readonly #col: WebGLUniformLocation | null;
   readonly #strokeVao: WebGLVertexArrayObject | null;
   readonly #strokeVbo: WebGLBuffer | null;
@@ -99,6 +102,7 @@ export class LiveGl {
     const gl = this.#gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.#width, this.#height);
+    gl.colorMask(true, true, true, true);
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
@@ -127,8 +131,19 @@ export class LiveGl {
     gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, indices, 0, indexCount);
     gl.useProgram(this.#program);
     gl.viewport(0, 0, this.#width, this.#height);
-    gl.uniform4f(this.#xf, p[0] as number, p[1] as number, p[2] as number, p[3] as number);
-    gl.uniform4f(this.#col, p[4] as number, p[5] as number, p[6] as number, 1);
+    // the numbers go in through kept typed arrays: a double handed to a WebGL call one by one is boxed, a typed array is not
+    const xf = this.#xfv;
+    const col = this.#colv;
+    xf[0] = p[0] as number;
+    xf[1] = p[1] as number;
+    xf[2] = p[2] as number;
+    xf[3] = p[3] as number;
+    col[0] = p[4] as number;
+    col[1] = p[5] as number;
+    col[2] = p[6] as number;
+    col[3] = 1;
+    gl.uniform4fv(this.#xf, xf);
+    gl.uniform4fv(this.#col, col);
     gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
   }
@@ -225,9 +240,19 @@ export class LiveGl {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, out, 0, n);
     gl.useProgram(this.#program);
     gl.viewport(0, 0, this.#width, this.#height);
-    gl.uniform4f(this.#xf, 2 / cssW, -2 / cssH, -1, 1);
-    gl.uniform4f(this.#col, (p[3] as number) * alpha, (p[4] as number) * alpha, (p[5] as number) * alpha, alpha);
-    gl.drawArrays(gl.TRIANGLES, 0, n / 2);
+    const xf = this.#xfv;
+    const col = this.#colv;
+    xf[0] = 2 / cssW;
+    xf[1] = -2 / cssH;
+    xf[2] = -1;
+    xf[3] = 1;
+    col[0] = (p[3] as number) * alpha;
+    col[1] = (p[4] as number) * alpha;
+    col[2] = (p[5] as number) * alpha;
+    col[3] = alpha;
+    gl.uniform4fv(this.#xf, xf);
+    gl.uniform4fv(this.#col, col);
+    gl.drawArrays(gl.TRIANGLES, 0, n >> 1);
     gl.bindVertexArray(null);
   }
 

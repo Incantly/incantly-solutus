@@ -62,7 +62,10 @@ export class Pages {
   }
 
   get(id: string): PageRecord | undefined {
-    return this.#sorted.find((p) => p.id === id);
+    // a loop, not `find` with an arrow: the arrow would be a new closure at every call, and a frame asks for its page
+    const sorted = this.#sorted;
+    for (let i = 0; i < sorted.length; i++) if ((sorted[i] as PageRecord).id === id) return sorted[i];
+    return undefined;
   }
 
   /** The current page's id, or null when there is no page. */

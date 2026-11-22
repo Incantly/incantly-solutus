@@ -129,23 +129,41 @@ describe('web input: Pointer Events to InputSample (design 6.1, R4.1)', () => {
     el.dispatchEvent(pointer('pointerdown', { x: 0, y: 0, pressure: 0.3, time: 0 }));
     const merged: Fake[] = [1, 2, 3, 4].map((i) => ({ x: i * 2, y: i, pressure: 0.3 + i * 0.1, time: i * 2 }));
     el.dispatchEvent(pointer('pointermove', { x: 8, y: 4, pressure: 0.7, time: 8 }, merged));
-    const moves = heard.samples.filter((s) => s.phase === 'move');
+    const moves = heard.samples.filter((s) => s.phase === 'move' && !s.predicted);
     expect(moves.map((s) => s.x)).toEqual([2, 4, 6, 8]);
     expect(moves.map((s) => s.time)).toEqual([2, 4, 6, 8]);
-    expect(moves.every((s) => !s.predicted)).toBe(true);
     expect(moves[0]?.pressure).toBeCloseTo(0.4, 5);
+    // the guessed samples come after the real ones
+    const last = heard.samples.map((s) => s.predicted).lastIndexOf(false);
+    expect(heard.samples.slice(last + 1).every((s) => s.predicted)).toBe(true);
   });
 
-  it('predicted samples follow the real ones, marked predicted, and only while a pointer is down', () => {
+  it('BR-77: guessed samples follow the real ones, marked predicted, only while a pointer is down; the browser\'s predicted events are never asked for', () => {
     const { el, heard } = mount();
-    // hovering: no predicted samples are given
-    el.dispatchEvent(pointer('pointermove', { x: 5, y: 5, buttons: 0 }, undefined, [{ x: 6, y: 6, buttons: 0 }]));
+    const asked = { n: 0 };
+    const browserGuess = (): PointerEvent[] => {
+      asked.n++;
+      return [];
+    };
+    // hovering: no guesses
+    const hover = pointer('pointermove', { x: 5, y: 5, buttons: 0, time: 0 }, [{ x: 5, y: 5, buttons: 0, time: 0 }]);
+    Object.defineProperty(hover, 'getPredictedEvents', { value: browserGuess });
+    el.dispatchEvent(hover);
+    el.dispatchEvent(pointer('pointermove', { x: 9, y: 5, buttons: 0, time: 8 }, [{ x: 9, y: 5, buttons: 0, time: 8 }]));
     expect(heard.samples.some((s) => s.predicted)).toBe(false);
-    el.dispatchEvent(pointer('pointerdown', { x: 0, y: 0, pressure: 0.3 }));
-    el.dispatchEvent(pointer('pointermove', { x: 4, y: 4, pressure: 0.4 }, [{ x: 4, y: 4, pressure: 0.4 }], [{ x: 6, y: 6, pressure: 0.4 }, { x: 8, y: 8, pressure: 0.4 }]));
+    el.dispatchEvent(pointer('pointerdown', { x: 0, y: 0, pressure: 0.3, time: 100 }));
+    // one sample of a stroke: no speed yet, so no guess
+    el.dispatchEvent(pointer('pointermove', { x: 4, y: 0, pressure: 0.4, time: 108 }, [{ x: 4, y: 0, pressure: 0.4, time: 108 }]));
+    expect(heard.samples.some((s) => s.predicted)).toBe(false);
+    // moving right at 0.5 px a millisecond: the guesses carry on to the right, 8 and 16 ms ahead
+    const move = pointer('pointermove', { x: 8, y: 0, pressure: 0.4, time: 116 }, [{ x: 8, y: 0, pressure: 0.4, time: 116 }]);
+    Object.defineProperty(move, 'getPredictedEvents', { value: browserGuess });
+    el.dispatchEvent(move);
     const tail = heard.samples.slice(-3);
     expect(tail.map((s) => s.predicted)).toEqual([false, true, true]);
-    expect(tail.map((s) => s.x)).toEqual([4, 6, 8]);
+    expect(tail.map((s) => s.x)).toEqual([8, 12, 16]);
+    expect(tail.map((s) => s.time)).toEqual([116, 124, 132]);
+    expect(asked.n).toBe(0);
   });
 
   it('positions are relative to the board element, not the window', () => {

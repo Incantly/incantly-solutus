@@ -71,6 +71,12 @@ The row is the board's page minus a blank page's, and it is not 0: 3 collections
 
 It is on the fix-later list as BR-77 with the order to take the sites in.
 
+### After the drag and garbage fix round (branch `fix/board-drag-gc`)
+
+Chrome, CPU ×4, the same script (`chrome-board.mjs`, every row): pen sample to pixel 9.4 ms mean, one frame while drawing 0.19 ms mean (was 0.25 to 0.42), pan 1.0 ms, fit 0.8 ms, zoom 5.7 ms, 3 cards 1.8 ms, lasso 2.8 ms, page switch 40 ms, open 62 ms: all within goal. The garbage row reads 2: no scavenge, two major collections back to back about 8 s after the script's forced collection (V8's memory reducer). Run alone (`--rows gc`, a fresh page with a 2 s warm-up stroke) it reads 1 scavenge, about 7 s into the stroke; it read 3 to 5. Script garbage over the stroke is about 0.7 MB (was about 2 MB); the blank page's is 0.09 MB. With a 5 s warm-up stroke the row reads 1, with 10 s no scavenge: what is left is the engine's first tiers running the outline code before it is optimised (they keep every number on the heap), which a longer use of the pen, or the warm-up stroke the board draws 400 ms after it opens, takes away. A calibration on a blank page (`young.mjs`, not in the repository): 1 KB of plain garbage a frame makes no scavenge in 10 s, 2 KB makes 1, 4 KB makes 2. What was changed is in `findings.md` BR-77; the new options of the script are `--gcdetail`, `--usage`, `--track`, `--alloc` and `--gcpage bare`.
+
+The drag (`chrome-drag.mjs`, BR-82): 2,000 strokes under a rectangle and a 3000 × 2000 picture, each shaken for 3 s at a 2× pixel ratio. Frame script 2.3 to 3.1 ms mean before, 0.4 to 0.5 ms after; no tile is drawn after the first move. The picture's drag is filmed with the screencast, and every frame is checked for a ghost (the box round the picture's red wider or taller than the picture) and a missing part (fewer red pixels): none, before or after. In this scene the picture itself stayed whole before the fix too; what tore was the strokes in the tiles drawn again under and round the moving shape (BR-83), plus the cost of drawing those tiles at every move. On a slower machine, or with a picture that takes longer to draw into a tile than the 4 ms budget, the old path also left parts of the shape where they had been for a few frames.
+
 ## Node, warm (`packages/board/bench/*.bench.ts`)
 
 Every row of design 13 has a row; each is a test with the goal as its limit. The round 6 rows are the last two.

@@ -104,29 +104,31 @@ export const saturatedTolerance = (size: number): number => 0.1 * 0.5 * size * (
 
 /** Turns points into triangles, reusing its arrays; read the result before the next `build`. */
 export class Outliner {
-  #vx = new Float32Array(512);
+  /** The numbers handed to `#vertex` and `#arc` (see `#vertex`). */
+  readonly #q = new Float64Array(8);
+  #vx: Float32Array;
   #vcount = 0;
-  #ix = new Uint32Array(1536);
+  #ix: Uint32Array;
   #icount = 0;
-  #marks = new Uint32Array(128);
+  #marks: Uint32Array;
   #groups = 0;
   #minX = 0;
   #minY = 0;
   #maxX = 0;
   #maxY = 0;
   // scratch, one number per point
-  #px = new Float64Array(128);
-  #py = new Float64Array(128);
-  #pp = new Float64Array(128);
-  #tx = new Float64Array(128);
-  #ty = new Float64Array(128);
-  #sx = new Float64Array(128);
-  #sy = new Float64Array(128);
-  #sp = new Float64Array(128);
-  #w = new Float64Array(128);
-  #w2 = new Float64Array(128);
-  #ux = new Float64Array(128);
-  #uy = new Float64Array(128);
+  #px: Float64Array;
+  #py: Float64Array;
+  #pp: Float64Array;
+  #tx: Float64Array;
+  #ty: Float64Array;
+  #sx: Float64Array;
+  #sy: Float64Array;
+  #sp: Float64Array;
+  #w: Float64Array;
+  #w2: Float64Array;
+  #ux: Float64Array;
+  #uy: Float64Array;
   // what the last build or extend left, so `extend` can go on from it
   #rawDone = 0;
   #pointsDone = 0;
@@ -145,6 +147,29 @@ export class Outliner {
   #cpMinY = 0;
   #cpMaxX = 0;
   #cpMaxY = 0;
+
+  /**
+   * `points` is how many points the arrays hold before they grow (each growth is four times as many). The live stroke's
+   * outliner takes enough for a ten-second stroke, so drawing one makes no new arrays (BR-77); others start small.
+   */
+  constructor(points = 512) {
+    const n = Math.max(16, Math.floor(points));
+    this.#vx = new Float32Array(n * 8);
+    this.#ix = new Uint32Array(n * 24);
+    this.#marks = new Uint32Array(n + 1);
+    this.#px = new Float64Array(n);
+    this.#py = new Float64Array(n);
+    this.#pp = new Float64Array(n);
+    this.#tx = new Float64Array(n);
+    this.#ty = new Float64Array(n);
+    this.#sx = new Float64Array(n);
+    this.#sy = new Float64Array(n);
+    this.#sp = new Float64Array(n);
+    this.#w = new Float64Array(n);
+    this.#w2 = new Float64Array(n);
+    this.#ux = new Float64Array(n);
+    this.#uy = new Float64Array(n);
+  }
 
   /** `x, y` pairs of the last build; only the first `vertexCount * 2` numbers count. */
   get vertices(): Float32Array {
@@ -231,17 +256,19 @@ export class Outliner {
       this.#made = true;
       return;
     }
-    this.#smooth(m, spec.streamline, size, from);
-    this.#widths(m, size, spec, stride, from);
+    // the size and the tolerance are read from the fields by the steps below, not passed: a number argument of a call that is not
+    // inlined is boxed on the heap, and this runs every frame of a stroke (BR-77)
+    this.#smooth(m, from);
+    this.#widths(m, spec, stride, from);
     if (m === 1) {
-      this.#dot(opts.tolerance);
+      this.#dot();
       this.#markGroup(0, 0);
       this.#markGroup(1, this.#icount);
       this.#groups = 1;
       this.#made = true;
       return;
     }
-    this.#strokeOf(m, opts.tolerance, keepFrom);
+    this.#strokeOf(m, keepFrom);
     this.#made = true;
   }
 
@@ -249,8 +276,9 @@ export class Outliner {
 
   #ensureScratch(n: number): void {
     if (this.#px.length >= n) return;
+    // grown four times over: each growth is a dozen new arrays, and a long stroke would grow them often
     let size = this.#px.length;
-    while (size < n) size *= 2;
+    while (size < n) size *= 4;
     this.#px = grown64(this.#px, size);
     this.#py = grown64(this.#py, size);
     this.#pp = grown64(this.#pp, size);
@@ -281,7 +309,12 @@ export class Outliner {
       const x = points[i * stride] as number;
       const y = points[i * stride + 1] as number;
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      if (m > 0 && dist(x - (this.#px[m - 1] as number), y - (this.#py[m - 1] as number)) < SAME_POINT) continue;
+      if (m > 0) {
+        // the distance squared, written out: a helper call would box its two numbers when it is not inlined
+        const dx = x - (this.#px[m - 1] as number);
+        const dy = y - (this.#py[m - 1] as number);
+        if (dx * dx + dy * dy < SAME_POINT * SAME_POINT) continue;
+      }
       this.#px[m] = x;
       this.#py[m] = y;
       const p = points[i * stride + 2] as number;
@@ -294,7 +327,9 @@ export class Outliner {
   }
 
   /** Streamline: blend each inner point with its neighbours, weighted by distance; the ends stay. */
-  #smooth(m: number, amount: number, size: number, from: number): void {
+  #smooth(m: number, from: number): void {
+    const amount = NIB_SPECS[this.#nib].streamline;
+    const size = this.#size;
     for (let i = from; i < m; i++) {
       const x = this.#px[i] as number;
       const y = this.#py[i] as number;
@@ -329,7 +364,8 @@ export class Outliner {
   }
 
   /** Segment directions, then the width at each point (pressure, tilt, three-point smoothing). */
-  #widths(m: number, size: number, spec: NibSpec, stride: Stride, from: number): void {
+  #widths(m: number, spec: NibSpec, stride: Stride, from: number): void {
+    const size = this.#size;
     for (let k = from > 0 ? from - 1 : 0; k + 1 < m; k++) {
       const dx = (this.#sx[k + 1] as number) - (this.#sx[k] as number);
       const dy = (this.#sy[k + 1] as number) - (this.#sy[k] as number);
@@ -363,16 +399,22 @@ export class Outliner {
 
   #markGroup(g: number, at: number): void {
     if (g >= this.#marks.length) {
-      const grown = new Uint32Array(Math.max(this.#marks.length * 2, g + 1));
+      const grown = new Uint32Array(Math.max(this.#marks.length * 4, g + 1));
       grown.set(this.#marks);
       this.#marks = grown;
     }
     this.#marks[g] = at;
   }
 
-  #vertex(x: number, y: number): number {
+  /**
+   * Adds the vertex at `#q[0], #q[1]` and returns its number. The point comes in the scratch array, not as two arguments: a
+   * call the optimiser does not inline boxes each number argument on the heap, and a stroke adds tens of vertices a frame.
+   */
+  #vertex(): number {
+    const x = this.#q[0] as number;
+    const y = this.#q[1] as number;
     if (this.#vcount * 2 + 2 > this.#vx.length) {
-      const grown = new Float32Array(this.#vx.length * 2);
+      const grown = new Float32Array(this.#vx.length * 4);
       grown.set(this.#vx);
       this.#vx = grown;
     }
@@ -392,7 +434,7 @@ export class Outliner {
       ((v[b * 2 + 1] as number) - (v[a * 2 + 1] as number)) * ((v[c * 2] as number) - (v[a * 2] as number));
     if (cross === 0) return;
     if (this.#icount + 3 > this.#ix.length) {
-      const grown = new Uint32Array(this.#ix.length * 2);
+      const grown = new Uint32Array(this.#ix.length * 4);
       grown.set(this.#ix);
       this.#ix = grown;
     }
@@ -403,30 +445,48 @@ export class Outliner {
   }
 
   /** A fan from `centre` over the arc of radius `r` from angle `from`, turning by `delta`, between two existing vertices. */
-  #arc(centre: number, cx: number, cy: number, r: number, from: number, delta: number, first: number, last: number, tolerance: number): void {
+  /** The centre, radius, start angle, turn and tolerance come in `#q[2..7]` (see `#vertex`). */
+  #arc(centre: number, first: number, last: number): void {
+    const q = this.#q;
+    const cx = q[2] as number;
+    const cy = q[3] as number;
+    const r = q[4] as number;
+    const from = q[5] as number;
+    const delta = q[6] as number;
+    const tolerance = q[7] as number;
     const steps = Math.max(1, Math.ceil(Math.abs(delta) / arcStep(r, tolerance)));
     let prev = first;
     for (let s = 1; s < steps; s++) {
       const a = from + (delta * s) / steps;
-      const next = this.#vertex(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      q[0] = cx + Math.cos(a) * r;
+      q[1] = cy + Math.sin(a) * r;
+      const next = this.#vertex();
       this.#triangle(centre, prev, next);
       prev = next;
     }
     this.#triangle(centre, prev, last);
   }
 
-  #dot(tolerance: number): void {
+  #dot(): void {
+    const tolerance = this.#tolerance;
+    const q = this.#q;
     const x = this.#sx[0] as number;
     const y = this.#sy[0] as number;
     const r = (this.#w[0] as number) / 2;
-    const centre = this.#vertex(x, y);
+    q[0] = x;
+    q[1] = y;
+    const centre = this.#vertex();
     if (!(r > 1e-9)) return;
     const steps = Math.max(8, Math.ceil(TAU / arcStep(r, tolerance)));
-    const first = this.#vertex(x + r, y);
+    q[0] = x + r;
+    q[1] = y;
+    const first = this.#vertex();
     let prev = first;
     for (let s = 1; s < steps; s++) {
       const a = (TAU * s) / steps;
-      const next = this.#vertex(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      q[0] = x + Math.cos(a) * r;
+      q[1] = y + Math.sin(a) * r;
+      const next = this.#vertex();
       this.#triangle(centre, prev, next);
       prev = next;
     }
@@ -438,7 +498,9 @@ export class Outliner {
    * are kept (their vertices, triangles and bounds come back from the checkpoint); the rest are written again. The
    * iterations before `m - SETTLED` are final, so the checkpoint is taken after the last of them.
    */
-  #strokeOf(m: number, tolerance: number, resume: number): void {
+  #strokeOf(m: number, resume: number): void {
+    const tolerance = this.#tolerance;
+    const q = this.#q;
     const sx = this.#sx;
     const sy = this.#sy;
     const ux = this.#ux;
@@ -468,11 +530,23 @@ export class Outliner {
       if (i === 0) {
         const nx = -(uy[0] as number);
         const ny = ux[0] as number;
-        startL = this.#vertex(x + nx * r, y + ny * r);
-        startR = this.#vertex(x - nx * r, y - ny * r);
-        const centre = this.#vertex(x, y);
+        q[0] = x + nx * r;
+        q[1] = y + ny * r;
+        startL = this.#vertex();
+        q[0] = x - nx * r;
+        q[1] = y - ny * r;
+        startR = this.#vertex();
+        q[0] = x;
+        q[1] = y;
+        const centre = this.#vertex();
         // the start cap: from the left vertex round the back to the right vertex
-        this.#arc(centre, x, y, r, Math.atan2(ny, nx), Math.PI, startL, startR, tolerance);
+        q[2] = x;
+        q[3] = y;
+        q[4] = r;
+        q[5] = Math.atan2(ny, nx);
+        q[6] = Math.PI;
+        q[7] = tolerance;
+        this.#arc(centre, startL, startR);
         continue;
       }
       // the end pair of segment i - 1, and the start pair of segment i
@@ -483,8 +557,12 @@ export class Outliner {
       let nextL: number;
       let nextR: number;
       if (i === m - 1) {
-        endL = this.#vertex(x + pnx * r, y + pny * r);
-        endR = this.#vertex(x - pnx * r, y - pny * r);
+        q[0] = x + pnx * r;
+        q[1] = y + pny * r;
+        endL = this.#vertex();
+        q[0] = x - pnx * r;
+        q[1] = y - pny * r;
+        endR = this.#vertex();
         nextL = endL;
         nextR = endR;
       } else {
@@ -498,15 +576,27 @@ export class Outliner {
           bx /= bl;
           by /= bl;
           const k = 1 / Math.max(0.5, bx * nnx + by * nny);
-          endL = this.#vertex(x + bx * r * k, y + by * r * k);
-          endR = this.#vertex(x - bx * r * k, y - by * r * k);
+          q[0] = x + bx * r * k;
+          q[1] = y + by * r * k;
+          endL = this.#vertex();
+          q[0] = x - bx * r * k;
+          q[1] = y - by * r * k;
+          endR = this.#vertex();
           nextL = endL;
           nextR = endR;
         } else {
-          endL = this.#vertex(x + pnx * r, y + pny * r);
-          endR = this.#vertex(x - pnx * r, y - pny * r);
-          nextL = this.#vertex(x + nnx * r, y + nny * r);
-          nextR = this.#vertex(x - nnx * r, y - nny * r);
+          q[0] = x + pnx * r;
+          q[1] = y + pny * r;
+          endL = this.#vertex();
+          q[0] = x - pnx * r;
+          q[1] = y - pny * r;
+          endR = this.#vertex();
+          q[0] = x + nnx * r;
+          q[1] = y + nny * r;
+          nextL = this.#vertex();
+          q[0] = x - nnx * r;
+          q[1] = y - nny * r;
+          nextR = this.#vertex();
           // the arc on the outer side: a left turn has its outer side on the right
           const cross = (ux[i - 1] as number) * (uy[i] as number) - (uy[i - 1] as number) * (ux[i] as number);
           const side = cross > 0 ? -1 : 1;
@@ -514,8 +604,16 @@ export class Outliner {
           let delta = Math.atan2(side * nny, side * nnx) - a0;
           if (delta > Math.PI) delta -= TAU;
           else if (delta < -Math.PI) delta += TAU;
-          const centre = this.#vertex(x, y);
-          this.#arc(centre, x, y, r, a0, delta, side > 0 ? endL : endR, side > 0 ? nextL : nextR, tolerance);
+          q[0] = x;
+          q[1] = y;
+          const centre = this.#vertex();
+          q[2] = x;
+          q[3] = y;
+          q[4] = r;
+          q[5] = a0;
+          q[6] = delta;
+          q[7] = tolerance;
+          this.#arc(centre, side > 0 ? endL : endR, side > 0 ? nextL : nextR);
         }
       }
       // the quad of segment i - 1
@@ -536,8 +634,16 @@ export class Outliner {
       }
       if (i === m - 1) {
         // the end cap: from the right vertex round the front to the left vertex
-        const centre = this.#vertex(x, y);
-        this.#arc(centre, x, y, r, Math.atan2(-pny, -pnx), Math.PI, endR, endL, tolerance);
+        q[0] = x;
+        q[1] = y;
+        const centre = this.#vertex();
+        q[2] = x;
+        q[3] = y;
+        q[4] = r;
+        q[5] = Math.atan2(-pny, -pnx);
+        q[6] = Math.PI;
+        q[7] = tolerance;
+        this.#arc(centre, endR, endL);
       }
     }
     this.#markGroup(m, this.#icount);
@@ -546,11 +652,14 @@ export class Outliner {
   }
 }
 
+let shared: Outliner | undefined;
+
 /** The outline of a whole stroke, as a new `Outline` that owns its arrays. For a stored stroke; see `OutlineCache`. */
 export function outlineOf(points: Float32Array, stride: Stride, opts: OutlineOptions): Outline {
-  const o = new Outliner();
-  o.build(points, Math.floor(points.length / stride), stride, opts);
-  return o.snapshot();
+  // one outliner for every call: its arrays are large, and the result is a copy anyway
+  shared ??= new Outliner();
+  shared.build(points, Math.floor(points.length / stride), stride, opts);
+  return shared.snapshot();
 }
 
 /**

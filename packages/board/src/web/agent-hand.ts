@@ -23,6 +23,9 @@ export interface WebHandOptions {
   readonly onError: (error: BoardError) => void;
 }
 
+/** What a frame gets while the hand does nothing: one record, so an idle frame makes nothing. */
+const IDLE: { readonly item: DrawItem | undefined; readonly more: boolean } = Object.freeze({ item: undefined, more: false });
+
 export class WebHand implements HandPlayer {
   readonly #options: WebHandOptions;
   readonly #anim: HandAnimation;
@@ -65,7 +68,7 @@ export class WebHand implements HandPlayer {
   frame(now: number, scale: number): { readonly item: DrawItem | undefined; readonly more: boolean } {
     const anim = this.#anim;
     const was = anim.state;
-    if (was === 'idle') return { item: undefined, more: false };
+    if (was === 'idle') return IDLE;
     let frame;
     if (was === 'playing') {
       frame = anim.step(now);

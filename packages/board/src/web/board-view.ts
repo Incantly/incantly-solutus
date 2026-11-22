@@ -13,7 +13,7 @@ import type { BoardCoreOptions } from '../core/board';
 import { addImage } from '../core/assets';
 import { clipboardText, copySelection, pasteAny, readClipboardText, isBoardClipboard, pasteData } from '../core/clipboard';
 import { diffRegions, tileBox, tileSpan } from '../core/draw';
-import type { OverlayItems, Tile, TileContent } from '../core/draw';
+import type { DrawItem, OverlayItems, Tile, TileContent } from '../core/draw';
 import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
 import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
@@ -30,9 +30,15 @@ import type { ToolContext, ToolDef, ToolList } from '../core/tools/index';
 import { ToolHost } from '../core/tools/host';
 import type { StylePatch } from '../core/kinds/def';
 import type { Bounds, ShapeRecord } from '../core/types';
+import { isShape } from '../core/types';
 import { ImageCache } from './images';
 import { WebInput } from './input';
+import { warmInk } from './warm-ink';
+
+/** How long after the board opens the pen's code is warmed (BR-77): after the first frames, before a hand reaches the pen. */
+const WARM_AFTER_MS = 400;
 import { WebPainter } from './painter';
+import type { OverCardItem } from './painter';
 import { TILE_GUTTER } from './painter-2d';
 import { FigureLayer, overCardItems } from './figures';
 import { createAgentKit, pictureOf } from './agent';
@@ -214,6 +220,17 @@ const farFromMiddle = (t: Tile): number => {
   return dx * dx + dy * dy;
 };
 const nearTheMiddle = (a: Tile, b: Tile): number => farFromMiddle(a) - farFromMiddle(b);
+/** What the top layer is given when no card is on show. */
+const NO_OVER_CARDS: readonly OverCardItem[] = Object.freeze([]);
+const meets = (a: Bounds, b: Bounds): boolean => a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
+const isHighlighter = (s: ShapeRecord): boolean => s.kind === 'ink' && (s.props as { nib?: unknown }).nib === 'highlighter';
+/** The tiles' order: highlighters under the rest, then the shape's order key, then its id. */
+const byLayerAndOrder = (a: ShapeRecord, b: ShapeRecord): number => {
+  const la = isHighlighter(a) ? 0 : 1;
+  const lb = isHighlighter(b) ? 0 : 1;
+  if (la !== lb) return la - lb;
+  return a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+};
 
 /** The widths of glyphs from a canvas, for the text and maths layout of the core. */
 function installFontMeasure(doc: Document): void {
@@ -264,6 +281,61 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const list: Tile[] = [];
   /** The tile being drawn in slices over several frames, with what it is drawn from; dropped when the board changes. */
   let tileJob: { readonly tile: Tile; readonly content: TileContent } | null = null;
+  // the shapes a gesture moves, drawn on the overlay each frame (BR-82), and what a frame finds for them: kept between frames
+  const liftShapes: ShapeRecord[] = [];
+  const liftItems: DrawItem[] = [];
+  const staleBoxes: Bounds[] = [];
+  /** True when `s` is a figure whose card is on show this frame. */
+  const cardOnShow = (s: ShapeRecord): boolean => {
+    if (s.kind !== 'figure') return false;
+    for (const card of figures.covering) if (card.id === s.id) return true;
+    return false;
+  };
+  /** The draw items of `liftShapes` in the board's order, into `liftItems`. */
+  const liftedItems = (scale: number): void => {
+    liftShapes.sort(byLayerAndOrder);
+    let n = 0;
+    for (let i = 0; i < liftShapes.length; i++) {
+      const item = core.drawList.itemOf(liftShapes[i] as ShapeRecord, scale);
+      if (item !== undefined) liftItems[n++] = item;
+    }
+    liftItems.length = n;
+  };
+  /**
+   * The held shapes at their place now, over the tiles; the settling ones over the tiles on show that are not drawn again yet
+   * (a settling shape on no such tile is in its tiles: it is let go). A figure whose card is on show is the card's to draw.
+   */
+  const drawLifted = (page: string, scale: number): void => {
+    const lift = core.lift;
+    const kinds = core.store.kinds;
+    if (lift.held.size > 0) {
+      let n = 0;
+      for (const id of lift.held) {
+        const s = core.store.get(id);
+        if (s !== undefined && isShape(s) && s.page === page && !cardOnShow(s)) liftShapes[n++] = s;
+      }
+      liftShapes.length = n;
+      liftedItems(scale);
+      if (liftItems.length > 0) painter.drawItems(liftItems);
+    }
+    if (lift.settling.size === 0) return;
+    let stale = 0;
+    for (let t = 0; t < list.length; t++) if ((list[t] as Tile).needsDraw) staleBoxes[stale++] = (list[t] as Tile).box;
+    staleBoxes.length = stale;
+    let n = 0;
+    for (const id of lift.settling) {
+      const s = core.store.get(id);
+      const b = s !== undefined && isShape(s) && s.page === page ? shapeBounds(s, kinds) : undefined;
+      if (s === undefined || b === undefined || !staleBoxes.some((box) => meets(box, b))) {
+        lift.settled(id);
+        continue;
+      }
+      if (isShape(s) && !cardOnShow(s)) liftShapes[n++] = s;
+    }
+    liftShapes.length = n;
+    liftedItems(scale);
+    if (liftItems.length > 0) painter.drawItems(liftItems, staleBoxes);
+  };
 
   // the agent (design 11): the closures below are called only after the view is built
   let panel: AgentPanel | undefined;
@@ -395,7 +467,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     // unfinished no other tile is started
     const deadline = frameStart + TILE_BUDGET_MS;
     let busy = false;
-    for (const tile of list) {
+    for (let t = 0; t < list.length; t++) {
+      const tile = list[t] as Tile;
       if (tile.needsDraw && !busy && drawn < TILES_PER_FRAME && (drawn === 0 || performance.now() < deadline)) {
         let job = tileJob;
         if (job === null || job.tile !== tile) {
@@ -403,7 +476,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
           const box = tileBox(tile.k, tile.tx, tile.ty);
           const grow = TILE_GUTTER / scale;
           const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
-          const plan = core.drawList.plan(region, scale);
+          // the shapes a gesture moves are not in the tiles: the overlay draws them where they are each frame (BR-82)
+          const plan = core.drawList.plan(region, scale, core.lift.held);
           job = { tile, content: { box: region, items: plan.items, background, total: plan.total, more: plan.more } };
           tileJob = job;
         }
@@ -423,8 +497,10 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     }
     if (waiting > 0) more = true;
     const live = core.live;
+    // device pixels per page unit, worked out once (each number handed to a call is boxed on the heap, BR-77)
+    const scale = camera.zoom * dpr;
     if (live.state === 'drawing') {
-      live.rebuild(camera.zoom * dpr);
+      live.rebuild(scale);
       painter.drawLiveStroke(live.view());
     } else {
       painter.drawLiveStroke(null);
@@ -433,15 +509,17 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     items.laser = overlay.laser;
     items.loop = overlay.loop;
     items.cursor = overlay.cursor;
-    items.selected = editor.state === 'closed' ? selectionView(core, camera.zoom) : null;
+    items.selected = editor.state === 'closed' && core.selection.size > 0 ? selectionView(core, camera.zoom) : null;
     items.guides = overlay.guides;
     items.marquee = overlay.marquee;
     items.hint = overlay.hint;
     placeField();
     if (figures.sync(camera, w, height, now)) more = true;
-    painter.drawOverCards(overCardItems(core, figures.covering, camera.zoom * dpr));
-    const handFrame = kit.hand?.frame(now, camera.zoom * dpr);
-    if (handFrame !== undefined) {
+    painter.drawOverCards(figures.covering.length > 0 ? overCardItems(core, figures.covering, scale) : NO_OVER_CARDS);
+    if (core.lift.held.size > 0 || core.lift.settling.size > 0) drawLifted(page, scale);
+    const hand = kit.hand;
+    if (hand !== undefined && hand.animation.state !== 'idle') {
+      const handFrame = hand.frame(now, scale);
       if (handFrame.item !== undefined) painter.drawItems([handFrame.item]);
       if (handFrame.more) more = true;
     }
@@ -477,7 +555,9 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   // ---- input
   const sink: InputSink = {
     sample: (s) => {
-      pointer = { x: s.x, y: s.y };
+      // kept in one record: a pen sends hundreds of samples a second
+      pointer.x = s.x;
+      pointer.y = s.y;
       host.sample(s);
     },
     key: (k) => {
@@ -489,12 +569,30 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const input = new WebInput({ element: surface, sink, report, accepts: (t) => t === surface || (t instanceof Node && painter.element.contains(t)), ...(options.touchDraws !== undefined ? { touchDraws: options.touchDraws } : {}) });
 
   // ---- store and pages
+  /** The tiles that meet `region` are drawn again; a tile being drawn in slices that meets it starts again (its plan is old). */
+  const invalidate = (region: Bounds): void => {
+    painter.tiles.invalidate(region);
+    if (tileJob !== null && meets(tileJob.content.box, region)) tileJob = null;
+  };
   const stopStore = core.store.on((diff) => {
-    tileJob = null;
     const page = core.pages.current;
-    if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds)) painter.tiles.invalidate(region);
+    // a shape a gesture holds is in no tile: moving it again draws no tile again (BR-82), and a tile being drawn in slices goes on
+    if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds, core.lift.held)) invalidate(region);
     // a page's paper changed: every tile shows it
-    if (diff.updated.some((u) => (u.after as { background?: string }).background !== (u.before as { background?: string }).background)) painter.tiles.invalidateAll();
+    if (diff.updated.some((u) => (u.after as { background?: string }).background !== (u.before as { background?: string }).background)) {
+      painter.tiles.invalidateAll();
+      tileJob = null;
+    }
+    loop.request();
+  });
+  // a gesture ended: its shapes go back into the tiles where they are now
+  const stopLift = core.lift.onRelease((ids) => {
+    const page = core.pages.current;
+    for (const id of ids) {
+      const s = core.store.get(id);
+      const b = s !== undefined && isShape(s) && s.page === page ? shapeBounds(s, core.store.kinds) : undefined;
+      if (b !== undefined) invalidate(b);
+    }
     loop.request();
   });
   let lastPage = core.pages.current;
@@ -509,6 +607,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     painter.abortLive();
     painter.tiles.clear();
     tileJob = null;
+    core.lift.clear();
     core.selection.clear();
     overlay.laser = null;
     overlay.loop = null;
@@ -589,6 +688,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', hidden: '', 'aria-label': strings.t('action.image') });
   const note = h('div', { class: 'ib-fixed', role: 'status', hidden: '' });
   let noteTimer = 0;
+  let warmTimer = 0;
   const say = (text: string): void => {
     note.textContent = text;
     note.hidden = false;
@@ -1009,7 +1109,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   });
 
   // ---- the system clipboard: a copy is board JSON with a type tag, so it moves between boards
-  let pointer = { x: 0, y: 0 };
+  const pointer = { x: 0, y: 0 };
   const pasteAt = (): { x: number; y: number } => {
     const p = core.camera?.toPage(pointer.x, pointer.y);
     return p ?? viewCentre();
@@ -1324,6 +1424,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       observer?.disconnect();
       input.dispose();
       stopStore();
+      stopLift();
       stopPages();
       stopSelection();
       stopHistory();
@@ -1335,6 +1436,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       panel?.dispose();
       window.clearTimeout(pointTimer);
       window.clearTimeout(noteTimer);
+      window.clearTimeout(warmTimer);
       root.removeEventListener('copy', onCopy);
       root.removeEventListener('cut', onCut);
       root.removeEventListener('paste', onPaste);
@@ -1354,6 +1456,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   host.setAction('nextPage', () => api.stepPage(1));
   host.setAction('prevPage', () => api.stepPage(-1));
   host.setAction('figure', () => !readOnly && (void addFigureHere(), true));
+  // the pen's code is warmed once the board is idle after it opens, so the first stroke runs optimised (BR-77)
+  if (!readOnly) {
+    warmTimer = window.setTimeout(() => {
+      const camera = core.camera;
+      if (camera !== undefined) warmInk(camera);
+    }, WARM_AFTER_MS);
+  }
   loop.request();
   return ok(api);
 }

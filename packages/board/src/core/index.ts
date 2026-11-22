@@ -36,6 +36,7 @@ export {
   ungroupShapes, withMembers,
 } from './edit';
 export type { AlignHow, OrderHow, ShapePatch, WriteOptions } from './edit';
+export { LIFT_MACHINE, LIFT_MAX, Lift } from './lift';
 export { frameOf, frameCorners, handleAt, handlesOf, selectionView } from './selection-view';
 export type { FrameHandle, HandleId, ResizeHandle, SelectionFrame } from './selection-view';
 export { resizePatch, scalePatches } from './transform';

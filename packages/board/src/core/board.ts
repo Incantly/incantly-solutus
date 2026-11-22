@@ -11,6 +11,7 @@ import type { BoardError, BoardResult } from './errors';
 import { ok } from './errors';
 import { History } from './history';
 import { LiveStroke } from './ink/live';
+import { Lift } from './lift';
 import { OutlineCache } from './ink/outline';
 import { KindRegistry } from './kinds/def';
 import { registerBuiltIns } from './kinds/builtin';
@@ -47,9 +48,12 @@ export class BoardCore {
   readonly drawList: DrawList;
   /** The stroke being drawn; the pen tools write to it and the painter reads it. */
   readonly live: LiveStroke;
+  /** The shapes a person's gesture moves, drawn above the tiles until it ends (B36). */
+  readonly lift: Lift;
 
   private constructor(store: Store) {
     this.store = store;
+    this.lift = new Lift(() => store.sink);
     this.live = new LiveStroke(store.sink);
     this.pages = new Pages(store);
     this.cameras = new Cameras(store);
@@ -87,6 +91,9 @@ export class BoardCore {
   get camera(): Camera | undefined {
     const page = this.pages.current;
     if (page === null) return undefined;
+    // the camera made already is read without a Result (the getter is asked for many times a frame)
+    const known = this.cameras.known(page);
+    if (known !== undefined) return known;
     const c = this.cameras.forPage(page);
     return c.ok ? c.value : undefined;
   }

@@ -5,6 +5,7 @@
  * Run from the repository root:
  *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright-core node packages/board/bench/chrome-board.mjs
  *     [--rate 4] [--rows pen,gc,pan,fit,zoom,cards,lasso,switch,open] [--stroke 10] [--warm 2] [--md handoff/board/bench.md] [--headed]
+ *     [--gcpage studio|bare] [--gcdetail] [--alloc] [--profile]
  *
  * Playwright is not a dependency of the repository (docs/design/libraries.md): point PLAYWRIGHT_DIR at a folder where
  * it is installed. Chrome itself is the installed one (`channel: 'chrome'`). The studio is served by Vite on a free
@@ -216,7 +217,16 @@ const studio = await createServer({ root: path.join(root, 'apps/studio'), logLev
 await studio.listen();
 const studioUrl = `http://127.0.0.1:${studioPort}/?mode=notes`;
 
-const browser = await chromium.launch({ channel: 'chrome', headless: !flag('headed'), args: flag('swiftshader') ? ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] : [] });
+const browser = await chromium.launch({
+  channel: 'chrome',
+  headless: !flag('headed'),
+  args: [
+    ...(flag('swiftshader') ? ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] : []),
+    ...(flag('alloc') ? ['--enable-precise-memory-info'] : []),
+    // V8's own line for each collection, with its reason, on the browser's output (run with DEBUG=pw:browser)
+    ...(flag('tracegc') ? ['--js-flags=--trace-gc --trace-gc-verbose', '--single-process'] : []),
+  ],
+});
 const logs = [];
 const version = browser.version();
 try {
@@ -301,6 +311,10 @@ try {
       self.set(key, (self.get(key) ?? 0) + (dt[i] ?? 0));
     }
     const total = [...self.values()].reduce((a, b) => a + b, 0);
+    // functions V8 gave up optimising, and why: a function that deoptimises every frame boxes its numbers each time
+    const deopts = new Map();
+    for (const node of profile.nodes) if (node.deoptReason) deopts.set(`${node.callFrame.functionName || '(anonymous)'} ${node.callFrame.url.split('/').slice(-2).join('/')}:${node.callFrame.lineNumber + 1}`, node.deoptReason);
+    for (const [k, v] of deopts) out(`  deopt: ${k}: ${v}`);
     return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${(v / 1000).toFixed(0).padStart(7)} ms ${((100 * v) / total).toFixed(0).padStart(3)}%  ${k}`);
   };
   const recorded = async (fn) => {
@@ -361,7 +375,15 @@ try {
 
   // ---- garbage: collections over a stroke, and over an idle page
   if (rows.includes('gc')) {
-    await openStudio(true);
+    if (arg('gcpage', 'studio') === 'bare') {
+      // the board alone on a page of its own, without the studio round it
+      await page.goto(`${dataUrl}#plain`);
+      await page.waitForFunction(() => typeof window.boardMount === 'function');
+      const mounted = await page.evaluate(() => window.boardMount());
+      if (mounted !== 'ok') throw new Error(mounted);
+      await page.waitForSelector('.ib-view');
+      await sleep(500);
+    } else await openStudio(true);
     await throttle(rate);
     await tool('pen');
     const box = await surface();
@@ -384,6 +406,17 @@ try {
     };
     const gcs = (events) => {
       const by = {};
+      if (flag('gcdetail')) {
+        // when each collection came, from the first event of the trace, and the heap before and after it
+        const t0 = Math.min(...events.filter((e) => e.ts > 0).map((e) => e.ts));
+        for (const e of events) {
+          if (e.name !== 'MinorGC' && e.name !== 'MajorGC') continue;
+          const a = e.args?.data ?? e.args ?? {};
+          out(`  ${e.name} at ${((e.ts - t0) / 1000).toFixed(0)} ms, heap ${((a.usedHeapSizeBefore ?? 0) / 1024).toFixed(0)} KB -> ${((a.usedHeapSizeAfter ?? 0) / 1024).toFixed(0)} KB`);
+        }
+        // what V8 says of each collection (its reason and the young space), from its own events
+        for (const e of events) if (/^V8\.GC(Scavenger|_SCAVENGER|Heap)|GCEpoch|V8\.GC_HEAP_EXTERNAL|GCCollectGarbage/.test(e.name) && e.args !== undefined && Object.keys(e.args).length > 0) out(`    ${e.name} ${JSON.stringify(e.args).slice(0, 300)}`);
+      }
       for (const e of events) {
         if (e.ph === 'X' || e.ph === 'B' || e.ph === 'I') {
           if (e.name === 'MinorGC' || e.name === 'MajorGC' || e.name === 'V8.GCScavenger' || e.name === 'V8.GCCompactor') by[e.name] = (by[e.name] ?? 0) + 1;
@@ -393,6 +426,96 @@ try {
     };
     const idle = gcs(await trace(() => sleep(strokeSeconds * 1000)));
     const drawn = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    if (flag('alloc')) {
+      // the bytes the page's heap grew by over a stroke, summed frame by frame (a fall is a collection, and is skipped); the
+      // sampler's own reads are a fixed cost, the same with nothing drawn
+      const sampled = async (fn) => {
+        await page.evaluate(() => {
+          const A = (window.__alloc = { on: true, last: performance.memory.usedJSHeapSize, grew: 0, frames: 0 });
+          const step = () => {
+            const now = performance.memory.usedJSHeapSize;
+            if (now > A.last) A.grew += now - A.last;
+            A.last = now;
+            A.frames++;
+            if (A.on) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        });
+        await fn();
+        return page.evaluate(() => {
+          window.__alloc.on = false;
+          return { grew: window.__alloc.grew, frames: window.__alloc.frames };
+        });
+      };
+      const still = await sampled(() => sleep(strokeSeconds * 1000));
+      const inked = await sampled(() => stroke(strokeSeconds, box.x + 120, box.y + 400));
+      out(`heap growth over ${strokeSeconds} s: still ${(still.grew / 1024).toFixed(0)} KB in ${still.frames} frames; drawing ${(inked.grew / 1024).toFixed(0)} KB in ${inked.frames} frames (${(inked.grew / Math.max(1, inked.frames)).toFixed(0)} bytes a frame)`);
+    }
+    /** The heap as the protocol reports it, every 50 ms while `fn` runs: the script's objects, Blink's and the array buffers', each summed where it grows. */
+    const usageOf = async (session, fn) => {
+      const grew = { used: 0, embedder: 0, backing: 0 };
+      let last = await session.send('Runtime.getHeapUsage');
+      let going = true;
+      const poll = (async () => {
+        while (going) {
+          await sleep(50);
+          const now = await session.send('Runtime.getHeapUsage');
+          if (now.usedSize > last.usedSize) grew.used += now.usedSize - last.usedSize;
+          if ((now.embedderHeapUsedSize ?? 0) > (last.embedderHeapUsedSize ?? 0)) grew.embedder += now.embedderHeapUsedSize - last.embedderHeapUsedSize;
+          if ((now.backingStorageSize ?? 0) > (last.backingStorageSize ?? 0)) grew.backing += now.backingStorageSize - last.backingStorageSize;
+          last = now;
+        }
+      })();
+      await fn();
+      going = false;
+      await poll;
+      return `script ${(grew.used / 1024).toFixed(0)} KB, Blink ${(grew.embedder / 1024).toFixed(0)} KB, array buffers ${(grew.backing / 1024).toFixed(0)} KB`;
+    };
+    if (flag('usage')) out(`heap growth over a ${strokeSeconds} s stroke, the board's page: ${await usageOf(cdp, () => stroke(strokeSeconds, box.x + 120, box.y + 400))}`);
+    if (flag('track')) {
+      // every allocation of a stroke with its stack (the allocation tracker of the protocol): the trace tree of the heap snapshot
+      // counts what was made, collected or not
+      await cdp.send('HeapProfiler.enable');
+      await cdp.send('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
+      await stroke(strokeSeconds, box.x + 120, box.y + 400);
+      const chunks = [];
+      const onChunk = (e) => chunks.push(e.chunk);
+      cdp.on('HeapProfiler.addHeapSnapshotChunk', onChunk);
+      await cdp.send('HeapProfiler.stopTrackingHeapObjects', { reportProgress: false });
+      cdp.off('HeapProfiler.addHeapSnapshotChunk', onChunk);
+      const snap = JSON.parse(chunks.join(''));
+      const meta = snap.snapshot.meta;
+      const infoFields = meta.trace_function_info_fields;
+      const nodeFields = meta.trace_node_fields;
+      const fi = snap.trace_function_infos;
+      const strings = snap.strings;
+      const fnName = (id) => {
+        const at = id * infoFields.length;
+        const name = strings[fi[at + infoFields.indexOf('name')]];
+        const script = strings[fi[at + infoFields.indexOf('script_name')]] ?? '';
+        const line = fi[at + infoFields.indexOf('line')];
+        return `${name || '(anonymous)'} ${script.split('/').slice(-2).join('/')}:${line + 1}`;
+      };
+      const by = new Map();
+      let total = 0;
+      const walk = (node, trail) => {
+        // a node is [id, function info index, count, size, children]
+        const fIndex = node[nodeFields.indexOf('function_info_index')];
+        const size = node[nodeFields.indexOf('size')];
+        const kids = node[nodeFields.indexOf('children')];
+        const here = [...trail, fnName(fIndex)];
+        if (size > 0) {
+          const key = here.slice(-3).reverse().join(' < ');
+          by.set(key, (by.get(key) ?? 0) + size);
+          total += size;
+        }
+        for (let i = 0; i < kids.length; i += nodeFields.length) walk(kids.slice(i, i + nodeFields.length), here);
+      };
+      const tree = snap.trace_tree;
+      for (let i = 0; i < tree.length; i += nodeFields.length) walk(tree.slice(i, i + nodeFields.length), []);
+      out(`allocated while drawing ${strokeSeconds} s (tracker): ${(total / 1024).toFixed(0)} KB`);
+      for (const [k, v] of [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)) out(`  ${(v / 1024).toFixed(1).padStart(8)} KB  ${k}`);
+    }
     if (flag('profile')) {
       // where the page's script allocates while drawing, garbage included: the sampling heap profiler of the protocol
       await cdp.send('HeapProfiler.enable');
@@ -448,6 +571,7 @@ try {
     // a process that has just started collects on its own while its heap settles; the stroke that is counted comes after that
     await trace(() => sleep(3000));
     const blank = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    if (flag('usage')) out(`heap growth over a ${strokeSeconds} s stroke, the blank page: ${await usageOf(cdp, () => stroke(strokeSeconds, box.x + 120, box.y + 400))}`);
     await cdp.detach();
     await blankContext.close();
     cdp = studioCdp;

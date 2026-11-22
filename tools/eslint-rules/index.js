@@ -3,6 +3,8 @@
  * check fails `npm run check` (spec: .kiro/specs/lint-rules/).
  */
 import { noAiCredit, noThrowExport } from './code.js';
+import { glClearMasks } from './gl.js';
+import { noLengthReset } from './arrays.js';
 import { allowedImports } from './imports.js';
 import { noImportedMutation, stateRefusalReported } from './purity.js';
 import { noFlagSoup, noShadowNull, noStaleAfterAwait, tableRefuses, tableRequired, transitionOnly, unionType } from './state.js';
@@ -20,6 +22,8 @@ export const rules = {
   'no-ai-credit': noAiCredit,
   'no-imported-mutation': noImportedMutation,
   'state-refusal-reported': stateRefusalReported,
+  'gl-clear-masks': glClearMasks,
+  'no-length-reset': noLengthReset,
 };
 
 export default { meta: { name: 'eslint-plugin-incantly' }, rules };

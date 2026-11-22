@@ -43,7 +43,7 @@ class InkTool implements ToolHandlers {
     if (s.predicted) this.#ctx.core.live.predict(s);
     else {
       this.#ctx.core.live.add(s, camera);
-      this.#hold.move(s.x, s.y, s.time);
+      this.#hold.move(s);
     }
     this.#ctx.requestFrame();
   }
