@@ -261,3 +261,95 @@ Run with `npx vitest run --config packages/teacher/bench/vitest.config.ts` and `
 - Hand animation and the panel's hand icon (the demo agent's caption needs the board's frame loop, which a test does not run; the demo tests stop after its first answer).
 - A real vision model reading a picture, and a real OpenRouter reply (round 5's live test).
 - `retry_spent` notices on the board route: a board turn has no line retries, so only `stream_cut` can appear on `done`.
+
+# Round 4
+
+Branch `feat/teacher-r4` (draft PR #147). Tester run of 2026-11-22. New specs, all written from the docs and the public exports (`handoff/teacher/builder-notes.md` "Round 4" was read for the choices, not for expected values):
+
+- teacher: `packages/teacher/test/spec/film-tools.test.ts`, `sentences.test.ts`, `live.test.ts`, `lessons.test.ts`; bench `packages/teacher/bench/sentences.bench.ts`.
+- server: `packages/server/test/spec/speech.test.ts`, `teach.test.ts`, `teach-lessons.test.ts` (helpers in `r4-helpers.ts`: a server with the chat network and a separate voice network, both fake `fetch`).
+- studio: `apps/studio/test/voice-lesson.test.ts`, `voice-audio.test.ts`.
+
+## Counts
+
+| Run | Files | Tests | Pass | Fail |
+|---|---|---|---|---|
+| `film-tools.test.ts` (teacher) | 1 | 34 | 34 | 0 |
+| `sentences.test.ts` (teacher) | 1 | 34 | 33 | 1 |
+| `live.test.ts` (teacher) | 1 | 27 | 27 | 0 |
+| `lessons.test.ts` (teacher) | 1 | 36 | 36 | 0 |
+| `speech.test.ts` (server) | 1 | 55 | 55 | 0 |
+| `teach.test.ts` (server) | 1 | 61 | 61 | 0 |
+| `teach-lessons.test.ts` (server) | 1 | 15 | 15 | 0 |
+| `voice-lesson.test.ts` (studio) | 1 | 75 | 75 | 0 |
+| `voice-audio.test.ts` (studio) | 1 | 34 | 34 | 0 |
+| New in total | 9 | 371 | 370 | 1 |
+| `--project teacher` | 16 | 767 | 766 | 1 |
+| `--project server` | 18 | 709 (6 todo) | 703 | 0 |
+| `--project studio` | 26 | 665 | 665 | 0 |
+| `npx vitest run` (whole repo) | 318 | 12,958 (11 skipped, 6 todo) | 12,940 | 1 |
+
+`npm run lint` and `npm run typecheck` pass. The one failing test is new; every other test in the repo passes. No test reaches a network (the studio test that mounts the whole page replaces `fetch`), no `.env` was read, and no rule was disabled.
+
+## Benches
+
+Run with `npx vitest run --config packages/teacher/bench/vitest.config.ts sentences`. Design 10 has one splitter row (under 1 ms per streamed line); the sentence splitter uses it as its limit.
+
+| Measure | Result | Limit |
+|---|---|---|
+| Sentence splitter, pieces of 3 / 12 / 60 characters, per piece | 0.0007 / 0.0010 / 0.0021 ms | 1 ms |
+| Sentence splitter, 20,000 characters with no end, 3-character pieces, per piece (no quadratic rescan) | 0.0028 ms | 1 ms |
+| `liveTurn`, one model call of 30 sentences, fake model, whole turn | 0.63 ms | 5 ms (own limit) |
+
+No server bench for `/v1/speech` or `/v1/teach` was written (server design 9 has no row for them).
+
+## Failing tests (the code or the docs are wrong; the tests stay)
+
+| # | Test | Rests on | What happens |
+|---|---|---|---|
+| 1 | `sentences` "a run that is long when its full stop arrives in the same piece is still cut: no sentence is over what the voice takes (500)" | teacher design 8: a run of more than 400 characters is cut at a comma or a space; the voice takes 500. Server design 6 and 7: one sentence is at most 500 characters | `SentenceSplitter.cutAt` looks for a full stop first and the 400 check only comes after the scan finds none. A piece of 754 characters that holds its full stop (`'word ' × 150 + 'end. Next one.'`) comes out as one sentence of 754 characters, so the studio's `/v1/speech` request for it is `413` and the browser's voice speaks it. The same happens for any push whose end mark is past character 400 (streams with small pieces cross 400 first and are cut; a provider that sends big chunks, or a recording, is not). The fix is to test the length before accepting an end mark past `SENTENCE_MAX`. |
+
+## Contradictions between documents, and builder choices against the docs
+
+| Where | What | What the tests follow |
+|---|---|---|
+| teacher design 8 ("line breaks that are followed by a space") vs `stream/sentences.ts` | The code cuts at every line break at once, with no space needed; builder choice 6 words it as "a line break when a space follows". A model that writes a list one item a line has no space after the break. | A line break ends a sentence (the code, and the sense of the sentence). The doc should drop "that are followed by a space" for line breaks. |
+| teacher design 8 vs the builder (the splitter) | The code also cuts a long run at `;` and `:`; the doc names a comma or a space. | Only the 400-character bound and that nothing is lost; the mark is not asserted. |
+| teacher errors.md T003 (`turn_limit`, "This answer stopped after {what}.") and server design 6 (the turn limit "is the stream's last event") vs server errors.md | `errors.md` of the server has no `turn_limit` kind; it names `model_timeout` for a turn that passes 60 s. The server answers 8 model calls with `model_timeout` "The AI took too long." | The test accepts `turn_limit` or `model_timeout` and requires an `error` event with no `done` and exactly 8 model calls. One of the docs should name the wire kind. |
+| teacher design 4 / agent.md 3 (`show_me { name, to, seconds }`: "move a slider while explaining it") vs TR-34 | Both agree the move is at once today, which is not what the prompt tells the model ("to move it there over seconds"). | The doc as written: `SetValue(name, to)` at once, `seconds` checked (above 0, at most 30). A glide is TR-34. |
+| teacher design 4 / R6.2 ("film tools on a board act on the card made last, or the one in focus") vs builder choice 3 and TR-35 | On the server the tools act on the headless copy of the card in focus only (a card made this turn is not in it); the client does the "made last" part. `seek_beat`'s `t` on the wire is the focus copy's clamped time. | The doc for what is observable on the wire: the controls go out, `show_me`'s line is sent on, the focus clock moves. Not tested: a card made this turn taking the film tools on the server (TR-35). |
+| teacher agent.md 6 ("about 3,100" and "about 3,300" tokens for `live`) | The tests assert only the hard limit (under 4,000, design 5) in six modes and on a board. The "about" figures are not asserted. | The 4,000 limit. |
+| teacher design 9 (`liveTarget` first message) vs the builder's "THE FIGURE IN FOCUS" | The heading is not in a doc. | Only that the board comes first, the focus figure after it, and the word "focus" is there. |
+
+## Doc gaps (tests had to pick a name or a shape; change the test when the doc names it)
+
+| Gap | Used by |
+|---|---|
+| The status for a `/v1/teach` field that is wrong: tests expect `400 bad_request` naming the field for a missing or non-text `text`, an unknown `mode`, a `script` over 64 KB, a `history` that is not a list or has 11 turns or an item with a wrong role or no text, and a `board` with 61 items, no `id`, or not an object. Server design 6 gives `413` for text (4,000) and history characters (8,000) and `400` for more than 10 turns; the others are the pattern of `/v1/board/ask`. | `teach.test.ts` |
+| `t`: builder choice 5 says 0 to 86,400 and `400` outside it; the docs only call it the film time. `null` is taken as missing (200). | `teach.test.ts` ("builder's choices") |
+| The body limit of `/v1/teach` (256 KB) and `/v1/speech` (16 KB): design 7 lists them; the tests use the numbers. | `teach.test.ts`, `speech.test.ts` |
+| A speech answer with a JSON content type and status 200 is a failed voice that passes on; a body that ends with no byte is the same (builder choices 8 and 9). | `speech.test.ts` |
+| The sample rate when the provider's `x-sample-rate` is outside 8,000 to 192,000: not tested. | none |
+| The text of `model_timeout` for no first byte on `/v1/speech`: errors.md's "The AI took too long." | `speech.test.ts` |
+| What the panel shows for an HTTP error with no error body: tests require a notice that is not the provider's text; the wording is the code's (`http_<status>`). | `voice-lesson.test.ts` |
+| When the browser's voice has no `speechSynthesis`: the lesson shows the sentences and goes on (no hang). The doc does not say. | `voice-lesson.test.ts` |
+| An `error` event in a lesson stream still lets the sentences already queued play, then the lesson ends idle (TE4 note in builder choice 10; TE4 itself only says `done` and `error` queue the end marker). | `voice-lesson.test.ts` |
+| The harness read these implementation files to wire its fakes, not to set expected values: `packages/server/src/providers/speech.ts` and `jobs/speech.ts` (option names, `firstByteMs`), `apps/studio/src/voice.ts` (`VoiceOptions`), `voice-audio.ts` (the globals it reads), `voice-ui.ts` (class names of the panel), `packages/teacher/src/loop/live.ts` (`LiveTurnOptions`). | all |
+
+## What the new tests cover
+
+- **Film tools (34):** the four are built-in names with schemas that match design 4; `pause`/`resume` stop and play the clock, give `{ ok: true, t }` and a `control` output, twice in a row is fine; `seek_beat` moves the clock, keeps the play state, clamps past the end and sends the time the figure stands at, and rejects a missing, text, negative, null or list `t` with `tool_input`; `show_me` writes `SetValue` for a number, true or false, a text and a point, gives the `draw` result (and the kernel's `unknown_name` / `not_free` objects, unchanged) and sends a `lines` output only when the line passed, accepts `{ name, to, seconds }` at once, checks `seconds` (above 0, at most 30), refuses `value` with `to`, neither, a bad name or a bad value; `tool_busy` (T002) for each; `tool_unknown` (T004) when a host leaves them out; on a live board target they move the focus figure's clock, send their controls, and `show_me` is sent on as it is; a board target with no figure keeps a clock record.
+- **Sentence splitter (34):** whole sentences only, in any piece size (every cut of a text into two, and pieces of 1 to 11 characters, give the sentences of the whole); `. ! ? …` and runs of marks, closing quotes and brackets, line breaks; `2.5`, `3.14`, `1.2.3`, `a.txt`, `e.g.`, `i.e.`, `Dr.`, `Mr.`, `Mrs.`, `Ms.`, `vs.`, `Fig.`; `x = 3.` at the end of the text, followed by a space, followed by `5` (3.5); markdown marks and dollars dropped; text with no letter or digit dropped; a run of more than 400 characters cut at a comma or a space with nothing lost, a word of 1,000 characters cut; the failing test above.
+- **The live job (27):** `say` events are sentences (pieces cut mid-word, decimals, marks), a sentence comes before the lines of its own reply, controls flush the sentence before them; lines that fail never reach the client; the film tools in order; stop gives `done`; a model error and a cut answer end with `error` and with `done` plus a `stream_cut` notice; `liveTools` and the tools offered on a figure and on a board (with and without a focus script); board actions are sent; the prompt names the tools and the spoken-lesson rules, stays under 4,000 tokens in six modes and on a board, holds the learner's words only inside `<material>` (a planted closing tag does not escape), and puts earlier turns before the new request; the 8-model-call limit.
+- **Acceptance lessons (36 + 15):** each recording replays through `liveTurn` and through `POST /v1/teach` (as the SSE stream a model sends); the turn ends with a bare `done`, every reply is used, the objects are exactly `expect.objects` (checked on the teacher's copy and on a client that applied only the lines the server sent), the value `show_me` set is on the figure, nothing is undefined, every line the model wrote was sent, the sentences are as many as `expect.sentences` (each whole, at most 500 characters, no marks), the words spoken are the words written, the controls are `expect.control`, the replay is deterministic, and the server's events equal the teacher's own replay.
+- **`POST /v1/teach` (62):** the stream shape and flush, sentences by piece size, say before lines, lines checked on the copy of the request's script, the first message (mode, script, `t`, board items), the learner's words in a material block, `pause`/`resume`/`seek_beat`/`show_me` events, the board lesson's tools and actions (a bad action fails alone, a figure action's bad line is dropped), every request limit (text 4,000 and 4,001, script 64 KB, history 10 turns and 8,000 characters, 60 board items, body 256 KB, not JSON, GET, origin), the history reaching the model, no key (503), all busy (200 and a `model_busy` event), a failed model, a cut answer (`stream_cut` notice), `retry_spent`, the turn limit, `superseded`, closing the connection, the rate limit and the daily budget, an unknown tool, no key or words in the log.
+- **`POST /v1/speech` (55):** Fish MP3 and HeyGen PCM with the voice, what is asked of each (URL, key only in `Authorization`, `mp3` / `pcm`, `instructions` to Fish only), the bytes unchanged, `x-sample-rate` (header, `rate=`, default) and its exposure, the audio on the wire while the provider holds the rest, an error after the first byte ends the response with no error line, fallback on 429, 500, 503, a network error, no first byte, a head with no byte, an empty body and a JSON answer, the 60 s skip after a 429 (and not after a 500), all busy / all slow / a mix as `503 model_busy` with `retry-after`, `504 model_timeout`, `503 model_unavailable`, no key, 500 and 501 characters, instructions 200 and 201, bad fields, body over 16 KB, origin, the 0.1 weight (ten fit in RATE_PER_MINUTE=1, the eleventh is 429), no model slot (three at once, and a lesson turn is not replaced), no model call of the day, a closed client aborts the provider call (streaming, and before the first byte), free ids only and the voice setting, `/v1/health` `voice`, no key, no sentence and no provider text in the log or the answers.
+- **Studio `VoiceLesson` (75):** the `VOICE_MACHINE` table row by row (19 rows, and no other), each row with fakes (recogniser, clips, browser voice, `/v1/teach` fed by hand): `listen`, `heard` (final only, empty ignored), `stop`, recognition failure, `type` from idle, listening, thinking and speaking, `play`, `wait`, `drained` (only at the end marker, never at an empty queue), `fail`; the text box where nothing can listen; the request fields and the history cap (10 turns, 8,000 characters); the transcript cap (60); lines, actions and controls applied while a clip plays, in order; sentences play in order, are fetched ahead, and a later sentence that is ready first waits; the browser's voice in its place for a missing or unplayable clip and with no browser voice; barge-in by typing, by voice and by Stop stops the clip and the browser's voice, drops and frees the queue, aborts the turn and the audio requests, and ignores every late event of the old turn; failures (no target, no network, an HTTP error with and without a body, an `error` event, a cut stream, a target that throws); `SentenceQueue`. No test saw a refused move of the machine (`onFault`).
+- **Studio sound and panel (34):** `speechClips` (the request, MP3 on an audio element, PCM through Web Audio at the answer's rate with 16-bit little-endian samples, 24,000 by default, stop on abort, no clip for 429, 503, 504, an empty body, a network error or an abort); `browserVoice` and `browserRecogniser` over fake browser objects; the Talk panel's text box, Enter, sentences going to `/v1/speech` in order, open and close, the state words, text shown as text, `setAvailable`; the Talk button in the mounted studio (visible in graphing, geometry and notes, hidden in scientific).
+
+## Not tested
+
+- A live capture of either voice (TR-37), a real model, a real microphone or speaker; round 5's smoke run has them.
+- A timed `show_me` glide (TR-34), a card made this turn taking the film tools on the server (TR-35), playing a clip while it streams (TR-36). The tests hold the behaviour the docs describe today.
+- The first-byte timeout of 15 s (the voices take `firstByteMs`; the tests use 60 to 400 ms) and the 60 s turn limit of `/v1/teach`.
+- The studio's page layout of the panel (no screenshot: needs a running server with a fake model).
