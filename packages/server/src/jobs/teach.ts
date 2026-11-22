@@ -62,7 +62,7 @@ function readHistory(raw: unknown): HistoryItem[] | ServerError {
   return out;
 }
 
-function readBoard(raw: unknown): BoardRequestData | undefined | ServerError {
+export function readBoard(raw: unknown): BoardRequestData | undefined | ServerError {
   if (raw === undefined || raw === null) return undefined;
   if (!isObject(raw)) return badRequest('"board" must be { items, more?, page } or null.');
   const items = readItems(raw);

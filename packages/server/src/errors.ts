@@ -20,6 +20,9 @@ export type ServerErrorKind =
   | 'model_bad_output'
   | 'turn_limit'
   | 'superseded'
+  | 'lesson_unknown'
+  | 'lesson_busy'
+  | 'lesson_full'
   | 'not_found'
   | 'internal';
 
@@ -48,6 +51,10 @@ export const STATUS: Readonly<Record<ServerErrorKind, number>> = {
   turn_limit: 504,
   /** Stream only (errors.md): a newer request replaced this one after the stream began; never an HTTP status. */
   superseded: 409,
+  /** Lesson errors (lesson errors.md): the lesson is not held, a turn of it still runs, the server holds 100 lessons. */
+  lesson_unknown: 404,
+  lesson_busy: 409,
+  lesson_full: 503,
   not_found: 404,
   internal: 500,
 };
@@ -85,6 +92,13 @@ export const modelTimeout = (): ServerError => serverError('model_timeout', 'The
 export const modelBadOutput = (): ServerError => serverError('model_bad_output', 'The AI could not draw this.', { hint: 'Say it in other words.' });
 
 export const superseded = (): ServerError => serverError('superseded', 'A newer request replaced this one.');
+
+export const lessonUnknown = (): ServerError => serverError('lesson_unknown', 'This lesson has ended.', { hint: 'Start a new lesson.' });
+
+export const lessonBusy = (): ServerError => serverError('lesson_busy', 'The teacher is still answering.', { hint: 'Stop the running answer, then send again.' });
+
+export const lessonFull = (): ServerError =>
+  serverError('lesson_full', 'The server is teaching too many lessons; try again in a minute.', { hint: 'Try again in a minute.', detail: { retryAfterMs: 60_000 } });
 
 /**
  * An error as the teacher's stream carries it (the SDK shape with plain-data `detail`). The server's own error and the
