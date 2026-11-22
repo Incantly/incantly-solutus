@@ -1,0 +1,45 @@
+{
+  "lesson": "fire",
+  "note": "Acceptance lesson 3 (core design 12, teacher design 11): recorded replies of a live lesson, replayed with fakeModel. Not a live capture: written by hand from the lesson's shape.",
+  "mode": "geometry",
+  "request": "Show me a candle flame, and what a draught does to it.",
+  "expect": {
+    "objects": ["table", "candle", "draught", "flame"],
+    "values": { "draught": 0.6 },
+    "sentences": 7,
+    "control": [{ "op": "pause" }, { "op": "seek", "t": 1.5 }, { "op": "resume" }]
+  },
+  "replies": [
+    {
+      "text": "A candle stands on a table.",
+      "toolCalls": [{ "name": "draw", "args": { "lines": ["@view -2 2 -0.3 3.8", "table = Ground(0)", "candle = Box((0, 0.4), 0.3, 0.8)"] } }]
+    },
+    {
+      "pieces": ["The flame burns at the top of the wick, ", "where the wax is hot."],
+      "toolCalls": [
+        {
+          "name": "draw",
+          "args": { "lines": ["draught = 0 in -1..1 step 0.1", "flame = Fire((0, 0.88), source = Circle((0, 0.88), 0.07), heat = 800, fuel = 0.3, burn = 2, wind = (draught, 0))"] }
+        }
+      ]
+    },
+    {
+      "text": "Now a draught blows in from the left.",
+      "toolCalls": [{ "name": "show_me", "args": { "name": "draught", "value": 0.6 } }]
+    },
+    {
+      "text": "I will stop the film here, so you can see how the flame leans.",
+      "toolCalls": [
+        { "name": "pause", "args": {} },
+        { "name": "seek_beat", "args": { "t": 1.5 } }
+      ]
+    },
+    {
+      "text": "Does the flame lean with the draught or against it? Take a moment, then say.",
+      "toolCalls": [{ "name": "resume", "args": {} }]
+    },
+    {
+      "text": "It leans away from the draught, because the moving air carries the hot gas with it."
+    }
+  ]
+}

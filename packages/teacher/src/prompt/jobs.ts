@@ -21,12 +21,17 @@ const RULES = `RULES FOR EVERY ANSWER
 7. Keep a figure small: about 20 objects for a live lesson unless asked for more.`;
 
 const LIVE = `JOB: LIVE LESSON
-- Say one sentence, and call draw with the one or two lines it shows, in the same reply.
+- You are speaking aloud: short plain sentences, no lists, no markdown, no code, and no symbols read out. Name the thing, then say what it shows.`;
+
+const LIVE_DRAW = `- Say one sentence, and call draw with the one or two lines it shows, in the same reply.
 - Call figure when you are not sure what is on screen.
 Example. "Take a circle of radius 2." -> draw lines: ["c = Circle((0, 0), 2)"]. Then "And a point on it, with its tangent." -> draw lines: ["P = PointOn(c)", "tg = Tangent(P, c)"].`;
 
-const LIVE_FILM = `- Use show_me to move a slider or a free point while you explain it ("watch what happens as a grows").
-- Use pause before a question to the learner, and resume after the answer.`;
+const LIVE_ON_BOARD = `- Say one sentence, and show what it says with a board call in the same reply: a figure card for maths that moves, a write for a formula, an arrow to join them. Read the board (board_read) when the learner points at something.
+- The learner's own shapes stay as they are; add beside them.`;
+
+const LIVE_FILM = `- Use show_me to move a slider or a free point while you explain it ("watch what happens as a grows"): show_me name a, value 2.
+- Use pause before a question to the learner, and resume after the answer. Use seek_beat to jump the film to the time where the thing you explain happens.`;
 
 const FIGURE = `JOB: PROMPT TO FIGURE
 - Plan call: list the objects in order, in words. No lines.
@@ -55,7 +60,7 @@ export function jobInstructions(job: JobId, tools: readonly string[], mode?: str
   const parts: string[] = [INTRO, RULES];
   switch (job) {
     case 'live':
-      parts.push(has('pause') || has('show_me') ? `${LIVE}\n${LIVE_FILM}` : LIVE);
+      parts.push([LIVE, has('draw') ? LIVE_DRAW : '', has('board') ? LIVE_ON_BOARD : '', has('pause') || has('show_me') ? LIVE_FILM : ''].filter((p) => p !== '').join('\n'));
       if (has('board')) parts.push(boardRules);
       break;
     case 'figure':

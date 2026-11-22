@@ -43,7 +43,7 @@ export interface FallbackOptions {
 }
 
 /** Why a model passed the call on. */
-type Pass = { readonly why: 'busy'; readonly retryAfterMs: number } | { readonly why: 'timeout' } | { readonly why: 'failed' };
+export type Pass = { readonly why: 'busy'; readonly retryAfterMs: number } | { readonly why: 'timeout' } | { readonly why: 'failed' };
 
 const TIMED_OUT: unique symbol = Symbol('timed out');
 const STOPPED: unique symbol = Symbol('stopped');
@@ -54,7 +54,7 @@ const retryAfterOf = (e: StreamError, fallback: number): number => {
 };
 
 /** The error that ends a call no model answered. */
-function exhausted(passes: readonly Pass[], skipMs: number): StreamError {
+export function exhausted(passes: readonly Pass[], skipMs: number): StreamError {
   if (passes.length > 0 && passes.every((p) => p.why === 'busy')) {
     const waits = passes.map((p) => (p.why === 'busy' ? p.retryAfterMs : skipMs));
     return toStreamError(modelBusy(Math.min(...waits)));

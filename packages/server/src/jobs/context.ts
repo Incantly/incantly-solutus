@@ -3,6 +3,7 @@ import type { ModelClient } from '@incantly/teacher';
 import type { Settings } from '../env';
 import type { LogFn } from '../log';
 import type { RateLimiter } from '../limits/rate';
+import type { SpeechClient } from '../providers/speech';
 import type { Job } from './job';
 
 export interface Context {
@@ -10,6 +11,8 @@ export interface Context {
   readonly settings: Settings;
   /** The model client, or undefined when the provider has no key (model endpoints answer `model_unavailable`). */
   readonly client: ModelClient | undefined;
+  /** The voices of `/v1/speech`, or undefined when the provider has no key or no voice (the route answers `model_unavailable`). */
+  readonly speech: SpeechClient | undefined;
   readonly limiter: RateLimiter;
   readonly log: LogFn;
   /** The client's address, for the rate limits. */

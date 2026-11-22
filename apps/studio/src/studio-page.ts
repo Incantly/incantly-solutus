@@ -14,6 +14,9 @@ import { mountKeyboard } from './modes/keyboard';
 import { customBoardOptions, studioBoardOptions } from './board-options';
 import { boardAgentOption, connectBoardAgent } from './board-agent';
 import { probeServer } from './server';
+import { mountVoice } from './voice-ui';
+import type { VoiceUi } from './voice-ui';
+import { boardLesson, figureLesson } from './voice-targets';
 import { mountExamScreens } from './modes/exam-ui';
 import type { ScientificView } from './modes/scientific';
 import type { MathKeyboard } from './modes/keyboard';
@@ -103,6 +106,8 @@ export interface Mounted {
   readonly space: SpacePane;
   /** The board of the Board (notes) app: the view is made when the app first shows it. */
   readonly board: { readonly element: HTMLElement; view(): BoardView | undefined };
+  /** The Talk button and panel: the voice lesson (graph and board views). */
+  readonly voice: VoiceUi;
   loadExample(id: string): void;
   undo(): void;
   redo(): void;
@@ -735,6 +740,14 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     storage,
   }, opts.mode ?? 'classic');
   modeRef.current = modes;
+  // the voice lesson (teacher design 8): the Talk button in the views that hold a figure or the board
+  const voice = mountVoice({
+    target: () => (boardPane.isOpen() && boardRef.current !== undefined ? boardLesson(boardRef.current) : figureLesson(session, () => modes.mode.id)),
+  });
+  const talkable = (m: { readonly views: { readonly available: readonly string[] } }): boolean => m.views.available.includes('graphics') || m.views.available.includes('board');
+  voice.setAvailable(talkable(modes.mode));
+  topRight.prepend(voice.button);
+  appEl.append(voice.panel);
   const scientific = mountScientific(session, modes.settings, modes.i18n, say);
   sciHolder.current = scientific;
   main.append(scientific.element);
@@ -788,6 +801,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const titleOf = (id: AppModeId): string => modes.i18n.t(`mode.${id}.title`);
   fillExamples(modes.mode.id, titleOf);
   modes.onChange((m) => {
+    voice.setAvailable(talkable(m));
     fillExamples(m.id, titleOf);
     keyboard.setMode(m);
     exam.setMode(m);
@@ -813,6 +827,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     files,
     space: space3,
     board: { element: boardHost, view: () => boardRef.current },
+    voice,
     modes,
     scientific,
     keyboard,
@@ -850,6 +865,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     dispose() {
       sound.dispose();
+      voice.dispose();
       document.removeEventListener('pointerdown', firstGesture, true);
       exam.dispose();
       keyboard.dispose();

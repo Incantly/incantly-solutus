@@ -10,6 +10,8 @@ import { STATUS, fingerprintOf, internalError, retryAfterSeconds } from '../erro
 import type { ServerError } from '../errors';
 import type { LogFn } from '../log';
 import { openNdjson, writeNdjson } from '../http/ndjson';
+import { openAudio, writeAudio } from '../http/audio';
+import type { AudioType } from '../http/audio';
 
 export type JobState = 'received' | 'running' | 'streaming' | 'done' | 'refused' | 'aborted' | 'failed';
 export type JobMove = 'checked' | 'refuse' | 'fail' | 'firstEvent' | 'finish' | 'close';
@@ -101,6 +103,32 @@ export class Job {
     const wasRunning = this.machine.is('running');
     if (!this.machine.send('finish')) return;
     if (wasRunning) openNdjson(this.ctx.res, this.ctx.headers);
+    this.ctx.res.end();
+  }
+
+  /**
+   * An audio answer begins (`/v1/speech`): the first byte reached us, so the head and that byte go out (`firstEvent`). Until
+   * now nothing was written, so an error before it is still an HTTP error. False when the job is not running (the client left).
+   */
+  async audio(type: AudioType, headers: Readonly<Record<string, string>>, first: Uint8Array): Promise<boolean> {
+    if (!this.machine.can('firstEvent') || !this.machine.send('firstEvent')) return false;
+    openAudio(this.ctx.res, this.ctx.headers, type, headers);
+    await writeAudio(this.ctx.res, first);
+    return true;
+  }
+
+  /** One more chunk of an audio answer. Dropped when the job is not streaming. */
+  async chunk(bytes: Uint8Array): Promise<void> {
+    if (!this.is('streaming')) return;
+    await writeAudio(this.ctx.res, bytes);
+  }
+
+  /**
+   * An audio answer broke after its first byte. The head is out and the body is not NDJSON, so there is no error line to
+   * write: the response ends where it is, and the client plays what it has.
+   */
+  cut(): void {
+    if (!this.is('streaming') || !this.machine.can('fail') || !this.machine.send('fail')) return;
     this.ctx.res.end();
   }
 

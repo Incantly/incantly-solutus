@@ -8,12 +8,13 @@ import { faultError, toolUnknownError } from '../errors';
 import { boardReadTool, boardTool } from './board';
 import { drawTool } from './draw';
 import { figureTool } from './figure';
+import { FILM_TOOLS } from './film';
 import { toolInputError } from './schema';
 import type { Target, ToolDef, ToolOutcome, ToolSpec, ToolValue, Toolset } from './types';
 
-const BUILTIN: readonly ToolDef[] = [drawTool, figureTool, boardReadTool, boardTool];
+const BUILTIN: readonly ToolDef[] = [drawTool, figureTool, boardReadTool, boardTool, ...FILM_TOOLS];
 
-/** The names of the tools this package ships (`draw`, `figure`, `board_read`, `board`; round 4 adds the film tools). */
+/** The names of the tools this package ships (`draw`, `figure`, `board_read`, `board`, and the film tools `pause`, `resume`, `seek_beat`, `show_me`). */
 export const BUILTIN_TOOL_NAMES: readonly string[] = BUILTIN.map((t) => t.name);
 
 const WHOLE = { line: 0, col: 1, endCol: 1 } as const;

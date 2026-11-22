@@ -6,7 +6,7 @@ What the model reads, per job, and the rules it follows. The prompt builder (des
 
 | Job | Request from | Tools | Answer |
 |---|---|---|---|
-| `live` | The studio's voice lesson (`POST /v1/teach`) | `draw`, `figure`, `pause`, `resume`, `seek_beat`, `show_me`; on a board also `board_read`, `board` | `say` text and tool calls, mixed |
+| `live` | The studio's voice lesson (`POST /v1/teach`) | On a figure: `draw`, `figure`, `pause`, `resume`, `seek_beat`, `show_me`. On a board: `board_read`, `board`, the film tools, and `draw` and `figure` when the card in focus has objects | `say` sentences and tool calls, mixed |
 | `figure` | Tiptap and the studio's AI panel (`POST /v1/figure/draw`) | Plan, script and repair calls (design 7) | Lines |
 | `circle` | Circle to ask (`POST /v1/board/ask`, `kind: "circle"`) | `board_read`, `board` (a figure card's lines are checked by its `figure` action) | Board actions, and `say` text under them |
 | `talk` | The board's agent panel (`POST /v1/board/ask`, `kind: "talk"`) | `board_read`, `board` | Board actions and `say` text (words with no action are a valid answer) |
@@ -23,9 +23,10 @@ What the model reads, per job, and the rules it follows. The prompt builder (des
 
 ## 3. Live lesson
 
-- Say one sentence, and call `draw` with the one or two lines it shows, in the same reply.
-- Use `show_me` to move a slider or a free point while explaining it ("watch what happens as `a` grows").
-- Use `pause` before a question to the learner, and `resume` after the answer.
+- Say one sentence, and call `draw` with the one or two lines it shows, in the same reply. On a board, show what it says with a `board` call instead (a figure card for maths that moves, a `write` for a formula, an arrow to join them).
+- You are speaking aloud: short plain sentences, no lists, no markdown, no code and no symbols read out.
+- Use `show_me` to move a slider or a free point while explaining it ("watch what happens as `a` grows"): `show_me { name: "a", value: 2 }`.
+- Use `pause` before a question to the learner, and `resume` after the answer. Use `seek_beat` to jump the film to the time where the thing you explain happens.
 - Call `figure` when you are not sure what is on screen.
 
 Snippet:
@@ -58,8 +59,8 @@ The rules of `docs/features/board/agent.md` 4 apply. In short: read before writi
 
 | Job | Prompt (target) |
 |---|---|
-| `live` on a figure | about 2,300 tokens |
-| `live` on a board | about 2,800 tokens, plus `board_read` |
+| `live` on a figure | about 3,100 tokens (3,076 with the film tools and the example) |
+| `live` on a board | about 3,300 tokens (3,324 with the board tools, the film tools and the board rules), plus `board_read` |
 | `figure` | about 2,000 tokens |
 | `circle`, `talk` | about 3,300 tokens (3,189 to 3,498 with the board tools, the mode's catalogue and the example), plus the items |
 

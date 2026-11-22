@@ -1,0 +1,40 @@
+{
+  "lesson": "pendulum",
+  "note": "Acceptance lesson 1 (core design 12, teacher design 11): recorded replies of a live lesson, replayed with fakeModel. Not a live capture: written by hand from the lesson's shape (one sentence and its lines in a reply, then film tools, then a closing sentence).",
+  "mode": "geometry",
+  "request": "Show me how a pendulum swings, and what happens when I make the rod longer.",
+  "expect": {
+    "objects": ["g", "L", "θ", "pivot", "bob", "rod"],
+    "values": { "L": 2.5 },
+    "sentences": 6,
+    "control": [{ "op": "resume" }]
+  },
+  "replies": [
+    {
+      "pieces": ["First the clock, which runs for thirty seconds, ", "and the pivot the pendulum hangs from."],
+      "toolCalls": [{ "name": "draw", "args": { "lines": ["@clock 0..30", "@view -3.5 3.5 -3.2 1", "pivot = (0, 0)"] } }]
+    },
+    {
+      "text": "The rod is two metres long, and gravity pulls the weight down.",
+      "toolCalls": [{ "name": "draw", "args": { "lines": ["g = 9.8", "L = 2 in 0.5..2.5 step 0.1"] } }]
+    },
+    {
+      "pieces": ["The angle starts near seventy degrees ", "and changes by the swing equation."],
+      "toolCalls": [{ "name": "draw", "args": { "lines": ["θ = state(1.2, 0)", "θ'' = -g / L * sin(θ)"] } }]
+    },
+    {
+      "text": "Now the weight itself, the rod that joins it to the pivot, and the path the weight leaves.",
+      "toolCalls": [{ "name": "draw", "args": { "lines": ["bob = (L*sin(θ), -L*cos(θ))", "rod = Segment(pivot, bob)", "Trace(bob)"] } }]
+    },
+    {
+      "text": "Watch what happens when the rod gets longer.",
+      "toolCalls": [
+        { "name": "show_me", "args": { "name": "L", "value": 2.5 } },
+        { "name": "resume", "args": {} }
+      ]
+    },
+    {
+      "text": "A longer rod swings more slowly, and the path of the weight shows it."
+    }
+  ]
+}

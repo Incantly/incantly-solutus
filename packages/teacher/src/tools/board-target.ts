@@ -237,6 +237,8 @@ function emptySummary(mode: string): FigureSummary {
  */
 export function boardTarget(data: BoardRequestData, options: BoardTargetOptions = {}): Target {
   const mode = options.mode ?? 'graphing';
+  // the film time the card in focus was last asked for: data of the target, not a state (the client holds the cards' own clocks)
+  const film = { t: 0 };
   return {
     kind: 'board',
     mode,
@@ -246,7 +248,16 @@ export function boardTarget(data: BoardRequestData, options: BoardTargetOptions 
     objects: () => ({ list: [], truncated: false }),
     figureSummary: () => emptySummary(mode),
     undefinedObjects: () => [],
-    clock: { t: 0, play: () => undefined, pause: () => undefined, seek: () => undefined },
+    clock: {
+      get t() {
+        return film.t;
+      },
+      play: () => undefined,
+      pause: () => undefined,
+      seek: (t) => {
+        if (Number.isFinite(t)) film.t = Math.max(0, t);
+      },
+    },
     board: new RequestBoard(data, options.allowEdit === true),
   };
 }

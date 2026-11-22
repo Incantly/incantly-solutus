@@ -10,6 +10,8 @@ import type { ServerError } from '../errors';
 export const BODY_LIMIT = 256 * 1024;
 /** The most bytes of a request body with a picture: a picture of 1.5 MB is 2 MB as base64, and the JSON around it comes on top. */
 export const BODY_LIMIT_PICTURE = 2.5 * 1024 * 1024;
+/** The most bytes of a `/v1/speech` body: one sentence of 500 characters and short delivery instructions, escaped. */
+export const BODY_LIMIT_SPEECH = 16 * 1024;
 /** The most bytes of a picture. */
 export const PICTURE_BYTES = 1.5 * 1024 * 1024;
 /** The most pixels along a side of a picture. */

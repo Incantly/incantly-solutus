@@ -68,7 +68,7 @@ function readItem(raw: unknown, at: number): AgentItem | ServerError {
   };
 }
 
-function readItems(body: Record<string, unknown>): AgentItem[] | ServerError {
+export function readItems(body: Record<string, unknown>): AgentItem[] | ServerError {
   const raw = body['items'];
   if (!Array.isArray(raw)) return badRequest('"items" must be the list of what is on the board in view.');
   if (raw.length > BOARD_ITEMS_MAX) return badRequest(`"items" has ${raw.length} items; at most ${BOARD_ITEMS_MAX}. Send the rest as a count in "more".`);

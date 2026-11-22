@@ -56,7 +56,8 @@ May import: `@incantly/kernel`, `@incantly/modes`, the SDK's headless app (`crea
 - A tool is `{ name, description, schema, run(target, input) }`. `run` returns a `Result`; it never throws. A bad input is `tool_input` (T001) with the schema's expected shape in `forms`.
 - `draw` applies each line on its own through the target's `run` (SDK 1, with `independent: true`): a good line commits; a bad line changes nothing and does not undo the lines before it (core design 10, flow 2); a later line that reads a name a failed line was to make gets `blockedBy` and `recovery: 'fix_earlier'` from the kernel (errors design 6, rule 2).
 - The film tools (`pause`, `resume`, `seek_beat`, `show_me`) act on the target's clock. On a board they act on the figure card the turn made last, or the one in focus.
-- A toolset is built from a list, so a host can leave tools out (Tiptap offers only `draw` and `figure`) or add its own through the same shape.
+- Each film tool also sends an event for the client that shows the figure: `pause` and `resume` a `control` event (`{ op: "pause" }`, `{ op: "resume" }`), `seek_beat` a `control` event with the time the target stands at (`{ op: "seek", t }`, clamped to the film), and `show_me` a `lines` event with its `SetValue` line once the line passed. On a board target the server has no figure to check the line on, so `show_me` sends it on as it is and the card in focus checks it as it applies it.
+- `show_me { name, value }` writes `SetValue(name, value)` for a number, true or false, a text or a point `[x, y]`. `show_me { name, to, seconds }` writes `SetValue(name, to)` and the figure moves at once: `seconds` (above 0, at most 30) is checked and reported in the result, and a timed glide waits for a field in the protocol (`handoff/teacher/findings.md`). A free value it cannot set gives the `draw` error for the line (`not_free`, `unknown_name`).- A toolset is built from a list, so a host can leave tools out (Tiptap offers only `draw` and `figure`) or add its own through the same shape.
 - Two tool calls on one target never overlap. A call that arrives while another runs on the same target gets `tool_busy` (T002) and is not run.
 
 ## 5. Catalogue and instructions
@@ -150,6 +151,9 @@ Free voice models, checked on 2026-11-22 with "Take a circle of radius two, and 
 
 Fish is tried first, HeyGen second. No library is added: playback uses the browser's audio element for MP3 and Web Audio for PCM.
 
+**Sentences.** The voice takes whole sentences. The live job (`liveTurn`) runs the turn and gives `say` events one sentence each: `SentenceSplitter` cuts the model's text at `.`, `!`, `?`, `…` and line breaks that are followed by a space (so `2.5` and `e.g.` stay whole), cuts a run of more than 400 characters at a comma or a space (the voice takes 500), drops markdown marks (`` ` ``, `*`, `#`, `$`) and anything with no letter or digit, and flushes what is left when a tool call, `done` or an error follows. The studio never sees a raw piece of the stream.
+
+**The studio's lesson.** `apps/studio/src/voice.ts` (`VoiceLesson`, `VOICE_MACHINE`, docs/state-machines.md TE4): the learner talks (browser recognition) or types; the request goes to `POST /v1/teach`; each `say` sentence asks `/v1/speech` for its audio at once, so the next sentence is being made while this one plays; clips play in order; a sentence whose audio failed is spoken by the browser's voice in its place; `lines`, `actions` and `control` change the figure or the board as they arrive. When the learner speaks or types while the teacher talks (or presses Stop), the clip stops, the queue is dropped and the turn is aborted.
 ## 9. Target adapters
 
 | Target | Adapter | Used by |
@@ -159,7 +163,9 @@ Fish is tried first, HeyGen second. No library is added: playback uses the brows
 
 An adapter gives the tools `run`, `figureSummary`, `undefinedObjects`, the clock and, for the board, `board_read` and the checks of `board`. The server keeps a headless copy of the target to run the tools and check each line before it streams (server design 5).
 
-`boardTarget(data, options)` (round 3) is the board as a request: the items in view, the page, `more`, the circle's area, whether the user allows edits, and the mode of the catalogue (a circle's choice sets it: `geometry` for `measure` and `geometry`, `graphing` for the rest). It has no figure of its own, so the jobs `circle` and `talk` offer only `board_read` and `board`; a figure card's lines go through the `figure` action, whose result lists each line. A target over a live board (the runner's `BoardAgent`, which applies actions and is asynchronous) is left for round 4's live job.
+`boardTarget(data, options)` (round 3) is the board as a request: the items in view, the page, `more`, the circle's area, whether the user allows edits, and the mode of the catalogue (a circle's choice sets it: `geometry` for `measure` and `geometry`, `graphing` for the rest). It has no figure of its own, so the jobs `circle` and `talk` offer only `board_read` and `board`; a figure card's lines go through the `figure` action, whose result lists each line. A target over a live board (the runner's `BoardAgent`, which applies actions and is asynchronous) is not built: the jobs that touch a board take its items as a request, and the client applies what comes back.
+
+`liveTarget(app, board?)` (round 4) is the target of a live lesson. On a figure it is `figureTarget(app)`. On a board it is the figure of the card in focus (the request's `script`, which the server loads into a headless app) with the board's port added: `board_read` and `board` read the request's items and check the actions, and the film tools reach the figure's clock. `draw` and `figure` are offered on a board only when the card in focus has objects; a board with no card in focus gets `board_read`, `board` and the film tools. Its `kind` is `board`, so `show_me` sends its line on unchecked (see 4).
 
 ## 10. Performance
 
@@ -176,6 +182,8 @@ The benches use a fake model client, so they measure our code only.
 ## 11. Acceptance lessons
 
 Core design 12 names three: a pendulum, the area under a curve, and a fire. Each is a recorded turn (the request, the model's replies) that the loop replays with the fake client, and the figure it leaves is checked by its objects. With a real model they run as an opt-in smoke test.
+
+The recordings are `packages/teacher/test/fixtures/lesson-pendulum.json`, `lesson-area.json` and `lesson-fire.json`. Each holds `replies` (what `fakeModel` replays), the `mode` and the `request` of the lesson, and an `expect` record (the objects the figure holds at the end, the value `show_me` sets, how many sentences are spoken, the film controls that go out). They were written by hand from the shape of a live lesson (a sentence and its lines in one reply, film tools, a closing sentence) and checked to pass the kernel; a live capture waits for round 5's smoke run.
 
 ## 12. Open questions
 
