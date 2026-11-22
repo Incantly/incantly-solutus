@@ -15,7 +15,7 @@ import { createHeadlessApp } from '@incantly/sdk';
 import type { Ticker } from '@incantly/sdk';
 import { liveTurn } from '@incantly/teacher';
 import type { BoardRequestData, HistoryItem } from '@incantly/teacher';
-import { badRequest, fromStreamError, modelUnavailable, superseded as supersededError, tooLarge } from '../errors';
+import { badRequest, fromStreamError, modelUnavailable, superseded as supersededError, tooLarge, turnLimitFromStream } from '../errors';
 import type { ServerError } from '../errors';
 import type { Context } from './context';
 import { readItems } from './board';
@@ -140,7 +140,8 @@ export async function teach(ctx: Context): Promise<void> {
           job.event(ev.notices !== undefined && ev.notices.length > 0 ? { done: true, notices: ev.notices } : { done: true });
           job.end();
         } else if ('error' in ev) {
-          const error = fromStreamError(ev.error);
+          // a teach turn's own limits end as `turn_limit` with the teacher's message; `model_timeout` is for no first byte
+          const error = ev.error.kind === 'turn_limit' ? turnLimitFromStream(ev.error) : fromStreamError(ev.error);
           ctx.log('teach.error', { kind: error.kind });
           job.fail(error);
         }

@@ -11,9 +11,7 @@ import { drawTool } from './draw';
 import { defineTool, ok, toolInputError } from './schema';
 import type { JsonSchema, Target, ToolDef, ToolValue, TurnOutput } from './types';
 
-/** The longest `seconds` a `show_me` may ask for. */
-export const SHOW_SECONDS_MAX = 30;
-
+/** The schema of a tool that takes nothing. */
 const NO_INPUT: JsonSchema = { type: 'object', properties: {} };
 
 /** The film time the clock stands at, rounded so a result reads cleanly. */
@@ -72,19 +70,13 @@ function sourceOf(v: unknown, at: string): { readonly source: string } | { reado
   return { problem: `${at} must be a number, true or false, text, or a point [x, y].` };
 }
 
-/** The `SetValue` line a `show_me` input stands for, or what is wrong with the input. */
+/** The `SetValue` line a `show_me` input stands for, or what is wrong with the input. A timed move (`to`, `seconds`) is later (TR-34). */
 function lineOf(input: Record<string, unknown>): { readonly line: string } | { readonly problem: string } {
   const name = input['name'];
   if (typeof name !== 'string' || !NAME.test(name)) return { problem: '"name" must be the name of a free object, such as a or L[2].' };
-  const hasValue = input['value'] !== undefined;
-  const hasTo = input['to'] !== undefined;
-  if (hasValue === hasTo) return { problem: 'Give either "value" (set it now) or "to" with "seconds" (move it there).' };
-  const read = sourceOf(hasValue ? input['value'] : input['to'], hasValue ? '"value"' : '"to"');
+  if (input['value'] === undefined) return { problem: 'Give "value": the value to set it to now.' };
+  const read = sourceOf(input['value'], '"value"');
   if ('problem' in read) return read;
-  if (hasTo) {
-    const seconds = input['seconds'];
-    if (!finite(seconds) || seconds <= 0 || seconds > SHOW_SECONDS_MAX) return { problem: `"seconds" must be a number above 0 and at most ${SHOW_SECONDS_MAX}.` };
-  }
   return { line: `SetValue(${name}, ${read.source})` };
 }
 
@@ -93,10 +85,8 @@ const SHOW_SCHEMA: JsonSchema = {
   properties: {
     name: { type: 'string', description: 'The free object to change: a slider, a free number or a free point.', minLength: 1, maxLength: 64 },
     value: { description: 'Set it to this now: a number, true or false, text, or a point [x, y].' },
-    to: { description: 'Move it to this over "seconds": the same kinds of value as "value".' },
-    seconds: { type: 'number', description: `How long the move takes, above 0 and at most ${SHOW_SECONDS_MAX}.`, minimum: 0.1, maximum: SHOW_SECONDS_MAX },
   },
-  required: ['name'],
+  required: ['name', 'value'],
 };
 
 /** The draw result of a line sent on without a figure to check it on (a board target). */
@@ -107,7 +97,7 @@ function sentOn(line: string): Result<ToolValue> {
 export const showMeTool: ToolDef = defineTool({
   name: 'show_me',
   description:
-    'Change a free value or a slider while you explain it, so the figure moves where the learner can see it: show_me { name: "a", value: 2 }, or { name: "a", to: 2, seconds: 3 } to move it there. It writes one SetValue line and gives the same result as draw. On a board it acts on the figure card you made last or the one in focus.',
+    'Change a free value or a slider while you explain it, so the figure moves where the learner can see it: show_me { name: "a", value: 2 }. It writes one SetValue line, at once, and gives the same result as draw. On a board it acts on the figure card you made last or the one in focus.',
   schema: SHOW_SCHEMA,
   check(input) {
     const read = lineOf(input);
@@ -120,7 +110,7 @@ export const showMeTool: ToolDef = defineTool({
     if (target.kind === 'board') return sentOn(read.line);
     const result = drawTool.run(target, { lines: [read.line] });
     if (!result.ok) return result;
-    return ok({ ...result.value, show: { name: input['name'] as string, line: read.line, ...(input['seconds'] !== undefined ? { seconds: input['seconds'] as number } : {}) } });
+    return ok({ ...result.value, show: { name: input['name'] as string, line: read.line } });
   },
   outputs(input, value): readonly TurnOutput[] {
     const read = lineOf(input as Record<string, unknown>);

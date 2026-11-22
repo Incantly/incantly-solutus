@@ -200,6 +200,18 @@ describe('a long run with no end (design 8: more than 400 characters is cut at a
     expect(out.join(' ')).toBe(long.replace(/\s+/g, ' ').trim());
   });
 
+  it('TR-40: a sentence over 400 characters is cut at a comma or a space before 400 whether its full stop is in the same piece or not', () => {
+    const withComma = `${'word '.repeat(60)}, ${'more '.repeat(80)}end. Next one.`;
+    for (const text of [`${'word '.repeat(150)}end. Next one.`, withComma, `${'word '.repeat(150)}end.\nNext one.`]) {
+      const whole = run([text]);
+      for (const sentence of whole) expect(sentence.length, sentence.slice(0, 40)).toBeLessThanOrEqual(400);
+      expect(whole.join(' ')).toBe(text.replace(/\s+/g, ' ').trim());
+      expect(whole.at(-1)).toBe('Next one.');
+      expect(run(every(text, 7))).toEqual(whole);
+    }
+    expect(run([withComma])[0]?.endsWith(',')).toBe(true);
+  });
+
   it('a long text flushed at the end is cut as well (a reply that ends with no full stop)', () => {
     const s = new SentenceSplitter();
     s.push('word '.repeat(60));

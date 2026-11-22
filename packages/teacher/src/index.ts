@@ -3,7 +3,7 @@ export { toolset, BUILTIN_TOOL_NAMES } from './tools/toolset';
 export { drawTool, lineResultOf, DRAW_MAX_LINES } from './tools/draw';
 export { figureTool, FIGURE_MAX_OBJECTS } from './tools/figure';
 export { boardReadTool, boardTool } from './tools/board';
-export { FILM_TOOLS, SHOW_SECONDS_MAX, pauseTool, resumeTool, seekBeatTool, showMeTool } from './tools/film';
+export { FILM_TOOLS, pauseTool, resumeTool, seekBeatTool, showMeTool } from './tools/film';
 export { boardTarget, BOARD_DATA_CHARS } from './tools/board-target';
 export type { BoardRequestData, BoardTargetOptions } from './tools/board-target';
 export { figureTarget } from './tools/targets';

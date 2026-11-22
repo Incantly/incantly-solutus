@@ -5,7 +5,7 @@
  */
 import { createHeadlessApp } from '@incantly/sdk';
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_TOOL_NAMES, FILM_TOOLS, SHOW_SECONDS_MAX, boardTarget, figureTarget, liveTarget, toolset } from '../../src/index';
+import { BUILTIN_TOOL_NAMES, FILM_TOOLS, boardTarget, figureTarget, liveTarget, toolset } from '../../src/index';
 import type { Target } from '../../src/index';
 import { drawLines, errorOf, makeRig, tools, valueOf } from './helpers';
 
@@ -29,19 +29,17 @@ describe('the film tools are tools of the package (R2.1, design 4)', () => {
     expect(FILM_TOOLS.map((t) => t.name)).toEqual([...FILM]);
   });
 
-  it('the schemas ask for what design 4 lists: seek_beat needs t; show_me needs name and takes value, to and seconds', () => {
+  it('the schemas ask for what design 4 lists: seek_beat needs t; show_me needs name and value and takes nothing else (a timed move is later, TR-34)', () => {
     const specs = Object.fromEntries(tools([...FILM]).specs().map((s) => [s.name, s.schema]));
     expect(specs['seek_beat']?.required).toEqual(['t']);
     expect(Object.keys(specs['seek_beat']?.properties ?? {})).toEqual(['t']);
     expect(specs['show_me']?.required).toContain('name');
-    expect(Object.keys(specs['show_me']?.properties ?? {})).toEqual(expect.arrayContaining(['name', 'value', 'to', 'seconds']));
+    expect(Object.keys(specs['show_me']?.properties ?? {}).sort()).toEqual(['name', 'value']);
     expect(Object.keys(specs['pause']?.properties ?? {})).toEqual([]);
     expect(Object.keys(specs['resume']?.properties ?? {})).toEqual([]);
   });
 
-  it('SHOW_SECONDS_MAX is 30 (design 4: above 0, at most 30)', () => {
-    expect(SHOW_SECONDS_MAX).toBe(30);
-  });
+  // TR-44: removed with the timed form (TR-34): SHOW_SECONDS_MAX no longer exists
 
   it('a host may leave the film tools out (Tiptap offers draw and figure only)', () => {
     const set = tools(['draw', 'figure']);
@@ -156,28 +154,17 @@ describe('show_me writes a SetValue line through draw (design 4)', () => {
     expect(f.tools.call(f.target, 'show_me', { name: 'p', value: [3, 4] }).outputs).toEqual([{ lines: ['SetValue(p, (3, 4))'] }]);
   });
 
-  it('{ name, to, seconds } writes SetValue(name, to) and the figure moves at once (TR-34)', () => {
+  // TR-44 (review r4): the timed form is not built (TR-34); these tests rested on it and now say it is not accepted
+  it('the timed form { name, to, seconds } is not offered: it is tool_input and writes nothing', () => {
     const f = film();
     const out = f.tools.call(f.target, 'show_me', { name: 'a', to: 4, seconds: 3 });
-    expect(drawLines(out)[0]).toMatchObject({ ok: true });
-    expect(out.outputs).toEqual([{ lines: ['SetValue(a, 4)'] }]);
-    expect(f.target.objects().list.find((o) => o.name === 'a')?.summary ?? '').toContain('4');
+    expect(errorOf(out).kind).toBe('tool_input');
+    expect(out.outputs).toEqual([]);
   });
 
-  it('seconds must be above 0 and at most 30', () => {
+  it('name and value are both needed; a name alone or a value alone is tool_input', () => {
     const f = film();
-    for (const seconds of [0, -1, 30.5, 31, Number.NaN, 'long']) {
-      const out = f.tools.call(f.target, 'show_me', { name: 'a', to: 1, seconds });
-      expect(errorOf(out).kind, String(seconds)).toBe('tool_input');
-      expect(out.outputs).toEqual([]);
-    }
-    expect(f.tools.call(f.target, 'show_me', { name: 'a', to: 1, seconds: 30 }).result.ok).toBe(true);
-    expect(f.tools.call(f.target, 'show_me', { name: 'a', to: 1, seconds: 0.5 }).result.ok).toBe(true);
-  });
-
-  it('value and to together, or neither, are tool_input', () => {
-    const f = film();
-    expect(errorOf(f.tools.call(f.target, 'show_me', { name: 'a', value: 1, to: 2, seconds: 1 })).kind).toBe('tool_input');
+    expect(f.tools.call(f.target, 'show_me', { name: 'a', value: 1 }).result.ok).toBe(true);
     expect(errorOf(f.tools.call(f.target, 'show_me', { name: 'a' })).kind).toBe('tool_input');
     expect(errorOf(f.tools.call(f.target, 'show_me', { value: 1 })).kind).toBe('tool_input');
   });
@@ -250,7 +237,7 @@ describe('on a board the film tools act on the figure card in focus (R6.2, desig
     expect(out.outputs).toEqual([{ lines: ['SetValue(a, 2)'] }]);
   });
 
-  it('show_me on a board still checks its own input (seconds above 30 is tool_input)', () => {
+  it('show_me on a board still checks its own input (the timed form is not offered: tool_input)', () => {
     const { target } = live();
     const set = tools(['board_read', 'board', ...FILM]);
     const out = set.call(target, 'show_me', { name: 'a', to: 1, seconds: 99 });

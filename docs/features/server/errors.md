@@ -13,7 +13,8 @@ Errors use the SDK shape `{ ok: false, kind, message, hint?, detail? }`. A check
 | `daily_budget` | 429 | `DAILY_MODEL_CALLS` used up | "The AI has done its work for today." | Wait until the next day (UTC) |
 | `model_unavailable` | 503 (no key) or stream | No key for the provider, or the provider cannot be reached | "The AI is not set up." | Set the key |
 | `model_busy` | stream, or 503 on `/v1/speech` | Every model in the list is busy (429) | "The AI is busy; try again in {s} s." | `detail.retryAfterMs` |
-| `model_timeout` | stream, or 504 on `/v1/speech` | No first byte from any model in 15 s, or the turn passed 60 s | "The AI took too long." | Retry |
+| `model_timeout` | stream, or 504 on `/v1/speech` | No first byte from any model in 15 s (on figure and board turns, also the turn passing 60 s) | "The AI took too long." | Retry |
+| `turn_limit` | stream only | A teach turn passed its own limit: 8 model calls, 24 tool calls or 60 s (teacher `errors.md` T003) | "This answer stopped after {what}." (`{what}` is "8 model calls", "24 tool calls" or "60 s") | What was drawn stays; ask again for the rest |
 | `model_bad_output` | stream | The model wrote no line or action that passed, after the repair call | "The AI could not draw this." | Rephrase |
 | `superseded` | stream | A newer request from the same client replaced this one after the stream began | "A newer request replaced this one." | The client keeps or drops what it applied, as for any error |
 | `not_found` | 404 | An unknown route | Lists the routes | — |

@@ -56,18 +56,21 @@ export class SentenceSplitter {
     return out;
   }
 
-  /** Where the first sentence of `pending` ends (the index after it), or -1 when none ended yet. */
+  /**
+   * Where the first sentence of `pending` ends (the index after it), or -1 when none ended yet. A sentence over
+   * `SENTENCE_MAX` characters is cut by `breakAt` whether or not its end mark is in the text yet (TR-40).
+   */
   private cutAt(final: boolean): number {
     const text = this.pending;
     for (let i = 0; i < text.length; i++) {
       const c = text.charAt(i);
-      if (c === '\n') return i + 1;
+      if (c === '\n') return this.within(i + 1);
       if (!END.test(c)) continue;
       let j = i + 1;
       while (j < text.length && (END.test(text.charAt(j)) || CLOSERS.test(text.charAt(j)))) j += 1;
       // the end of the text so far is not yet a sentence end: "2." may be the start of "2.5"
       if (j >= text.length) {
-        if (final) return text.length;
+        if (final) return this.within(text.length);
         break;
       }
       if (!/\s/.test(text.charAt(j))) {
@@ -75,11 +78,16 @@ export class SentenceSplitter {
         continue;
       }
       if (c === '.' && ABBREVIATIONS.has(wordBefore(text, i))) continue;
-      return j;
+      return this.within(j);
     }
-    if (final) return text.length > 0 ? text.length : -1;
+    if (final) return text.length > 0 ? this.within(text.length) : -1;
     if (text.length > SENTENCE_MAX) return this.breakAt(text);
     return -1;
+  }
+
+  /** `cut` when the sentence it ends is within `SENTENCE_MAX`, else the break point inside the first `SENTENCE_MAX` characters. */
+  private within(cut: number): number {
+    return cut > SENTENCE_MAX ? this.breakAt(this.pending) : cut;
   }
 
   /** A sentence that runs past `SENTENCE_MAX` is cut at the last comma, semicolon or space before it. */

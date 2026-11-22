@@ -129,10 +129,11 @@ describe('the film tools: control events and SetValue lines (design 6, teacher d
     expect(toolResults(b.fake.calls[1] as never).join('')).toContain('unknown_name');
   });
 
-  it('show_me { name, to, seconds } writes SetValue(name, to) and the line goes at once (TR-34)', async () => {
+  it('show_me { name, to, seconds } is not offered (TR-34 later): no line goes out and the model is told it is tool_input', async () => {
     const b = await bootVoice({ answers: sequence(calls('show_me', { name: 'a', to: 4, seconds: 3 }), says('Moving.')) });
     const r = await teach(b, teachBody({ script: SLIDER }));
-    expect(r.events[0]).toEqual({ lines: ['SetValue(a, 4)'] });
+    expect(r.events.some((e) => 'lines' in e)).toBe(false);
+    expect(toolResults(b.fake.calls[1] as never).join('')).toContain('tool_input');
   });
 
   it('the tools offered on a figure are draw, figure and the four film tools', async () => {
@@ -366,8 +367,9 @@ describe('errors and notices (errors.md; the rulings of review r2 and r3)', () =
     expect(r.status).toBe(200);
     const end = last(r.events) as { error?: { kind: string; message: string } };
     expect(end.error).toBeDefined();
-    // the wire kind of a limit that is not time is not named in server errors.md (it names model_timeout for 60 s only)
-    expect(['turn_limit', 'model_timeout']).toContain(end.error?.kind);
+    // review r4 ruling (TR-41): a turn's own limit is `turn_limit` with the teacher's message, not `model_timeout`
+    expect(end.error?.kind).toBe('turn_limit');
+    expect(end.error?.message).toBe('This answer stopped after 8 model calls.');
     expect(r.events.some((e) => 'done' in e)).toBe(false);
     expect(b.fake.calls.length).toBe(8);
   });

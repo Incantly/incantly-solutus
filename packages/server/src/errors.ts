@@ -18,6 +18,7 @@ export type ServerErrorKind =
   | 'model_busy'
   | 'model_timeout'
   | 'model_bad_output'
+  | 'turn_limit'
   | 'superseded'
   | 'not_found'
   | 'internal';
@@ -43,6 +44,8 @@ export const STATUS: Readonly<Record<ServerErrorKind, number>> = {
   model_busy: 503,
   model_timeout: 504,
   model_bad_output: 502,
+  /** Stream only (errors.md): a teach turn passed 8 model calls, 24 tool calls or 60 s after the stream began; never an HTTP status. */
+  turn_limit: 504,
   /** Stream only (errors.md): a newer request replaced this one after the stream began; never an HTTP status. */
   superseded: 409,
   not_found: 404,
@@ -106,6 +109,18 @@ export function fromStreamError(e: StreamError): ServerError {
     return serverError(e.kind as ServerErrorKind, e.message, { ...(e.hint !== undefined ? { hint: e.hint } : {}), ...(detail !== undefined ? { detail } : {}) });
   }
   return internalError(`internal:stream.${e.kind.slice(0, 40)}`);
+}
+
+/**
+ * The server's `turn_limit` for a teach turn that passed one of its own limits (8 model calls, 24 tool calls, 60 s), with
+ * the teacher's message ("This answer stopped after {what}."). `model_timeout` stays for no first byte from any model.
+ */
+export function turnLimitFromStream(e: StreamError): ServerError {
+  const detail: Record<string, JsonLike> = {};
+  for (const [k, v] of Object.entries(e.detail ?? {})) {
+    if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') detail[k] = v;
+  }
+  return serverError('turn_limit', e.message, { ...(e.hint !== undefined ? { hint: e.hint } : {}), ...(Object.keys(detail).length > 0 ? { detail } : {}) });
 }
 
 export const notFound = (routes: readonly string[]): ServerError => serverError('not_found', `There is no such route. The routes are: ${routes.join(', ')}.`, { detail: { routes } });
