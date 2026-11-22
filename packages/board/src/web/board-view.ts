@@ -13,7 +13,7 @@ import type { BoardCoreOptions } from '../core/board';
 import { addImage } from '../core/assets';
 import { clipboardText, copySelection, pasteAny, readClipboardText, isBoardClipboard, pasteData } from '../core/clipboard';
 import { diffRegions, tileBox, tileSpan } from '../core/draw';
-import type { OverlayItems, Tile } from '../core/draw';
+import type { OverlayItems, Tile, TileContent } from '../core/draw';
 import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
 import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
@@ -262,6 +262,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const overlay = createOverlayState();
   const styles = defaultStyles();
   const list: Tile[] = [];
+  /** The tile being drawn in slices over several frames, with what it is drawn from; dropped when the board changes. */
+  let tileJob: { readonly tile: Tile; readonly content: TileContent } | null = null;
 
   // the agent (design 11): the closures below are called only after the view is built
   let panel: AgentPanel | undefined;
@@ -389,13 +391,30 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     const background = core.pages.get(page)?.background ?? 'none';
     let drawn = 0;
     let waiting = 0;
+    // a tile with many shapes is drawn in slices that stop at the frame's budget (and go on in the next frame); while one is
+    // unfinished no other tile is started
+    const deadline = frameStart + TILE_BUDGET_MS;
+    let busy = false;
     for (const tile of list) {
-      if (tile.needsDraw && drawn < TILES_PER_FRAME && (drawn === 0 || performance.now() - frameStart < TILE_BUDGET_MS)) {
-        const scale = Math.pow(2, tile.k);
-        const box = tileBox(tile.k, tile.tx, tile.ty);
-        const grow = TILE_GUTTER / scale;
-        const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
-        painter.drawTile(tile, { box: region, items: core.drawList.itemsIn(region, scale), background });
+      if (tile.needsDraw && !busy && drawn < TILES_PER_FRAME && (drawn === 0 || performance.now() < deadline)) {
+        let job = tileJob;
+        if (job === null || job.tile !== tile) {
+          const scale = Math.pow(2, tile.k);
+          const box = tileBox(tile.k, tile.tx, tile.ty);
+          const grow = TILE_GUTTER / scale;
+          const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
+          const plan = core.drawList.plan(region, scale);
+          job = { tile, content: { box: region, items: plan.items, background, total: plan.total, more: plan.more } };
+          tileJob = job;
+        }
+        painter.drawTile(tile, job.content, deadline);
+        if (tile.needsDraw) {
+          // stopped at the budget: the rest of it comes in the next frame
+          busy = true;
+          waiting++;
+        } else {
+          tileJob = null;
+        }
         drawn++;
       } else {
         if (tile.needsDraw) waiting++;
@@ -471,6 +490,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
 
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
+    tileJob = null;
     const page = core.pages.current;
     if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds)) painter.tiles.invalidate(region);
     // a page's paper changed: every tile shows it
@@ -488,6 +508,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     kit.circle.dismiss();
     painter.abortLive();
     painter.tiles.clear();
+    tileJob = null;
     core.selection.clear();
     overlay.laser = null;
     overlay.loop = null;

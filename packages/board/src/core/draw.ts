@@ -328,6 +328,13 @@ export interface TileContent {
   readonly items: readonly DrawItem[];
   /** The page's paper, drawn under the items in each tile (BR-18); absent or `none` for plain. */
   readonly background?: PageBackground;
+  /**
+   * A tile with many shapes is made in slices (BR-73): `items` holds the first ones, `total` is how many shapes the whole tile
+   * has (at most), and `more(count)` makes the items of up to `count` more shapes, appends them to `items` and says whether
+   * there are no more to come. A painter that cannot draw in slices calls it until it says so.
+   */
+  readonly total?: number;
+  readonly more?: (count: number) => boolean;
 }
 
 /** Level of detail by the size a shape has on screen (design 9, item 6). */
@@ -350,7 +357,7 @@ export class DrawList {
    * record never changes (an edit is a new record), so the item stays right while the scale and the measure stay the same;
    * a shape inside a group or a frame is not kept, because its clip is the frame's record, not its own.
    */
-  readonly #items = new WeakMap<object, { scale: number; generation: number; item: DrawItem | undefined }>();
+  readonly #items = new WeakMap<object, { scale: number; generation: number; item: DrawItem | undefined }[]>();
 
   constructor(index: PageIndex, outlines: OutlineCache = new OutlineCache()) {
     this.#index = index;
@@ -366,28 +373,76 @@ export class DrawList {
   itemsIn(box: Bounds, scale: number): DrawItem[] {
     this.#ids.length = 0;
     this.cull(box, 0, this.#ids);
-    const shapes: ShapeRecord[] = [];
-    for (const id of this.#ids) {
-      const s = this.#index.shape(id);
-      if (s !== undefined) shapes.push(s);
+    // highlighters go under everything else: the two layers are sorted by order key on their own, so the sort does not ask for a
+    // layer at every comparison
+    const under: ShapeRecord[] = [];
+    const over: ShapeRecord[] = [];
+    for (let i = 0; i < this.#ids.length; i++) {
+      const s = this.#index.shape(this.#ids[i] as string);
+      // a shape that is not drawn (too small to see) is left out before the sort, which is the dearest part of a busy tile
+      if (s !== undefined && this.itemOf(s, scale) !== undefined) (layerOf(s) === 0 ? under : over).push(s);
     }
-    shapes.sort((a, b) => layerOf(a) - layerOf(b) || (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    under.sort(byOrder);
+    over.sort(byOrder);
     const out: DrawItem[] = [];
-    for (const s of shapes) {
-      const item = this.itemOf(s, scale);
+    for (let i = 0; i < under.length; i++) {
+      const item = this.itemOf(under[i] as ShapeRecord, scale);
+      if (item !== undefined) out.push(item);
+    }
+    for (let i = 0; i < over.length; i++) {
+      const item = this.itemOf(over[i] as ShapeRecord, scale);
       if (item !== undefined) out.push(item);
     }
     return out;
+  }
+
+  /**
+   * The strokes and shapes that meet `box`, made in slices: the shapes are found and put in order at once (the cheap part),
+   * and their items are made `count` shapes at a time by `more`, which appends them to `items`. `itemsIn` is this and all
+   * of it at once.
+   */
+  plan(box: Bounds, scale: number): { readonly items: DrawItem[]; readonly total: number; readonly more: (count: number) => boolean } {
+    this.#ids.length = 0;
+    this.cull(box, 0, this.#ids);
+    const under: ShapeRecord[] = [];
+    const over: ShapeRecord[] = [];
+    for (let i = 0; i < this.#ids.length; i++) {
+      const s = this.#index.shape(this.#ids[i] as string);
+      if (s !== undefined) (layerOf(s) === 0 ? under : over).push(s);
+    }
+    under.sort(byOrder);
+    over.sort(byOrder);
+    const ordered = under.length === 0 ? over : under.concat(over);
+    const items: DrawItem[] = [];
+    let next = 0;
+    const more = (count: number): boolean => {
+      const end = Math.min(ordered.length, next + count);
+      for (; next < end; next++) {
+        const item = this.itemOf(ordered[next] as ShapeRecord, scale);
+        if (item !== undefined) items.push(item);
+      }
+      return next >= ordered.length;
+    };
+    return { items, total: ordered.length, more };
   }
 
   /** One shape as a draw item, or undefined when it is not drawn (unknown kind, too small to see). */
   itemOf(shape: ShapeRecord, scale: number): DrawItem | undefined {
     if (shape.parent !== null) return this.#makeItem(shape, scale);
     const generation = measureGeneration();
-    const known = this.#items.get(shape);
-    if (known !== undefined && known.scale === scale && known.generation === generation) return known.item;
+    let kept = this.#items.get(shape);
+    if (kept === undefined) {
+      kept = [];
+      this.#items.set(shape, kept);
+    }
+    for (let i = 0; i < kept.length; i++) {
+      const known = kept[i] as { scale: number; generation: number; item: DrawItem | undefined };
+      if (known.scale === scale && known.generation === generation) return known.item;
+    }
     const item = this.#makeItem(shape, scale);
-    this.#items.set(shape, { scale, generation, item });
+    // the last few scales are kept: a zoom goes in and out over a few steps
+    if (kept.length >= ITEM_SCALES) kept.shift();
+    kept.push({ scale, generation, item });
     return item;
   }
 
@@ -478,6 +533,11 @@ export class DrawList {
 }
 
 const NO_PIVOT = { x: 0, y: 0 } as const;
+
+/** Back to front: the shape's order key, then its id. */
+const byOrder = (a: ShapeRecord, b: ShapeRecord): number => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+/** How many scales the draw item of a stored shape is kept for. */
+const ITEM_SCALES = 4;
 
 function layerOf(shape: ShapeRecord): 0 | 1 {
   return isInk(shape) && shape.props.nib === 'highlighter' ? 0 : 1;
@@ -592,7 +652,7 @@ export interface OverlayItems {
 export interface BoardPainter {
   beginFrame(camera: CameraView, dpr: number): BoardResult<undefined>;
   /** Shows a tile. With `content` the tile's picture is drawn (again) first; without, its cached picture is reused. */
-  drawTile(tile: Tile, content: TileContent | null): BoardResult<undefined>;
+  drawTile(tile: Tile, content: TileContent | null, until?: number): BoardResult<undefined>;
   /** Items not in a tile (what an agent animates, a dragged shape), drawn this frame only. */
   drawItems(items: readonly DrawItem[]): BoardResult<undefined>;
   drawLiveStroke(stroke: LiveStrokeView | null): BoardResult<undefined>;

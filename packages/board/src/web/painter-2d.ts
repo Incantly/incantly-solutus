@@ -26,8 +26,11 @@ const noImages: ImageLookup = () => null;
 export interface TileRaster {
   /** Where the pictures of image shapes come from. */
   setImages(lookup: ImageLookup): void;
-  /** Draws a tile's picture from its content. */
-  render(tile: Tile, content: TileContent): BoardResult<undefined>;
+  /**
+   * Draws a tile's picture from its content. A raster that can draw in slices stops after `until` (a `performance.now`
+   * time) and goes on when it is called again for the same tile and content; the others draw it all.
+   */
+  render(tile: Tile, content: TileContent, until?: number): BoardResult<undefined>;
   /** Gives back a tile's picture. */
   release(tile: Tile): void;
   /** The drawing surface is `devW × devH` device pixels. */

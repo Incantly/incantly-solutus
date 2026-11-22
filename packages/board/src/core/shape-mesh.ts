@@ -61,7 +61,9 @@ interface Kept {
   readonly mesh: ShapeMesh | null;
 }
 
-const kept = new WeakMap<readonly Part[], Kept>();
+/** How many scales a shape's meshes are kept for: a zoom goes in and out over a few steps, and each step's mesh is made once. */
+const KEPT_SCALES = 4;
+const kept = new WeakMap<readonly Part[], Kept[]>();
 
 /** How far, in device pixels, a curve may be from its segments. */
 const TOLERANCE_PX = 0.25;
@@ -125,9 +127,14 @@ function build(parts: readonly Part[], scale: number): ShapeMesh | null {
 
 /** The mesh of a shape's parts at `scale` device pixels per page unit, or null when the shape has to be drawn another way. */
 export function meshOf(parts: readonly Part[], scale: number): ShapeMesh | null {
-  const known = kept.get(parts);
-  if (known !== undefined && known.scale === scale) return known.mesh;
+  let list = kept.get(parts);
+  if (list === undefined) {
+    list = [];
+    kept.set(parts, list);
+  }
+  for (let i = 0; i < list.length; i++) if ((list[i] as Kept).scale === scale) return (list[i] as Kept).mesh;
   const mesh = build(parts, scale);
-  kept.set(parts, { scale, mesh });
+  if (list.length >= KEPT_SCALES) list.shift();
+  list.push({ scale, mesh });
   return mesh;
 }

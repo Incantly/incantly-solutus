@@ -61,6 +61,10 @@ const QUAD_FRAGMENT = [
   'void main(){ oCol = texture(uTex, vUv); }',
 ].join('\n');
 
+/** Shapes whose items are made at a time while a tile is drawn in slices, and items between two looks at the clock. */
+const SLICE_SHAPES = 64;
+const SLICE_CHECK = 32;
+
 /** Numbers in one ink vertex: x, y, depth, r, g, b, a, u, v. */
 const INK_FLOATS = 9;
 const INK_ARENA_BYTES = 8 * 1024 * 1024;
@@ -101,6 +105,10 @@ export class GlRaster implements TileRaster {
   /** The atlas places of the text runs of the shape being written: filled by `#meshOf`, read at once by `#writeMesh`. */
   readonly #slots: (GlyphSlot | null)[] = [];
   readonly #inkTextures: Record<string, Target> = {};
+  /** The tile being drawn in slices, and where its next slice starts. */
+  #job: { tile: Tile; content: TileContent; frame: FrameCtx; next: number; total: number } | null = null;
+  /** The tile whose last `render` stopped before the end (it is drawn when `render` is called again), or null. */
+  pending: Tile | null = null;
   #images: ImageLookup = () => null;
   /** The four corners of a tile's quad, its index list and its batch: one set, written again for every tile of a frame, so composing makes no garbage. */
   readonly #quadData = new Float32Array(16);
@@ -293,30 +301,63 @@ export class GlRaster implements TileRaster {
     return drawn.ok ? DONE : failed('drawing a tile layer');
   }
 
-  render(tile: Tile, content: TileContent): BoardResult<undefined> {
+  render(tile: Tile, content: TileContent, until?: number): BoardResult<undefined> {
+    const done = this.#render(tile, content, until);
+    // a tile that failed or finished has no slice to come back to
+    if (!done.ok || this.pending !== tile) this.#job = null;
+    return done;
+  }
+
+  #render(tile: Tile, content: TileContent, until: number | undefined): BoardResult<undefined> {
     const own = this.#targetOf(tile);
     if (!own.ok) return own;
-    this.#atlas.beginTile();
     const scale = Math.pow(2, tile.k);
     const box = tileBox(tile.k, tile.tx, tile.ty);
     const x0 = box.minX - TILE_GUTTER / scale;
     const y0 = box.minY - TILE_GUTTER / scale;
-    const frame = this.#backend.beginFrame(this.#scratch, { width: TILE_SIZE, height: TILE_SIZE, dpr: 1 });
-    if (!frame.ok) return failed('a tile frame');
     const k = (2 * scale) / TILE_SIZE;
     const uniforms = { uXf: [k, -k, -1, 1] };
     const items = content.items;
-    const n = items.length;
-    // the paper goes first, under everything
-    if (content.background !== undefined && content.background !== 'none') {
-      const painted = this.#paintLayer(frame.value, scale, x0, y0, content.background, []);
-      if (!painted.ok) return painted;
+    let job = this.#job;
+    let j = 0;
+    if (job !== null && job.tile === tile && job.content === content) {
+      // the next slice of a tile that was stopped: its frame is still the scratch target's, with what was drawn in it
+      j = job.next;
+      this.#backend.setViewport(job.frame, 0, 0, TILE_SIZE, TILE_SIZE);
+    } else {
+      this.#atlas.beginTile();
+      const frame = this.#backend.beginFrame(this.#scratch, { width: TILE_SIZE, height: TILE_SIZE, dpr: 1 });
+      if (!frame.ok) return failed('a tile frame');
+      job = { tile, content, frame: frame.value, next: 0, total: content.total ?? items.length };
+      this.#job = job;
+      // the paper goes first, under everything
+      if (content.background !== undefined && content.background !== 'none') {
+        const painted = this.#paintLayer(frame.value, scale, x0, y0, content.background, []);
+        if (!painted.ok) return painted;
+      }
     }
+    this.pending = null;
+    const frame = { value: job.frame };
+    const n = job.total;
+    const first = j;
+    let more = content.more !== undefined;
     let vcount = 0;
     let icount = 0;
     const maxVerts = Math.floor((INK_ARENA_BYTES / (INK_FLOATS * 4)) * 0.9);
     const maxIndices = Math.floor(INK_ARENA_BYTES / 8) - 3;
-    for (let j = 0; j < n; j++) {
+    for (; ; j++) {
+      if (j >= items.length) {
+        // the items of the next shapes are made when they are wanted, a few at a time
+        while (more && j >= items.length) more = !(content.more as (count: number) => boolean)(SLICE_SHAPES);
+        if (j >= items.length) break;
+      }
+      if (until !== undefined && j - first >= SLICE_CHECK && (j - first) % SLICE_CHECK === 0 && performance.now() >= until) {
+        const sent = this.#flush(frame.value, vcount, icount, uniforms);
+        if (!sent.ok) return sent;
+        job.next = j;
+        this.pending = tile;
+        return DONE;
+      }
       const item = items[j];
       if (item === undefined) continue;
       if (item.k === 'shape') {
@@ -344,7 +385,7 @@ export class GlRaster implements TileRaster {
         vcount = 0;
         icount = 0;
         let end = j + 1;
-        while (end < n && (items[end] as DrawItem).k === 'shape' && this.#gpuMesh(items[end] as ShapeItem, scale) === null) end++;
+        while (end < items.length && (items[end] as DrawItem).k === 'shape' && this.#gpuMesh(items[end] as ShapeItem, scale) === null) end++;
         const painted = this.#paintLayer(frame.value, scale, x0, y0, undefined, items.slice(j, end));
         if (!painted.ok) return painted;
         j = end - 1;

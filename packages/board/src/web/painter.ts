@@ -337,18 +337,31 @@ export class WebPainter implements BoardPainter {
     return DONE;
   }
 
-  drawTile(tile: Tile, content: TileContent | null): BoardResult<undefined> {
+  /**
+   * Shows a tile. With `content` the tile's picture is drawn first; on the GPU a tile with many shapes stops after `until` (a
+   * `performance.now` time) and goes on the next time it is called with the same `content`, and it is drawn (fresh) when the
+   * last slice is. The Canvas 2D backup always draws a tile whole.
+   */
+  drawTile(tile: Tile, content: TileContent | null, until?: number): BoardResult<undefined> {
     if (this.#frameState.state !== 'drawing') return this.#outside('drawTile');
     if (this.#backend.state === 'lost') return DONE;
     if (content !== null) {
       const raster = this.#raster;
       if (raster === null) return boardError('render_failed', 'The board has no way to draw.', { detail: { backend: this.#backend.state } });
-      let drawn = raster.render(tile, content);
+      // the Canvas 2D backup draws a tile whole: the shapes whose items are not made yet are made now
+      if (content.more !== undefined && !(raster instanceof GlRaster)) while (!content.more(1 << 20)) continue;
+      let drawn = raster.render(tile, content, until);
       if (!drawn.ok && this.#backend.state === 'gl') {
         this.#fallBack(drawn);
+        // the slices not made yet are made now
+        if (content.more !== undefined) while (!content.more(1 << 20)) continue;
         drawn = this.#raster === null ? drawn : (this.#raster as TileRaster).render(tile, content);
       }
       if (!drawn.ok) return drawn;
+      if (raster instanceof GlRaster && raster.pending === tile && this.#backend.state === 'gl') {
+        if (tile.state === 'fresh' || tile.state === 'stale') this.#shown.push(tile);
+        return DONE;
+      }
       this.tiles.markDrawn(tile);
       this.#counters.tilesDrawn++;
     }

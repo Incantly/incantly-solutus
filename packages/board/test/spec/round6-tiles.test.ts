@@ -187,6 +187,66 @@ describe('a tile is drawn in order on the GPU (design 9 item 4, BR-35)', () => {
     expect(tileOrder(probe)).toEqual(['layer', 'strokes']);
   });
 
+  it('BR-73: a tile with many shapes is drawn in slices: each call stops at its time, the tile is fresh only after the last slice, and the slices draw what one call draws', () => {
+    const rig = shapeRig('pen');
+    for (let i = 0; i < 100; i++) drawPath(rig, line(10, 10 + i * 4, 300, 20 + i * 4, 6), {}, i * 1000);
+    const whole = rig.core.drawList.itemsIn(BOX, 1);
+    const plan = rig.core.drawList.plan(BOX, 1);
+    expect(plan.total).toBeGreaterThanOrEqual(whole.length);
+    const content: TileContent = { box: BOX, items: plan.items, total: plan.total, more: plan.more };
+    const tile = theTile();
+    let calls = 0;
+    probe.clear();
+    painter.beginFrame({ x: 0, y: 0, zoom: 1 }, 1);
+    // a time that has passed: every call does one slice (32 items) and stops
+    while (tile.needsDraw && calls < 50) {
+      expect(painter.drawTile(tile, content, 0).ok).toBe(true);
+      calls++;
+    }
+    painter.endFrame();
+    expect(tile.state).toBe('fresh');
+    expect(calls).toBeGreaterThan(2);
+    expect(calls).toBeLessThanOrEqual(Math.ceil(whole.length / 32) + 2);
+    expect(plan.items.map((i) => i.id)).toEqual(whole.map((i) => i.id));
+    // one draw call of triangles for each slice, and the tile was counted once
+    expect(probe.log.filter((e) => e.what === 'gl:draw' && (e.count ?? 0) > QUAD_INDICES && e.into === 'target').length).toBeGreaterThanOrEqual(calls - 1);
+    expect(painter.stats.tilesDrawn).toBe(1);
+  });
+
+  it('BR-73: a tile that is stopped is not shown with half a picture, and an old picture stays until the new one is whole', () => {
+    const rig = shapeRig('pen');
+    for (let i = 0; i < 100; i++) drawPath(rig, line(10, 10 + i * 4, 300, 20 + i * 4, 6), {}, i * 1000);
+    const tile = theTile();
+    painter.beginFrame({ x: 0, y: 0, zoom: 1 }, 1);
+    painter.drawTile(tile, { box: BOX, items: rig.core.drawList.itemsIn(BOX, 1) });
+    painter.endFrame();
+    expect(tile.state).toBe('fresh');
+    tile.dirty();
+    expect(tile.state).toBe('stale');
+    const plan = rig.core.drawList.plan(BOX, 1);
+    painter.beginFrame({ x: 0, y: 0, zoom: 1 }, 1);
+    painter.drawTile(tile, { box: BOX, items: plan.items, total: plan.total, more: plan.more }, 0);
+    painter.endFrame();
+    // not finished: still stale (it is drawn again), and counted once
+    expect(tile.state).toBe('stale');
+    expect(painter.stats.tilesDrawn).toBe(1);
+  });
+
+  it('BR-73: the Canvas 2D backup draws a tile whole, asking for every slice first', () => {
+    const only = new WebPainter({ canvas2dOnly: true });
+    only.resize(400, 300, 1);
+    const rig = shapeRig('pen');
+    for (let i = 0; i < 40; i++) drawPath(rig, line(10, 10 + i * 4, 300, 20 + i * 4, 6), {}, i * 1000);
+    const plan = rig.core.drawList.plan(BOX, 1);
+    const tile = tilesOf(new TileCache(), 400, 300)[0] as Tile;
+    only.beginFrame({ x: 0, y: 0, zoom: 1 }, 1);
+    expect(only.drawTile(tile, { box: BOX, items: plan.items, total: plan.total, more: plan.more }, 0).ok).toBe(true);
+    only.endFrame();
+    expect(tile.state).toBe('fresh');
+    expect(plan.items).toHaveLength(40);
+    only.dispose();
+  });
+
   it('a drawn tile is fresh and counted; its picture is shown again later without being drawn again', () => {
     const rig = shapeRig('pen');
     drawPath(rig, line(20, 20, 200, 120, 12), {}, 0);
