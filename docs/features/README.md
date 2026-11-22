@@ -45,6 +45,8 @@ Every folder has four files:
 | Media | [sound](sound/) | Tones, noise, notes, melodies and sonified functions, played with Tone.js |
 | Documents | [tiptap](tiptap/) | Live figures and formulas inside Tiptap documents |
 | Board | [board](board/) | The endless, paged board: pen ink, shapes, figure cards, agents, customisable tools; web now, React Native later |
+| AI | [teacher](teacher/) | The model's tools, catalogue, turn loop and streaming apply; no network |
+| AI | [server](server/) | The Node service: model calls (OpenRouter by default, Muse Spark second), keys, limits, headless checks |
 
 Performance rules for every area, and our own renderer, are in `docs/design/performance.md`.
 
