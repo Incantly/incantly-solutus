@@ -49,3 +49,47 @@ Checked by scratch tests (no network, the fake model): a first turn plans, write
 - `lesson_busy` is only between two client addresses (choice 9). If the product owner wants it also for the same client, the studio must abort first and the store must stop replacing.
 - The 200th turn ends the lesson with no closing words (choice 10).
 - An interrupted turn is not in the memory (choice 8), so the learner's words in it are lost to the next turn.
+
+# Lesson: builder notes, round 2
+
+Branch `feat/lesson-r2`. Round 2 of `handoff/lesson/plan.md` (items 1 to 5; item 6, the live run, is Opus's). No tests were written (testers do that); the builder ran two scratch test files (the conversation with a fake server, microphone and timer; the panel in happy-dom) and deleted them. `npm run lint`, `npm run typecheck` and `npx vitest run` pass (325 files, 13,197 tests, 11 skipped, 6 todo; the same skips as before). Nothing in `packages/server` or `packages/teacher` changed.
+
+## What was built
+
+| Item | Where |
+|---|---|
+| 1. `CONVERSATION_MACHINE` (LE2), written first, own commit | `docs/state-machines.md`, section "lesson", "Round 2" |
+| 2. The conversation: `LessonConversation`, `CONVERSATION_MACHINE`, `ConversationTarget`, `microphoneMessage`, `SILENCE_MS` | `apps/studio/src/lesson.ts` |
+| 2. Shared speech of a sentence (`speakSentence`), moved out of `VoiceLesson` so both lessons use it | `apps/studio/src/voice.ts` |
+| 3. Talk panel: Start lesson, End lesson, plan and step at the top, no microphone on open (TR-50, also in the single-turn voice), Space | `apps/studio/src/voice-ui.ts`, `page.css`, `studio-page.ts` (`mountVoice` gets `conversation`) |
+| 4. `actions` through the board's runner in one gesture for each answer | `apps/studio/src/voice-targets.ts` `boardConversation` |
+| 5. Benches with a fake model | `apps/studio/bench/lesson.bench.ts`, `apps/studio/bench/vitest.config.ts` (run: `npx vitest run --config apps/studio/bench/vitest.config.ts`) |
+
+Config: `eslint.config.js` and `tsconfig.json` now include `apps/*/bench` as dev code (as `packages/*/bench`). Docs: lesson design 8 has three studio rows.
+
+Bench numbers (Node, warm, fake model): one line parsed 0.0004 ms (target 0.01); one event through the conversation 0.003 ms (0.2); a turn of 10 events and 3 board actions on a headless board 0.24 ms (5); a turn after 320 turns 0.026 ms (flat, transcript capped at 60 lines).
+
+## Choices where the docs were silent
+
+1. **Machine moves.** Design 6 has no `pause` by tap and no `listen` from `off`. LE2 adds: `pause` (silence, the browser ending the recognition with nothing heard, a microphone failure, a tap on the microphone while listening, closing the panel); `listen` from `off` (the microphone starts a lesson when the box is empty and the browser can listen); `type` also from `paused`; `end` also from `paused`.
+2. **Where the lesson starts.** `/v1/lesson/start` is asked inside the first turn (`thinking`), with no `topic`: the server takes the first words as the topic (round 1, choice 4). A start that fails (no key, unreachable) is a lesson that is over: the notice shows the server's message, the conversation goes `off`, and the panel offers Start lesson. For a lesson begun by the microphone, `/start` is asked at the first words.
+3. **Closing the panel does not end the lesson.** It pauses it (teacher silenced, microphone closed, the turn aborted so the server records it as interrupted, LR-3); the plan stays; the learner reopens the panel and taps the microphone or types. End lesson ends it, and so does a view with nothing to teach on (`setAvailable(false)`).
+4. **Space** interrupts only while the teacher thinks or speaks, and not from a text box, field or button, and only with the panel open. It acts on the document in the capture phase, so the board's own Space (pan) is untouched while the teacher is silent or the learner's turn. A tap on the microphone is the barge-in everywhere else; in `listening` it pauses (a second tap).
+5. **Where the browser cannot listen,** `listening` is the text box's turn: no microphone, no timer (so no pause), the status says "Your turn: type your answer.", and the text box takes the focus when the lesson enters `listening`.
+6. **Silence.** The 8 s timer starts when the microphone opens and is cleared at the first interim words. A recognition that ends with words not marked final sends them as the answer; with none it pauses.
+7. **LF-5** (the 200th turn's closing sentence): the conversation speaks the sentences of the turn, and at the end marker `ended` sends `end` instead of `drained`. `lesson_unknown` goes `off` at once with the notice "This lesson has ended. Start a new lesson to go on." and the button reads "Start a new lesson" (derived from a non-empty transcript, not a flag).
+8. **One undo step.** `boardConversation.begin` opens a `model` gesture, `actions` run the runner with it, `finish` commits it; a stopped turn first calls `runner.stop()`, so waiting actions do not run (what was made stays). The gesture is a record in the target's closure, not a class field.
+9. **The single-turn voice.** The Talk panel is a lesson wherever the board is open, else the single-turn voice (`VoiceLesson`, TE4) for graph and geometry views. `boardLesson` (single turn on the board) is no longer used by the page; it is left exported for its tests.
+10. **A new lesson clears the transcript and the plan view;** an ended lesson's transcript stays on screen until then.
+
+## Left undone
+
+- No tests (testers). No live run and no screenshots: the plan gives them to Opus (item 6), and a fake-transport screenshot needs Playwright, which is not in the repository.
+- `.kiro/specs/lesson/tasks.md` is not ticked and `.kiro/steering/kiro-usage-log.md` has no row for this round yet (after the tester and the review).
+- LF-1 to LF-4 of `findings.md` are untouched.
+
+## Open points for the review
+
+- Closing the panel pauses instead of ending (choice 3); if the product owner wants it to end, change `closePanel`.
+- A failed `/start` ends the lesson (choice 2); the alternative is to wait for the learner's next words.
+- The microphone's `pause` on a second tap is not in design 6 (choice 1).

@@ -17,7 +17,7 @@ const domFree = [
 
 // Product code: what ships. Tests, benches and configs are not product code.
 const product = ['packages/*/src/**/*.{ts,js}', 'apps/*/src/**/*.{ts,js}'];
-const devCode = ['packages/*/test/**', 'packages/*/bench/**', 'packages/*/wasm/**', 'apps/*/test/**', 'tools/**', '**/*.config.{js,ts,mjs}'];
+const devCode = ['packages/*/test/**', 'packages/*/bench/**', 'packages/*/wasm/**', 'apps/*/test/**', 'apps/*/bench/**', 'tools/**', '**/*.config.{js,ts,mjs}'];
 
 const stateRules = (level) => ({
   'incantly/state-no-flag-soup': level,
@@ -143,7 +143,7 @@ export default defineConfig([
     rules: { 'incantly/no-ai-credit': 'off' },
   },
   {
-    files: ['packages/*/test/**/*.ts', 'packages/*/bench/**/*.ts', 'tools/**/*.js', '**/*.config.{js,ts}'],
+    files: ['packages/*/test/**/*.ts', 'packages/*/bench/**/*.ts', 'apps/*/bench/**/*.ts', 'tools/**/*.js', '**/*.config.{js,ts}'],
     rules: { 'no-console': 'off', 'incantly/no-throw-export': 'off' },
   },
 ]);

@@ -148,6 +148,9 @@ The studio's conversation is one field over `CONVERSATION_MACHINE`, which replac
 | Server work per turn, before the model | under 5 ms |
 | Memory per lesson | under 64 KB |
 | From the end of the learner's words to the teacher's first spoken sentence | under 3 s with the free models (measured in the live run) |
+| Studio work for one line of the answer, read | under 0.01 ms (`apps/studio/bench/lesson.bench.ts`) |
+| Studio work for one event of a turn (read, transcript, queue, plan view) | under 0.2 ms, with the fake model |
+| Studio work for a whole turn of 10 events and 3 board actions on a headless board, from the learner's words to waiting again | under 5 ms, with the fake model |
 
 ## 9. Open questions
 
