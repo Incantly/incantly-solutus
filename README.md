@@ -81,3 +81,10 @@ None of that code is on `main`. The current code was written after the fresh sta
 ## Third-party libraries
 
 Only the libraries listed in `docs/design/libraries.md`, each under its own licence.
+
+## Licence
+
+- **Source code:** the European Union Public Licence 1.2, in `LICENSE`.
+- **The Incantly product** (the built apps, the hosted service, the name, the logo and the assets): free for non-commercial use; commercial use needs written permission from the project owners. See `TERMS.md`.
+
+Contributions need a signed contributor licence agreement; see `CONTRIBUTING.md`.
