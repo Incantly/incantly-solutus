@@ -2261,7 +2261,7 @@ Round 3 adds no state of its own; this note says where each new part gets its st
 | `board_read` and `board` tools, `boardTarget` | `tools/board.ts`, `tools/board-target.ts` | The tool guard (TE2) of the target. The request's items, page and `allowEdit` are data fixed when the target is made. The one thing that changes while a call runs, how many `page` actions the answer has made, is a counter in the named record `seen` (after a page action the items no longer describe the current page, so the id checks leave the rest to the board). |
 | `boardTurn` (jobs `circle` and `talk`) | `loop/board.ts` | The turn (TE1). The count of `actions` events sent is data, read once at the end: a turn that sent none ends with `model_bad_output`. |
 | `POST /v1/board/ask` | `packages/server/src/jobs/board.ts` | The request job (SV1) and the model call (SV2), as `/v1/figure/draw`. |
-| The studio's choice of agent | `apps/studio/src/board-agent.ts`, `studio-page.ts` | One probe answer, read once when the board first opens; the board is made once. The pending probe is held as one promise (`boardStart`), not as flags. |
+| The studio's choice of agent | `apps/studio/src/board-agent.ts`, `studio-page.ts` | One probe answer, read once after the board first opens. The board opens at once with the demo agent; a ready server then replaces its transport and label. Nothing else changes, so there is no state to table. |
 
 ## server
 

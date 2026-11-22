@@ -226,8 +226,8 @@ describe('not_found (errors.md)', () => {
     expect(r.status).toBe(200);
   });
 
-  it('the model endpoints of rounds 2 to 5 are not there yet, so they are 404 (a gap, listed in the report)', async () => {
-    for (const path of ['/v1/board/ask', '/v1/teach', '/v1/speech', '/v1/export/svg']) {
+  it('the model endpoints of rounds 4 and 5 are not there yet, so they are 404 (a gap, listed in the report)', async () => {
+    for (const path of ['/v1/teach', '/v1/speech', '/v1/export/svg']) {
       const r = await postJson((holder.run as Running).port, path, {});
       expect(r.status, path).toBe(404);
     }

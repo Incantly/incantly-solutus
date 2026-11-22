@@ -8,7 +8,7 @@ The live teacher (core design 10) keeps `draw`, `figure`, `pause`, `resume`, `se
 
 | Tool | Input | Result |
 |---|---|---|
-| `board_read` | `{ area?: Box, page?: string }` | Items in the area (default: the visible part of the current page), in reading order: `{ id, kind, box, text?, summary?, shape? }`. `summary` is a figure card's `figureSummary`; `shape` is the recognised shape of an ink group |
+| `board_read` | `{ area?: Box, page?: string }` | Items in the area (default: the visible part of the current page), in reading order: `{ id, kind, box, text?, summary?, shape?, madeBy? }`. `summary` is a figure card's `figureSummary`; `shape` is the recognised shape of an ink group; `madeBy` is `"model"` on what the agent made (the server's check of `edit`, `move` and `delete` reads it) |
 | `board` | `{ actions: BoardAction[] }` (1 to 20) | Per action: `{ ok: true, id }` or an error from `errors.md` |
 
 ## 2. Actions
@@ -58,6 +58,8 @@ The board sends the server one request:
 What the user says to the talking agent is `{ "kind": "talk", "text": "…", "items": […], "more": 0, "page": "page:1", "allowEdit": false }`: the board in view comes with it, as `board_read` gives it. `allowEdit` is always there: `false` unless the user ticked "Let the agent change my work", then `true` (BR-56).
 
 The answer is NDJSON, one event a line: `{ "actions": [...] }` (one `board` call, applied at once), then `{ "done": true }`, or `{ "error": { "kind", "message" } }`. A whole answer is one gesture, so one undo takes it all back. Stop ends the job at once and what was drawn stays; a newer request aborts the older one.
+
+**On the server** (server design 5): the board is not there, so the request's `items` stand for it. The server checks each action before it streams: the action's fields (`readAction`), a shape id that is not among the items (when `more` is 0), `edit`, `move` and `delete` of an item without `madeBy: "model"` when the request does not allow it (a talk's `allowEdit`, a circle's `slider` and `animate`), and a `figure`'s lines on a headless app of its mode. Only actions that passed are streamed, and a `figure` carries only its lines that ran. The board checks again as it applies them. The server sends no text event: the model's words are not shown, and an answer with no action that passed ends with `model_bad_output`.
 
 ## 4. Rules for the model
 

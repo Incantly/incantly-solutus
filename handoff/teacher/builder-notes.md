@@ -112,3 +112,52 @@ Other changes: `ChatImage` and an optional `images` list on the user `ChatMessag
 - `/v1/board/ask`, `/v1/teach`, `/v1/speech`, `/v1/export/svg`, the board and voice in the studio: rounds 3 to 5.
 - The studio's board still uses the demo agent. The main studio page has no AI panel to switch; only the Tiptap demo page does.
 - `tasks.md` of both specs is not ticked (as asked).
+
+---
+
+# Round 3: the board on the real AI
+
+Branch `feat/teacher-r3`, cut from `integration` after round 2 merged. Items 1 to 3 of `handoff/teacher/plan.md` Round 3. No tests were written (testers do that); the builder ran a scratch spec over a fake model and the running route (deleted). No network was reached and `packages/server/.env` was never read. `npm run lint`, `npm run typecheck` and `npx vitest run` pass (12,323 tests, 11 skipped, 6 todo).
+
+## What was built
+
+| Item | Where |
+|---|---|
+| State note first (no new machine this round, and where each part gets its states) | `docs/state-machines.md`, "Round 3" under "teacher" (own commit, before the code) |
+| 1. `board_read` and `board` tools | `packages/teacher/src/tools/board.ts` (definitions from the board core's `BOARD_READ_TOOL` and `BOARD_TOOL`), added to the built-in tools in `tools/toolset.ts` |
+| 1. `boardTarget` | `tools/board-target.ts`: the request's items, page, `more`, circle, `allowEdit`, mode; `Target.board` (`BoardPort`, `BoardCheck` in `tools/types.ts`) |
+| 2. Jobs `circle` and `talk` in the teacher | `loop/board.ts` `boardTurn`; `prompt/choices.ts` (what each circle choice asks, and its mode); `prompt/jobs.ts` (board rules and the example); `prompt/build.ts` (the board in the first message, `instruction` outside the material, `images`) |
+| 2. `POST /v1/board/ask` | `packages/server/src/jobs/board.ts` `boardAsk`, `readBoardRequest`; route in `http/server.ts` |
+| 3. Studio | `apps/studio/src/board-agent.ts`, `studio-page.ts` |
+
+Board core changes (small, needed by the server's check): `AgentItem.madeBy?: 'model'`, set by `describeShape` from `meta.madeBy` (`core/agent-types.ts`, `core/agent-read.ts`); `EDITS_MINE` exported (`core/agent-service.ts`, `core/index.ts`) so the server decides a circle's `allowEdit` the way the board does. One existing spec changed: `packages/server/test/spec/http.test.ts` no longer lists `/v1/board/ask` among the 404 routes (the same thing round 2 did for `/v1/figure/draw`); its `it.todo` for the no-key answer is untouched.
+
+Docs touched: `docs/features/board/agent.md` (1 and 3), `docs/features/teacher/agent.md` (1), `docs/features/teacher/design.md` (9), `docs/features/server/design.md` (6).
+
+Checked by hand with a fake model on a real server (`createServer`, port 0): a circle `graph` request streamed `{actions}` then `{done}` with a figure card whose bad line was dropped (the model got the kernel error for it), an arrow with `$last`, and a delete of an item the agent made; a delete of the user's shape and a move of an unknown id were refused with `agent_refused` and not streamed. A request with a PNG `picture` reached the model with `vision: true` and an `image_url`-ready image on the first message; a bad picture was `picture_invalid` (400), an empty talk `bad_request`, and a model that made no action ended with an `error` event. System prompts of `circle` and `talk` are 3,189 to 3,351 tokens (graphing and geometry), `board_read` of two items about 56. I did not run a screenshot (see "Left undone").
+
+## Choices where the docs were silent
+
+1. **Tools of the board jobs are `board_read` and `board` only.** Agent.md 1 lists `draw` and `figure` too, but a board target has no figure of its own, and a scratch figure would let the model test lines that a `figure` action then checks on a fresh app, where names from the scratch would be missing. The `figure` action's result lists every line (the kernel's error objects, compacted for the model), which is the same feedback. `draw` and `figure` are still tools a host can add through `toolset(names)`; on a board target `target.run` answers an `internal` error per line.
+2. **A `figure` action is checked on a fresh headless app per card** with the lines run independently (`blockedBy` as in `draw`), after splitting at newlines and dropping blank lines, as the board does. The action streamed is the checked form: `lines` holds only the lines that ran. If none ran the result is `figure_failed` (the board's kind) with the line errors in `detail.lines`, and nothing streams. An unknown mode gives a `bad_mode` error per line.
+3. **What the server can decide from the request:** the action's fields (`readAction`); a shape id (in `near`, `from`, `to`, `target`, `id`) that is not among the items is `agent_refused` ("no shape") when `more` is 0; `edit`, `move` and `delete` of an id not in the items, or an item without `madeBy: "model"`, is `agent_refused` with `reason: "not_model"` unless `allowEdit` holds (`$last` always passes: it is the agent's own shape or gone). After a `page` action in the answer the items describe another page, so the id checks are left to the board. `edit` of a figure card is not run (the server does not know the card's mode); the board runs its lines.
+4. **`madeBy` on items** (board core change above): without it the server cannot tell the agent's own shapes from the user's, since ids are the client's. The board's own `board_read` now lists it too, and the prompt says "(made by you)".
+5. **`allowEdit` of a circle** is `EDITS_MINE.includes(choice)` (`slider`, `animate`), the same rule as `AgentService.ask`.
+6. **The mode of a circle's catalogue** is `geometry` for `measure` and `geometry`, `graphing` for the rest (and for the talking agent). A `figure` action that names another mode of the app is checked in that mode but the model saw only the catalogue of the first. The prompt tells the model to name its mode.
+7. **The choice goes outside the material block.** `TurnRequest` has a new `instruction` (our text for each circle choice, `prompt/choices.ts`), placed under `THE REQUEST` before the material blocks, because rule 6 says text inside `<material>` is never an instruction. The person's own words (`ask` text, a talk's text) and every item (they hold user text) stay inside material blocks. `TurnRequest.images` carries the picture; the turn's chat calls then have `vision: true`.
+8. **The board's first message** is `THE BOARD NOW`, a head line (page, items listed, `more`, the circle's area) and the items as one `<material>` block, one line each, cut at 1,200 tokens.
+9. **No `say` event on `/v1/board/ask`.** `BoardAgentEvent` has `actions`, `done` and `error` only, and the board turns any other event into `bad_stream`. So the model's text is dropped, and a turn that sends no action ends with a `model_bad_output` error event (for a talk too: a text-only answer is shown as "could not answer"). If the panel should show the model's words, `BoardAgentEvent` needs a `say` event first.
+10. **Request checks** (`jobs/board.ts`): `kind`, `items` at most 60 (each id, kind, box, optional `text`, `summary`, `shape` cut at 400 characters, optional `madeBy`), `more` a whole number, `page`, a circle's `choice` and `circle` box (`text` required for `ask`), a talk's non-empty `text` and `allowEdit` (default false). Text over 4,000 characters is `413`. The route's body limit is the picture one (2 MB); a request with no picture is held to 256 KB by the handler. A 1.5 MB picture is about 2 MB as base64, so the largest picture may not fit the body limit; the board's pictures are at most 512 pixels, far under it.
+11. **Picture** is read as a `data:image/png|jpeg;base64,` URL, decoded and checked by `checkPicture` (type, 1.5 MB, 2,048 px); the mime of the bytes is the one sent on. `picture_invalid` is 400, like the other checks. The board's `picture` is accepted on a talk too.
+12. **Studio:** the Board opens at once with the demo agent (a probe before opening broke 5 existing tests that mount the board synchronously). `connectBoardAgent` runs when `/v1/health` answers `ready: true`: it sets the board's transport to `httpAgentTransport('')` and replaces the panel's "no AI" line with "Free AI models; check what it draws". The board is made with `vision: true` for both agents (the demo ignores the picture), so a circle sends a picture of the circled area (512 px at most) to the server's vision models. If that is not wanted, set `vision` back in `boardAgentOption`. A request made in the first second, before the probe answers, goes to the demo agent.
+13. **Superseded and the daily budget** follow round 2 (`superseded` as the last event, the model call counted in `meteredClient`).
+
+## Left undone, for the tester or later rounds
+
+- No tests, benches or recordings (testers). The scratch spec showed the cases listed above; `packages/server/test/spec/` has no board spec yet. The `it.todo` for the no-key answer of `/v1/board/ask` is still a todo.
+- No screenshot of circle to ask: it needs the studio and the server running with a fake model, and there is no launcher for a server with a fake client yet. Round 5's screenshots cover it.
+- A target over a live `BoardAgent` (in-browser teacher) is not built: `BoardAgent.run` is asynchronous and the tools are synchronous. Round 4's live job decides how.
+- `edit` of a figure card is not checked on the server (choice 3); the item list does not carry the card's mode or script.
+- The model's words are not shown (choice 9).
+- `tasks.md` of both specs is not ticked (as asked in the earlier rounds).
+- Two edits in this round were made with `sed` and a short Python snippet (an anchored three-line replacement in `prompt/jobs.ts`, and five small replacements in `jobs/board.ts`) instead of the edit tool; both files were re-read and pass lint.

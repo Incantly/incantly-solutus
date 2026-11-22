@@ -8,8 +8,8 @@ What the model reads, per job, and the rules it follows. The prompt builder (des
 |---|---|---|---|
 | `live` | The studio's voice lesson (`POST /v1/teach`) | `draw`, `figure`, `pause`, `resume`, `seek_beat`, `show_me`; on a board also `board_read`, `board` | `say` text and tool calls, mixed |
 | `figure` | Tiptap and the studio's AI panel (`POST /v1/figure/draw`) | Plan, script and repair calls (design 7) | Lines |
-| `circle` | Circle to ask (`POST /v1/board/ask`, `kind: "circle"`) | `board_read`, `board`, `draw`, `figure` | Board actions |
-| `talk` | The board's agent panel (`POST /v1/board/ask`, `kind: "talk"`) | `board_read`, `board`, `draw`, `figure` | Board actions and short text |
+| `circle` | Circle to ask (`POST /v1/board/ask`, `kind: "circle"`) | `board_read`, `board` (a figure card's lines are checked by its `figure` action) | Board actions |
+| `talk` | The board's agent panel (`POST /v1/board/ask`, `kind: "talk"`) | `board_read`, `board` | Board actions (the server sends no text) |
 
 ## 2. Rules for every job
 

@@ -193,7 +193,7 @@ export interface AgentServiceOptions {
 }
 
 /** The choices on which the user asks the agent to change a figure they made. */
-const EDITS_MINE: readonly CircleChoice[] = ['slider', 'animate'];
+export const EDITS_MINE: readonly CircleChoice[] = ['slider', 'animate'];
 
 /** The agent of one board: the runner, the transport, the jobs and the conversation. */
 export class AgentService {

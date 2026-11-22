@@ -15,6 +15,7 @@ export { Job, SERVER_JOB_MACHINE } from './jobs/job';
 export type { JobState, JobMove } from './jobs/job';
 export { CHECK_MAX_LINES } from './jobs/check';
 export { figureDraw, REQUEST_CHARS, SCRIPT_CHARS, AROUND_CHARS } from './jobs/figure';
+export { boardAsk, readBoardRequest, BOARD_ITEMS_MAX, BOARD_TEXT_CHARS, ITEM_CHARS } from './jobs/board';
 export { TURN_MS, jobSignal, meteredClient } from './jobs/model';
 export { readSse, chatEvents, ChunkJoiner, streamCut, providerError } from './providers/sse';
 export type { SseItem, StreamFacts } from './providers/sse';

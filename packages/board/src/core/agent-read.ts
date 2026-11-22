@@ -106,7 +106,15 @@ export function describeShape(core: BoardCore, shape: ShapeRecord, figures?: Fig
   } else if (isInk(shape)) {
     form = strokeShape(shape);
   }
-  return { id: shape.id, kind: shape.kind, box: boxOf(bounds), ...(text !== undefined ? { text } : {}), ...(summary !== undefined ? { summary } : {}), ...(form !== undefined ? { shape: form } : {}) };
+  return {
+    id: shape.id,
+    kind: shape.kind,
+    box: boxOf(bounds),
+    ...(text !== undefined ? { text } : {}),
+    ...(summary !== undefined ? { summary } : {}),
+    ...(form !== undefined ? { shape: form } : {}),
+    ...(shape.meta['madeBy'] === 'model' ? { madeBy: 'model' as const } : {}),
+  };
 }
 
 /**

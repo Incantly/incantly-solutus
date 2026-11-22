@@ -157,7 +157,9 @@ Fish is tried first, HeyGen second. No library is added: playback uses the brows
 | Figure | `figureTarget(app)` over an SDK `App` or headless app | Tiptap, the studio's AI panel, a board figure card, the server's checks |
 | Board | `boardTarget(board)` over `@incantly/board/core` | The board's agents |
 
-An adapter gives the tools `run`, `figureSummary`, `undefinedObjects`, the clock and, for the board, `readBoard` and `applyAction`. The server keeps a headless copy of the target to run the tools and check each line before it streams (server design 5).
+An adapter gives the tools `run`, `figureSummary`, `undefinedObjects`, the clock and, for the board, `board_read` and the checks of `board`. The server keeps a headless copy of the target to run the tools and check each line before it streams (server design 5).
+
+`boardTarget(data, options)` (round 3) is the board as a request: the items in view, the page, `more`, the circle's area, whether the user allows edits, and the mode of the catalogue (a circle's choice sets it: `geometry` for `measure` and `geometry`, `graphing` for the rest). It has no figure of its own, so the jobs `circle` and `talk` offer only `board_read` and `board`; a figure card's lines go through the `figure` action, whose result lists each line. A target over a live board (the runner's `BoardAgent`, which applies actions and is asynchronous) is left for round 4's live job.
 
 ## 10. Performance
 

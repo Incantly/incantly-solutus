@@ -178,7 +178,8 @@ class Turn {
       const calls: ModelToolCall[] = [];
       const results: ChatMessage[] = [];
       let text = '';
-      const stream = this.o.client.chat({ system, messages: [...this.messages], tools: this.o.toolset.specs() }, this.signal);
+      const vision = (this.o.request.images?.length ?? 0) > 0;
+      const stream = this.o.client.chat({ system, messages: [...this.messages], tools: this.o.toolset.specs(), ...(vision ? { vision: true } : {}) }, this.signal);
       const it = stream[Symbol.asyncIterator]();
       for (;;) {
         // each step races the caller's signal, so a model that sends nothing is still stopped (a stop, or the deadline)
