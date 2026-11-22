@@ -2219,7 +2219,7 @@ Written before the code of round 1 (branch `feat/teacher-r1`, `packages/teacher/
 Written before the code of round 2 (branch `feat/teacher-r2`).
 
 - **Where:** `stream/apply.ts` `FigureStream`, `FIGURE_STREAM_MACHINE`; `streamFigure`. The splitter (`stream/split.ts`) holds only the text of the line being written (data), no state.
-- **States:** `idle` (made, not started), `planning` (the plan call is open: words only, no lines), `scripting` (the script call is open: each line is applied when its newline arrives), `repairing` (the repair call is open: replacement lines for the lines that failed), `done` (the stream ended well, or was cut and reported), `limited` (the deadline passed: the caller's `AbortSignal.timeout` aborted with a `TimeoutError` reason), `stopped` (the caller's signal fired with any other reason), `failed` (the model client reported an error in the plan or script call). `done`, `limited`, `stopped` and `failed` are final.
+- **States:** `idle` (made, not started), `planning` (the plan call is open: words only, no lines), `scripting` (the script call is open: each line is applied when its newline arrives), `repairing` (the repair call is open: replacement lines for the lines that failed), `done` (the stream ended well, or was cut and reported), `limited` (the deadline passed: the caller's `AbortSignal.timeout` aborted with a `TimeoutError` reason), `stopped` (the caller's signal fired with any other reason), `failed` (the model client reported an error in the plan or script call, or no line passed at all). `done`, `limited`, `stopped` and `failed` are final.
 
 | State | Holds |
 |---|---|
@@ -2230,7 +2230,7 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 | `done` | the notices (`retry_spent` for each line left out, `stream_cut`) |
 | `limited` | what passed stays; one `turn_limit` error event ends the stream |
 | `stopped` | what passed stays; a final `done` event with the notices |
-| `failed` | one error event, in the SDK shape, ends the stream |
+| `failed` | one error event, in the SDK shape, ends the stream (`model_bad_output` when no line passed) |
 
 - **Invariants:** the lines that passed, the lines that failed and the model-call counter are data, never states; a line goes out as a `lines` event only after it passed on the target, so what the client commits is always a script that loads; the plan text is never sent out; only the script call and the repair call write lines; the repair call runs at most once and only when at least one line failed and the script call ended well; a final state sends no event to the machine again.
 - **Transitions:**
@@ -2247,6 +2247,7 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 | `planning`, `scripting`, `repairing` | `limit` | the signal fired with a `TimeoutError` reason, or a call or line limit passed | `limited` | `turn_limit` error event |
 | `planning`, `scripting`, `repairing` | `abort` | the signal fired with any other reason | `stopped` | `done` event |
 | `planning`, `scripting` | `modelError` | the client sent an error event | `failed` | error event |
+| `scripting`, `repairing` | `unusable` | the reply ended and no line has passed in the whole stream, and none is left to repair | `failed` | `model_bad_output` error event |
 | `repairing` | `cut` | the client reported an error or `stream_cut` in the repair call | `done` | the lines that passed stay; the failures are left out |
 
 - **Reachable invalid states or transitions:** `plan` and `script` in any state but `idle` have no row (`streamFigure` makes a new `FigureStream` each call). `repair` in `planning` has no row: the plan call never writes lines. `modelError` in `repairing` has no row: a failed repair call is `cut`, because the figure already holds good lines.
