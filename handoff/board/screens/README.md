@@ -11,7 +11,7 @@ Taken in Chrome 158 (headless, 1280 × 800 at 1:1, WebGL 2) in the studio's Boar
 | Lasso selection | `final-lasso-selection.png` | Strokes inside a lasso loop selected, with the selection bar. |
 | Pages and the page bar | `final-pages-page-bar.png` | Two pages, the page list open on page 2 with its own stroke. |
 | Zoom | `final-zoom.png` | The board zoomed, the zoom bar showing the percentage. |
-| Backgrounds | `final-background-grid.png`, `final-background-dots.png`, `final-background-lines.png` | The grid, dots and ruled paper. The ruled-paper shot (`final-background-lines.png`) was taken before one tile was drawn: the column of the page from x 512 to 1024 (screen) has no ruled lines and the strokes are cut off at its left edge, and the laser's fading trail is still on the overlay. Retake it after the last tile is drawn. |
+| Backgrounds | `final-background-grid.png`, `final-background-dots.png`, `final-background-lines.png` | The grid, dots and ruled paper. The ruled-paper shot was retaken after BR-72 (a tile drawn in the middle of a frame was left blank): the paper was chosen first, then the laser drawn, and every tile shows the ruled lines and all the strokes while the laser's red trail fades on the overlay. |
 | Every shape kind | `final-shapes-all-kinds.png` | Rectangle, ellipse, triangle, diamond, star, line, arrow, frame, sticky note and text with maths. |
 | Select with handles | `final-select-handles.png` | A rectangle selected after a resize, with its handles and the style bar. |
 | Rotate | `final-rotate.png` | The same rectangle turned by its rotate handle. |
@@ -23,8 +23,8 @@ Taken in Chrome 158 (headless, 1280 × 800 at 1:1, WebGL 2) in the studio's Boar
 | Shape fixing | `final-fix-before.png`, `final-fix-after.png` | A rough pentagon, held still for half a second, and the regular pentagon it becomes. |
 | Clipboard paste | `final-clipboard-paste.png` | Pasted text made into a text shape with maths. |
 | A live graph card | `final-live-card.png` | A figure card with a live graph, a point to drag. |
-| Three live cards with pictures | `final-three-live-cards-with-pictures.png` | Five cards on the page, one selected with its toolbar. Nothing in the picture tells the live cards from the pictures (the page was made with three live and two pictures). |
-| A card taking input | `final-card-takes-input.png` | A card that has the input (a double click): the selected card has the thick blue border. The point A is still at its starting place; no drag is shown. |
+| Three live cards with pictures | `final-three-live-cards-with-pictures.png` | Five cards on the page; the script added a green "live" tag over each of the three live cards and a grey "picture" tag over each of the two pictures (the tags are not part of the product). No card is selected. |
+| A card taking input | `final-card-takes-input.png` | The card with the point A has the input (select tool, a double click): it has the thick blue border, and the point A was dragged up and to the right from its starting place (the curve stays where it was). |
 | The More shapes menu | `final-more-shapes-menu.png` | The toolbar in one row with the More shapes menu open. |
 | The style bar | `final-style-bar.png` | Colours, fill, dash, size and font for the shape tool. |
 | The customised board | `final-customised-board.png` | `?mode=notes&board=custom`: the toolbar on the left with names, the pen called "Stylo", the bin icon, teal accent. |

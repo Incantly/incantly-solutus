@@ -4,7 +4,7 @@
  *
  * Run from the repository root:
  *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright-core node packages/board/bench/chrome-board.mjs
- *     [--rate 4] [--rows pen,gc,pan,fit,zoom,cards,lasso,switch,open] [--stroke 10] [--md handoff/board/bench.md] [--headed]
+ *     [--rate 4] [--rows pen,gc,pan,fit,zoom,cards,lasso,switch,open] [--stroke 10] [--warm 2] [--md handoff/board/bench.md] [--headed]
  *
  * Playwright is not a dependency of the repository (docs/design/libraries.md): point PLAYWRIGHT_DIR at a folder where
  * it is installed. Chrome itself is the installed one (`channel: 'chrome'`). The studio is served by Vite on a free
@@ -19,7 +19,10 @@
  *   end of the animation frame that draws it on the live canvas; the next frame's start is given too, as the bound by
  *   which it has been on screen.
  * - Collections are counted from a protocol trace (`v8` and `devtools.timeline`: MinorGC and MajorGC) over a stroke of
- *   `--stroke` seconds; an idle page of the same length is counted too, for what the browser does alone.
+ *   `--stroke` seconds. The row is the board's page minus a blank page's: the same stroke on a page of its own (a secure
+ *   context, as `getCoalescedEvents` needs) whose one listener only calls `getCoalescedEvents()`, which is what the browser
+ *   makes for the pen. Both counts are printed, with an idle page's.
+ * - The lasso row is the slowest of four runs (a fifth, first, run warms the code).
  * The script exits 1 when a row is over its goal.
  */
 import { createRequire } from 'node:module';
@@ -362,7 +365,7 @@ try {
     await throttle(rate);
     await tool('pen');
     const box = await surface();
-    await stroke(Number(arg("warm", "2")), box.x + 120, box.y + 300);
+    await stroke(Number(arg('warm', '2')), box.x + 120, box.y + 300);
     const trace = async (fn) => {
       const events = [];
       cdp.on('Tracing.dataCollected', (e) => events.push(...e.value));
