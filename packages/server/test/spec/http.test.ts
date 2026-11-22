@@ -235,7 +235,19 @@ describe('not_found (errors.md)', () => {
 });
 
 describe('model endpoints with no key answer model_unavailable (R1.4)', () => {
-  it.todo('POST /v1/figure/draw with no key is 503 model_unavailable "The AI is not set up." (round 2 builds the route)');
+  it('POST /v1/figure/draw with no key is 503 model_unavailable "The AI is not set up." (the route exists since round 2)', async () => {
+    const run = await start({});
+    try {
+      const r = await postJson(run.port, '/v1/figure/draw', { request: 'a circle', mode: 'geometry', script: '', figure: null, before: '', after: '' });
+      expect(r.status).toBe(503);
+      const e = errorBody(r);
+      expect(e.kind).toBe('model_unavailable');
+      expect(e.message).toBe('The AI is not set up.');
+      expect((await postJson(run.port, '/v1/check', { lines: ['a = 1'] })).status).toBe(200);
+    } finally {
+      await run.close();
+    }
+  });
   it.todo('POST /v1/board/ask with no key is 503 model_unavailable (round 3)');
   it.todo('POST /v1/teach with no key is 503 model_unavailable (round 4)');
   it.todo('POST /v1/speech with no key is 503 model_unavailable (round 4)');

@@ -242,8 +242,28 @@ describe('over HTTP: 413 and 400 (R5.1)', () => {
 });
 
 describe('text and picture limits that need a model route (design 7)', () => {
-  it.todo('spoken or typed text over 4,000 characters is 413 payload_too_large (no route takes text in round 1)');
-  it.todo('a request with a picture may be 2 MB, one without 256 KB (no route takes a picture in round 1)');
-  it.todo('a picture field that is not PNG or JPEG is 400 picture_invalid (no route takes a picture in round 1)');
-  it.todo('a script over the SDK script limit is refused (no route takes a script in round 1)');
+  it('typed text over 4,000 characters on /v1/figure/draw is 413 payload_too_large (design 7; errors.md: 413 over the text limit)', async () => {
+    const run = await start({});
+    try {
+      const r = await postJson(run.port, '/v1/figure/draw', { request: 'x'.repeat(4001), mode: 'geometry', script: '', figure: null, before: '', after: '' });
+      expect(r.status).toBe(413);
+      expect(errorBody(r).kind).toBe('payload_too_large');
+    } finally {
+      await run.close();
+    }
+  });
+
+  it.todo('a request with a picture may be 2 MB, one without 256 KB (the picture routes come in round 3)');
+  it.todo('a picture field that is not PNG or JPEG is 400 picture_invalid (the picture routes come in round 3)');
+  it('a script over the script limit on /v1/figure/draw is refused (400 bad_request or 413 payload_too_large: the docs name no status)', async () => {
+    const run = await start({});
+    try {
+      const r = await postJson(run.port, '/v1/figure/draw', { request: 'a circle', mode: 'geometry', script: 'a = 1\n'.repeat(12_000), figure: null, before: '', after: '' });
+      expect([400, 413]).toContain(r.status);
+      expect(['bad_request', 'payload_too_large']).toContain(errorBody(r).kind);
+    } finally {
+      await run.close();
+    }
+  });
+
 });
