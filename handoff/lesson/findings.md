@@ -20,3 +20,15 @@ Bugs and gaps found while fixing round 1 (LR-1 to LR-8) that are not in `review-
 | Id | Where | Problem | Suggested fix |
 |---|---|---|---|
 | LF-6 | `apps/studio/src/voice.ts` (single-turn voice) | LR-10 changed only the refused microphone (`not-allowed`, `service-not-allowed`). Any other microphone failure (`audio-capture`, `network`, `no-speech` with an error) still shows "The microphone stopped: <reason>." with no word that typing works. | Add "Type your question below." to that line too, as the lesson's `microphoneMessage` already does. |
+
+## Found in the live run (`live-run.md`)
+
+| Id | Where | Problem | Suggested fix |
+|---|---|---|---|
+| LF-7 | `packages/teacher/src/prompt/jobs.ts` (lesson instructions) | The teacher drew no pen sketches, arrows or shapes in 6 turns: every picture was a figure card or a note, and vectors were points, not arrows | Make sketches the default in agent.md 1 rule 3 with two worked snippets (an arrow labelled $\vec v$, a box and arrows); say a figure card is the exception; in a card, a vector is `Vector(...)`, not a point |
+| LF-8 | lesson instructions | "Explain it another way" gave new words but no new picture | Rule 5: a second explanation always adds a new sketch beside the first |
+| LF-9 | lesson instructions, `lessonTurn` | Step 1 shared page 1 with the plan | The plan has page 1; step 1 starts with `page: new` like every step (or the turn adds it) |
+| LF-10 | lesson instructions / board placing | The plan's title sits under the page bar | Start notes below the page bar's height, or `Place` `'free'` for the first note |
+| LF-11 | `apps/studio/src/voice-ui.ts` plan view, or `lesson_plan` | "1. 1. Vectors as arrows": the model numbers steps and the list numbers them again | Strip a leading number from each step in `lesson_plan` |
+| LF-12 | lesson instructions | Turn 2 said "Right" to an answer of a different question | Rule 5: compare the answer with the question asked; if it answers another one, say so kindly and ask again |
+| LF-13 | `lessonTurn`, the model | The first sentence took about 10 s on turns that drew first (1, 4, 5); about 2 s on the others; the target is 3 s | Ask for the spoken sentence before the board call (instructions), or stream `say` from the first reply's text before tool calls run |
