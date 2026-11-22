@@ -200,12 +200,16 @@ export class IndexGrid {
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
+    const cells = new PolygonCells(polygon, minX, minY, maxX, maxY);
     this.#collect(
       minX,
       minY,
       maxX,
       maxY,
       (e) => {
+        // a box in cells that no edge of the loop touches is wholly inside it or wholly outside it, and the cells know which
+        const known = cells.classify(e.minX, e.minY, e.maxX, e.maxY);
+        if (known >= 0) return known === 1 ? 2 : 0;
         // a box wholly inside the polygon: no edge touches it and a corner is inside
         if (e.minX >= minX && e.maxX <= maxX && e.minY >= minY && e.maxY <= maxY && !polygonTouchesBoxEdge(polygon, e.minX, e.minY, e.maxX, e.maxY)) {
           // nothing of the polygon is in or on the box, so every point of the box is on the same side
@@ -292,6 +296,82 @@ export class IndexGrid {
       }
     }
     for (const id of this.#big) visit(id);
+  }
+}
+
+/** Cells along each side of the grid `PolygonCells` lays over a loop's box. */
+const LOOP_CELLS = 16;
+
+/**
+ * A coarse grid over a loop's own box that remembers, for each cell, whether an edge of the loop may touch it, and for
+ * a cell that none touches whether it is inside the loop. A box (a stroke's) that lies in such cells needs no test against
+ * the loop's edges: the thousands of strokes a lasso encloses are each answered by a few lookups, and only those near the
+ * loop's line fall back to the edge tests (BR-75).
+ */
+class PolygonCells {
+  readonly #minX: number;
+  readonly #minY: number;
+  readonly #cw: number;
+  readonly #ch: number;
+  /** -1 an edge may touch the cell, 0 no edge does and it is outside, 1 no edge does and it is inside. */
+  readonly #state = new Int8Array(LOOP_CELLS * LOOP_CELLS);
+  readonly #usable: boolean;
+
+  constructor(polygon: readonly number[], minX: number, minY: number, maxX: number, maxY: number) {
+    this.#minX = minX;
+    this.#minY = minY;
+    this.#cw = (maxX - minX) / LOOP_CELLS;
+    this.#ch = (maxY - minY) / LOOP_CELLS;
+    this.#usable = this.#cw > 0 && this.#ch > 0 && Number.isFinite(this.#cw) && Number.isFinite(this.#ch);
+    if (!this.#usable) return;
+    const n = polygon.length;
+    // an edge marks every cell its own box meets, a little wider than it is, so an edge on a line between cells marks both
+    const ex = this.#cw * 1e-6;
+    const ey = this.#ch * 1e-6;
+    for (let i = 0, j = n - 2; i < n; j = i, i += 2) {
+      const ax = polygon[j] as number;
+      const ay = polygon[j + 1] as number;
+      const bx = polygon[i] as number;
+      const by = polygon[i + 1] as number;
+      const c0 = this.#cx(Math.min(ax, bx) - ex);
+      const c1 = this.#cx(Math.max(ax, bx) + ex);
+      const r0 = this.#cy(Math.min(ay, by) - ey);
+      const r1 = this.#cy(Math.max(ay, by) + ey);
+      for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) this.#state[r * LOOP_CELLS + c] = -1;
+    }
+    for (let r = 0; r < LOOP_CELLS; r++) {
+      for (let c = 0; c < LOOP_CELLS; c++) {
+        if (this.#state[r * LOOP_CELLS + c] === -1) continue;
+        this.#state[r * LOOP_CELLS + c] = pointInPolygon(minX + (c + 0.5) * this.#cw, minY + (r + 0.5) * this.#ch, polygon) ? 1 : 0;
+      }
+    }
+  }
+
+  #cx(x: number): number {
+    const c = Math.floor((x - this.#minX) / this.#cw);
+    return c < 0 ? 0 : c >= LOOP_CELLS ? LOOP_CELLS - 1 : c;
+  }
+
+  #cy(y: number): number {
+    const r = Math.floor((y - this.#minY) / this.#ch);
+    return r < 0 ? 0 : r >= LOOP_CELLS ? LOOP_CELLS - 1 : r;
+  }
+
+  /**
+   * 1 when the box lies wholly inside the loop, 0 when it lies wholly outside the loop's box or in cells that are outside the
+   * loop, and -1 when the cells cannot say (a box that leaves the loop's own box, or reaches a cell an edge may touch).
+   */
+  classify(minX: number, minY: number, maxX: number, maxY: number): number {
+    if (!this.#usable) return -1;
+    if (minX < this.#minX || minY < this.#minY || maxX > this.#minX + this.#cw * LOOP_CELLS || maxY > this.#minY + this.#ch * LOOP_CELLS) return -1;
+    const c0 = this.#cx(minX);
+    const c1 = this.#cx(maxX);
+    const r0 = this.#cy(minY);
+    const r1 = this.#cy(maxY);
+    const first = this.#state[r0 * LOOP_CELLS + c0] as number;
+    if (first < 0) return -1;
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (this.#state[r * LOOP_CELLS + c] !== first) return -1;
+    return first;
   }
 }
 

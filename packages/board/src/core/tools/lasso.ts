@@ -98,20 +98,29 @@ class LassoTool implements ToolHandlers {
     const whole: boolean[] = [];
     index.grid.queryLassoSplit(polygon, ids, whole);
     const picked: string[] = [];
+    // a shape that has a parent may belong to a group, which brings the whole group
+    let grouped = false;
     for (let i = 0; i < ids.length; i++) {
       const shape = index.shape(ids[i] as string);
       if (shape === undefined || shape.locked || shape.kind === 'group') continue;
       if (!isInk(shape)) {
         // any other shape is in when the middle of its box is inside the loop (B10)
         const g = shapeGeometry(shape, index.kinds);
-        if (g !== undefined && pointInPolygon(g.pageCx, g.pageCy, polygon)) picked.push(shape.id);
+        if (g !== undefined && pointInPolygon(g.pageCx, g.pageCy, polygon)) {
+          picked.push(shape.id);
+          if (shape.parent !== null) grouped = true;
+        }
         continue;
       }
       if (shape.props.points.length === 0) continue;
-      if (whole[i] === true || mostlyInside(shape, polygon)) picked.push(shape.id);
+      if (whole[i] === true || mostlyInside(shape, polygon)) {
+        picked.push(shape.id);
+        if (shape.parent !== null) grouped = true;
+      }
     }
-    // a shape of a group brings the whole group
-    selection.set(expandGroups(this.#ctx.core.store, picked));
+    // a shape of a group brings the whole group; when none has a parent, the ids are the selection
+    if (grouped) selection.set(expandGroups(this.#ctx.core.store, picked));
+    else selection.setDistinct(picked);
   }
 }
 

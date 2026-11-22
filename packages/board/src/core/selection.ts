@@ -29,6 +29,21 @@ export class Selection {
     this.#notify();
   }
 
+  /**
+   * Replaces the selection with ids the caller knows are all different. The array is kept as it is (the caller makes it
+   * and does not change it again), so a selection of thousands of shapes is not copied twice.
+   */
+  setDistinct(ids: readonly string[]): void {
+    const was = this.#ids;
+    if (ids.length === was.length) {
+      let same = true;
+      for (let i = 0; same && i < ids.length; i++) if (ids[i] !== was[i]) same = false;
+      if (same) return;
+    }
+    this.#ids = ids;
+    this.#notify();
+  }
+
   clear(): void {
     this.set([]);
   }

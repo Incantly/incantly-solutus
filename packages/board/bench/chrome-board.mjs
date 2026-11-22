@@ -78,7 +78,7 @@ const GOALS = {
   fit: { what: 'Pan, 10,000 shapes, all in view (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
   zoom: { what: 'Zoom, 10,000 shapes (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
   cards: { what: 'Pan, 2,000 strokes + 3 live cards (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
-  lasso: { what: 'Lasso of 2,000 strokes (pointer-up handler)', goal: 4, unit: 'ms', by: 'value' },
+  lasso: { what: 'Lasso of 2,000 strokes (pointer-up handler)', goal: 4, unit: 'ms', by: 'slowest of 4' },
   switch: { what: 'Switch to a page of 2,000 shapes (click to all tiles drawn)', goal: 100, unit: 'ms', by: 'value' },
   open: { what: 'Open a 1,000-shape board (call to first picture)', goal: 200, unit: 'ms', by: 'value' },
 };
@@ -596,8 +596,9 @@ try {
       await page.keyboard.press('Escape');
       await sleep(200);
     }
-    const best = Math.min(...runs.slice(1).map((r) => r.up));
-    record('lasso', best, `best of ${runs.length - 1} (first is warm-up): ${runs.map((r) => `${fmt(r.up)} ms/${r.selected} selected`).join(', ')}; slowest frame after ${fmt(frameAfter)} ms`, { runs });
+    // every run counts: the row is the slowest of them
+    const worst = Math.max(...runs.slice(1).map((r) => r.up));
+    record('lasso', worst, `slowest of ${runs.length - 1} (first is warm-up): ${runs.map((r) => `${fmt(r.up)} ms/${r.selected} selected`).join(', ')}; slowest frame after ${fmt(frameAfter)} ms`, { runs });
   }
 
   // ---- switch to a page of 2,000 shapes
