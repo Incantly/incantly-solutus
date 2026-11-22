@@ -16,6 +16,7 @@ const JOB_TOOLS: Readonly<Record<JobId, readonly string[]>> = {
   figure: ['draw', 'figure'],
   circle: ['board_read', 'board', 'draw', 'figure'],
   talk: ['board_read', 'board', 'draw', 'figure'],
+  lesson: ['board_read', 'board', 'lesson_plan', 'lesson_step'],
 };
 
 const build = (job: JobId, mode: string, request: TurnRequest = { text: 'Take a circle of radius 2.' }): BuiltPrompt => {
@@ -136,9 +137,9 @@ describe('prompt size (R3.2, design 5)', () => {
     }
   });
 
-  it('the four jobs have four different instructions', () => {
+  it('every job has its own instructions', () => {
     const texts = JOB_IDS.map((j) => build(j, 'geometry').system);
-    expect(new Set(texts).size).toBe(4);
+    expect(new Set(texts).size).toBe(JOB_IDS.length);
   });
 
   it('every example line in the instructions draws without an error (agent.md 3 snippets)', () => {

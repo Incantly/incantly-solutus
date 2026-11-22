@@ -13,13 +13,13 @@ export type { ToolSource } from './tools/schema';
 export { ToolGuard, TOOL_MACHINE } from './tools/guard';
 export type { ToolState, ToolMove } from './tools/guard';
 export type {
-  BoardCheck, BoardPort, JsonLike, JsonSchema, Target, TargetClock, ToolDef, ToolOutcome, ToolRun, ToolSpec, ToolValue, Toolset, TurnOutput, UndefinedObject,
+  BoardCheck, BoardPort, JsonLike, JsonSchema, LessonView, Target, TargetClock, ToolDef, ToolOutcome, ToolRun, ToolSpec, ToolValue, Toolset, TurnOutput, UndefinedObject,
 } from './tools/types';
 
 export { catalogueFor, ON_DEMAND_TOKENS, ALWAYS_TOKENS } from './prompt/catalogue';
 export type { Catalogue, CatalogueGroup, Selection } from './prompt/catalogue';
 export { GRAMMAR, LANGUAGE_CARD, FUNCTIONS_LINE, OPERATORS_LINE } from './prompt/grammar';
-export { jobInstructions, isJobId, JOB_IDS } from './prompt/jobs';
+export { jobInstructions, isJobId, JOB_IDS, LESSON_END_INSTRUCTION } from './prompt/jobs';
 export type { JobId } from './prompt/jobs';
 export { CHOICE_IDS, choiceAsk, choiceMode, isChoiceId } from './prompt/choices';
 export type { ChoiceId } from './prompt/choices';
@@ -36,6 +36,11 @@ export { boardTurn, boardMode, boardAllowsEdit } from './loop/board';
 export type { BoardTurnOptions } from './loop/board';
 export { liveTurn, liveTarget, liveTools } from './loop/live';
 export type { LiveTurnOptions } from './loop/live';
+export { lessonTurn, isEndRequest } from './lesson/turn';
+export type { LessonTurnOptions } from './lesson/turn';
+export { lessonTools } from './lesson/tools';
+export { LESSON_LIMITS, MEMORY_TOKENS, historyOf, lessonView, memoryBlock, newMemory, recordTurn } from './lesson/memory';
+export type { LessonMemory, LessonTurnRecord } from './lesson/memory';
 export { RETRY_FAILURES, STREAK_LIMIT, lineKey } from './loop/book';
 
 export { streamFigure, FIGURE_STREAM_MACHINE, FIGURE_LIMITS, PLAN_MIN_OBJECTS } from './stream/apply';

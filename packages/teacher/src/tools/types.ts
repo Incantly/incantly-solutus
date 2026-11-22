@@ -28,11 +28,19 @@ export interface JsonSchema {
 /** What a successful tool returns: a plain object the model reads as JSON. */
 export type ToolValue = Readonly<Record<string, unknown>>;
 
+/** The lesson as the learner's screen shows it: the plan, the step now (1 based, 0 with no plan) and what the lesson is doing. */
+export interface LessonView {
+  readonly plan: readonly string[];
+  readonly step: number;
+  readonly state: string;
+}
+
 /** What a tool run asks the turn to send out besides its result. */
 export type TurnOutput =
   | { readonly lines: readonly string[] }
   | { readonly actions: readonly unknown[] }
-  | { readonly control: { readonly op: 'pause' | 'resume' | 'seek'; readonly t?: number } };
+  | { readonly control: { readonly op: 'pause' | 'resume' | 'seek'; readonly t?: number } }
+  | { readonly lesson: LessonView };
 
 export type ToolRun = (target: Target, input: unknown) => Result<ToolValue>;
 
