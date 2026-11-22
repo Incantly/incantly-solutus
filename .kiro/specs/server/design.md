@@ -20,6 +20,7 @@ The feature design is `docs/features/server/design.md`; this file says where eac
 | `jobs/board.ts` | `/v1/board/ask`, circle and talk |
 | `jobs/teach.ts` | `/v1/teach`, the live job |
 | `jobs/check.ts`, `jobs/svg.ts` | `/v1/check` and `/v1/export/svg` |
+| `jobs/speech.ts` | `/v1/speech`: one sentence to audio, streamed, voices tried in order |
 | `jobs/job.ts` | The job over `SERVER_JOB_MACHINE` |
 | `log.ts` | Structured log lines, keys and bodies removed |
 | `main.ts` | Loads `.env`, reads settings, starts listening |

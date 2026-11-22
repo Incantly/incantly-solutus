@@ -46,7 +46,9 @@ Every error in `errors.md` SHALL be returned in the SDK shape; nothing SHALL thr
 
 1. `npm run server` SHALL start the server; the studio's dev server SHALL proxy `/v1` to it.
 2. The studio SHALL use the server when `/v1/health` answers, and keep the board's demo agent and Tiptap's `ai_unavailable` otherwise.
-3. The studio's voice lesson SHALL use the browser's speech recognition and speech synthesis, with a text box where recognition is missing.
+3. The studio's voice lesson SHALL listen with the browser's speech recognition, with a text box where recognition is missing.
+4. The studio SHALL speak each `say` sentence through `/v1/speech` as soon as it ends, in order, and SHALL use the browser's speech synthesis when the server's voice is busy, fails or is off.
+5. `POST /v1/speech` SHALL stream audio from `OPENROUTER_SPEECH_MODELS` (free ids only), take at most 500 characters, fall back across the voices, and stop when the client closes.
 
 ### R8. Speed (design 9)
 
