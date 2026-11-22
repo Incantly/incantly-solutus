@@ -2263,6 +2263,50 @@ Round 3 adds no state of its own; this note says where each new part gets its st
 | `POST /v1/board/ask` | `packages/server/src/jobs/board.ts` | The request job (SV1) and the model call (SV2), as `/v1/figure/draw`. |
 | The studio's choice of agent | `apps/studio/src/board-agent.ts`, `studio-page.ts` | One probe answer, read once after the board first opens. The board opens at once with the demo agent; a ready server then replaces its transport and label. Nothing else changes, so there is no state to table. |
 
+### Round 4 (branch `feat/teacher-r4`): voice lessons
+
+Written before the code of round 4. The teacher's own part adds no machine; the studio's voice lesson adds one (TE4).
+
+| Part | Where | States come from |
+|---|---|---|
+| Film tools `pause`, `resume`, `seek_beat`, `show_me` | `tools/film.ts` | The tool guard (TE2) of the target. The clock they move is the target's (`target.clock`); on a board target the clock is a record `{ t }` in the target (data: the film time the card in focus was last asked for), not a state. `show_me` is a `draw` call of one `SetValue` line, so it has no state of its own. |
+| Sentence splitter | `stream/sentences.ts` `SentenceSplitter` | The text since the last sentence end is data, as the line splitter's unfinished line is (TE3). It has no state: `push` returns the sentences that ended, `flush` returns the rest. |
+| The live job | `loop/live.ts` `liveTurn` | The turn (TE1). It forwards the turn's events and turns `say` pieces into whole sentences; a reply's rest is flushed at the next event that is not `say`. Nothing else changes. |
+| `POST /v1/teach` | `packages/server/src/jobs/teach.ts` | The request job (SV1) and the model call (SV2), as `/v1/board/ask`. |
+| `POST /v1/speech` | `packages/server/src/jobs/speech.ts` | The request job (SV1) with an audio answer, and the voices in order (SV3). |
+
+### TE4. Voice lesson (studio)
+
+- **Where:** `apps/studio/src/voice.ts` `VoiceLesson`, `VOICE_MACHINE`. The panel (`voice-ui.ts`) and the turn's NDJSON client (`teach-client.ts`) hold no state of their own: they read the machine.
+- **States:** `idle` (nothing is listening, running or playing), `listening` (the browser's speech recognition is open; where it is missing, the text box has the input and this state is not used), `thinking` (a `/v1/teach` turn is open and no sentence is playing: waiting for the model, or for the next sentence's audio), `speaking` (a sentence's audio, or the browser's voice, is playing).
+
+| State | Holds |
+|---|---|
+| `idle` | nothing; the panel shows the last answer's text |
+| `listening` | the open recognition and the text heard so far (interim, never sent) |
+| `thinking` | the turn's `AbortController`, the request's text, the sentence queue (audio fetched ahead) |
+| `speaking` | the same, and the clip that plays now |
+
+- **Invariants:** the turn's `AbortController`, the queue and the playing clip are one record, `run`, made when the turn begins and dropped on the move to `idle` or `listening` (the field and the machine cannot disagree); the sentence queue is data: each sentence keeps its text and the promise of its audio, which is started when the sentence is queued, so the next sentence's audio is being made while the one before it plays; the queue is played in order, and its end is a marker queued when the turn ends, so `drained` is sent only when the marker is reached and the player never guesses from an empty queue that the turn is over; a sentence whose audio failed is spoken with the browser's voice, and the order does not change; only whole sentences enter the queue (the teacher splits them, `say` pieces never reach the voice); a move out of `thinking` or `speaking` to `listening`, `thinking` (a new request) or `idle` always stops the clip, drops the queue and aborts the turn first (barge-in), and an event of the old turn that arrives later is ignored because its `run` is no longer the current one; the recognition is closed on every move out of `listening`; `lines`, `actions` and `control` events are applied when they arrive, whatever the state, so the figure changes while the sentence is spoken.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `listen` | recognition exists | `listening` | recognition opens |
+| `listening` | `heard` | the final text is not empty | `thinking` | recognition closes; the request is sent |
+| `listening` | `stop` | the button again, no speech, or a recognition error that is not a failure | `idle` | recognition closes |
+| `idle`, `listening` | `type` | the text box has text | `thinking` | recognition closes if open; the request is sent |
+| `thinking`, `speaking` | `type` | the text box has text (barge-in by typing) | `thinking` | clip stopped, queue dropped, old turn aborted; the new request is sent |
+| `thinking` | `play` | the next sentence is ready to play | `speaking` | the clip starts |
+| `speaking` | `play` | the clip ended and a sentence is next | `speaking` | the next clip starts |
+| `speaking` | `wait` | the clip ended and the queue has no sentence yet | `thinking` | nothing plays |
+| `thinking`, `speaking` | `drained` | the end marker was reached | `idle` | the run is dropped |
+| `thinking`, `speaking` | `listen` | recognition exists (barge-in by voice) | `listening` | clip stopped, queue dropped, turn aborted; recognition opens |
+| `thinking`, `speaking` | `stop` | the Stop button | `idle` | clip stopped, queue dropped, turn aborted |
+| `listening`, `thinking`, `speaking` | `fail` | recognition failed, or the request could not start | `idle` | everything stopped; the reason shown |
+
+- **Reachable invalid states or transitions:** `play` and `wait` in `idle` and `listening` have no row: a late event of an old run is ignored by comparing `run`, and the player asks `can` first. `heard` outside `listening` has no row (a late recognition result after a barge-in is dropped). `listen` in `listening` and `stop` in `idle` have no row; the button asks `can`. The turn's own `done` or `error` event is not a move: it queues the end marker, and the player moves with `drained`.
+
 ## server
 
 Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/src/`). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is logged as `internal` with its fingerprint (`log.ts`) and the response is ended with `internal`. The rate limiter and the daily budget are counters, not states (server design 7).
@@ -2328,6 +2372,15 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 | `trying`, `streaming` | `abort` | the caller's signal fired | `stopped` | the model's request aborted |
 
 - **Reachable invalid states or transitions:** `passOn` in `streaming` has no row (the fallback asks `can` first and forwards the error). `output` and `finish` in a final state have no row; the loop returns first.
+
+### SV3. Speech call and audio answer
+
+Written before the code of round 4 (branch `feat/teacher-r4`).
+
+- **Where:** `providers/speech.ts` `SpeechClient` (the voices in order), `jobs/speech.ts` `speech` (the route), `jobs/job.ts` `Job.audio` and `Job.chunk`.
+- **The voices in order** use the same table as SV2, `CALL_MACHINE`, with the same moves: `trying` (no byte of audio has reached the caller), `streaming` (the first byte reached the caller: this voice stays to the end), `done`, `failed`, `stopped`. A voice passes the call on at 429, 5xx, a network error, or no first byte within 15 s; a voice that gave 429 is skipped for 60 s; all busy is `model_busy` with `retryAfterMs`, all timed out `model_timeout`, any mix `model_unavailable`. The skip list is data shared by every call.
+- **The audio answer** is a `Job` (SV1) answer of another kind, with the same machine and no new row: the checks pass (`checked`, `running`), nothing is written until the first byte of audio arrives, then the head (`200`, `audio/mpeg` or `audio/pcm` with `x-sample-rate`) and the byte go out (`firstEvent`, `streaming`), the stream ends with `finish`. An error before the first byte is an HTTP error (`model_busy` 503 with `retry-after`, `model_unavailable` 503, `model_timeout` 504), because nothing has been sent: the studio then uses the browser's voice. An error after the first byte cannot change the head: the response is ended where it is (`fail` in `streaming` ends the response with no error line, since the body is not NDJSON), and the client plays what it has.
+- **Invariants:** the audio bytes are passed on as they arrive, never held back for the whole clip; the client closing the connection moves the job to `aborted` and aborts the provider request at once (no bytes are fetched for a closed client); the key goes only in the `Authorization` header; the provider's own text never reaches the client; the sentence is at most 500 characters; a request counts one tenth in the client's minute (`weight: 0.1`) and does not take the client's model slot (`exclusive` is not set: sentences of one lesson are fetched ahead, several at once); the day's model-call counter is not used, since the voice models are not chat calls.
 
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
