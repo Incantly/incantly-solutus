@@ -130,15 +130,23 @@ Tiptap's AI and the board's `figure` action use this path. It follows core desig
 
 ## 8. Speech
 
-The live teacher talks. Words come in as text and go out as text; the package never handles audio.
+The live teacher talks with a real voice. The package itself never handles audio: words come in as text and go out as `say` text, and the server and the studio turn them into sound.
 
 | Way | Where | Note |
 |---|---|---|
-| Listening | The browser's speech recognition (Web Speech API), in the studio | Text goes to the server as the turn's request. Where the browser has none, the studio shows a text box |
-| Speaking | The browser's speech synthesis, in the studio | The `say` events are read aloud as they arrive, sentence by sentence |
-| Turn taking | The studio | When the person speaks while the teacher talks, speech stops and the current turn is aborted |
+| Listening | The browser's speech recognition (Web Speech API), in the studio | Text goes to the server as the turn's request. Where the browser has none, the studio shows a text box. OpenRouter has no free speech-to-text model (checked 2026-11-22), so listening stays in the browser |
+| Speaking | A free OpenRouter voice model through the server's `POST /v1/speech` (server design 6) | Each `say` sentence is sent as soon as it ends, and its audio plays in order while the next one is made. A sentence's audio starts about 1 to 2 s after the request |
+| Speaking, fallback | The browser's speech synthesis | Used when the server's voice is busy, fails, or is off |
+| Turn taking | The studio | When the person speaks while the teacher talks, playback stops, queued sentences are dropped and the current turn is aborted |
 
-Free models on OpenRouter take and give text, not live audio, so speech stays in the browser. No library is added: both parts are browser APIs.
+Free voice models, checked on 2026-11-22 with "Take a circle of radius two, and a point on it.":
+
+| Model | Format | First byte | Whole clip | Voices |
+|---|---|---|---|---|
+| `fish-audio/s2.1-pro-free:free` | MP3 | 1.1 s | 2.8 s for 3.2 s of speech | Default voice; takes delivery `instructions` |
+| `heygen/heygen-voice-1-turbo:free` | PCM only | 2.1 s | 2.4 s | `nadine`, `tabitha`, `bram`, `gareth`, `noelle`, `meredith`, `sabrina`, `lucian`, `weston`, `vincent` |
+
+Fish is tried first, HeyGen second. No library is added: playback uses the browser's audio element for MP3 and Web Audio for PCM.
 
 ## 9. Target adapters
 

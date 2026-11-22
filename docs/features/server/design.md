@@ -9,6 +9,7 @@
 | Prompt to figure, edit a figure | `POST /v1/figure/draw` | Tiptap `httpTransport` (`packages/tiptap/src/ai.ts`) |
 | Circle to ask, talking agent | `POST /v1/board/ask` | Board `httpAgentTransport` (`packages/board/src/web/agent-http.ts`) |
 | Live voice lesson | `POST /v1/teach` | New, in the studio |
+| The teacher's voice | `POST /v1/speech` | New, in the studio |
 | Check lines, no model | `POST /v1/check` | New |
 | SVG of a script, no model | `POST /v1/export/svg` | New |
 | Health and models | `GET /v1/health` | New |
@@ -43,6 +44,8 @@ All from `packages/server/.env` (ignored by git); `.env.example` lists them.
 | `OPENROUTER_API_KEY` | none | Required for `openrouter` |
 | `OPENROUTER_TEXT_MODELS` | the list in `.env.example` | Free model ids, tried in order |
 | `OPENROUTER_VISION_MODELS` | the list in `.env.example` | Free model ids for requests with a picture |
+| `OPENROUTER_SPEECH_MODELS` | `fish-audio/s2.1-pro-free:free,heygen/heygen-voice-1-turbo:free` | Free voice models for `/v1/speech`, tried in order |
+| `OPENROUTER_SPEECH_VOICE` | `bram` | The voice for models that need one named (HeyGen) |
 | `MUSE_API_KEY` | none | Required for `muse` |
 | `HOST` | `127.0.0.1` | Bind address |
 | `PORT` | `8787` | Port |
@@ -98,6 +101,7 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 - A request that fails before streaming (bad JSON, too large, wrong origin, rate limit) answers with an HTTP status and one JSON error body: `400`, `413`, `403`, `429` with `retry-after`.
 - `/v1/check` answers one JSON body: the per-line results of the kernel, as `draw` gives them.
 - `/v1/export/svg` answers `image/svg+xml`, painted by the SDK export.
+- `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters, and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish, or `audio/pcm` with `x-sample-rate` from HeyGen. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models, counts toward the client's rate limit at one tenth of a model request, and answers `model_busy` or `model_unavailable` when no voice is free, so the studio uses the browser's voice.
 
 `/v1/teach` request:
 
