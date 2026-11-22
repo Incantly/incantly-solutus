@@ -365,7 +365,7 @@ How:
 
 ## 16. Open questions
 
-1. Can Muse Spark read pictures? If yes, circle to ask reads handwriting from a picture of the circle. If no, it works on shapes, typed text, figure cards and recognised ink only.
+1. Can the model read pictures? Yes: the free vision models on OpenRouter read a circled handwritten equation (checked 2026-11-22), so circle to ask sends a picture of the circle when `agent.vision` is on.
 2. Shared boards (many people at once): the diffs and origins are ready for it, but a sync library (Yjs is not on the allowed list) or our own relay through `packages/server` is a later decision.
 
 ## Sources studied

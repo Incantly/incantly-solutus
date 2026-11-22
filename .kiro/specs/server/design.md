@@ -14,7 +14,6 @@ The feature design is `docs/features/server/design.md`; this file says where eac
 | `providers/openrouter.ts` | `openRouterClient(settings)`: chat with tools, streamed |
 | `providers/sse.ts` | The server-sent events reader, tool-call argument joining |
 | `providers/fallback.ts` | Model order, busy skips, `model_busy` |
-| `providers/muse.ts` | Muse Spark client (a stub until the API docs come) |
 | `limits/rate.ts` | Per-client minute counter, one-at-a-time, daily budget |
 | `jobs/figure.ts` | `/v1/figure/draw` over the teacher's `streamFigure` |
 | `jobs/board.ts` | `/v1/board/ask`, circle and talk |

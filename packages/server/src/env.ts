@@ -6,12 +6,11 @@
 import { serverError } from './errors';
 import type { ServerError } from './errors';
 
-export type Provider = 'openrouter' | 'muse';
+export type Provider = 'openrouter';
 
 export interface Secrets {
   /** The OpenRouter key, or undefined when none is set. */
   openrouter(): string | undefined;
-  museKey(): string | undefined;
 }
 
 export interface Settings {
@@ -84,7 +83,7 @@ function originOf(value: string): string | undefined {
 
 export function readSettings(env: EnvLike): { readonly ok: true; readonly value: Settings } | ServerError {
   const providerText = read(env, 'MODEL_PROVIDER') ?? 'openrouter';
-  if (providerText !== 'openrouter' && providerText !== 'muse') return invalid('MODEL_PROVIDER', `"${providerText}" is not a provider; use openrouter or muse.`);
+  if (providerText !== 'openrouter') return invalid('MODEL_PROVIDER', `"${providerText}" is not a provider; the only provider is openrouter.`);
   const textModels = list(env, 'OPENROUTER_TEXT_MODELS', DEFAULT_TEXT_MODELS);
   const visionModels = list(env, 'OPENROUTER_VISION_MODELS', DEFAULT_VISION_MODELS);
   const speechModels = list(env, 'OPENROUTER_SPEECH_MODELS', DEFAULT_SPEECH_MODELS);
@@ -107,8 +106,7 @@ export function readSettings(env: EnvLike): { readonly ok: true; readonly value:
   if (trust !== undefined && trust !== '0' && trust !== '1') return invalid('TRUST_PROXY', `"${trust}" is not 0 or 1.`);
   const host = read(env, 'HOST') ?? '127.0.0.1';
   const openrouterKey = read(env, 'OPENROUTER_API_KEY');
-  const museKey = read(env, 'MUSE_API_KEY');
-  const secrets: Secrets = { openrouter: () => openrouterKey, museKey: () => museKey };
+  const secrets: Secrets = { openrouter: () => openrouterKey };
   return {
     ok: true,
     value: {
@@ -123,7 +121,7 @@ export function readSettings(env: EnvLike): { readonly ok: true; readonly value:
       ratePerMinute: rate,
       dailyModelCalls: daily,
       trustProxy: trust === '1',
-      keySet: (providerText === 'openrouter' ? openrouterKey : museKey) !== undefined,
+      keySet: openrouterKey !== undefined,
       secrets,
     },
   };

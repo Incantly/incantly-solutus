@@ -13,7 +13,7 @@ inclusion: always
 - **Lint and types:** ESLint with typescript-eslint, `tsc` project references.
 - **UI:** plain TypeScript Web Components (no React), so they drop into any framework.
 - **Rendering:** our own 2D and 3D renderer on WebGL 2 (WebGPU later), with SVG and Canvas 2D fallbacks.
-- **AI:** OpenRouter by default, free models only (`:free` ids), with Muse Spark as a second provider. Called only from `packages/server`, so API keys never reach the browser. The key is `OPENROUTER_API_KEY` in `packages/server/.env` (ignored by git). The models, in the order they are tried, are in `packages/server/.env.example`.
+- **AI:** OpenRouter only, free models only (`:free` ids). Called only from `packages/server`, so API keys never reach the browser. The key is `OPENROUTER_API_KEY` in `packages/server/.env` (ignored by git). The models, in the order they are tried, are in `packages/server/.env.example`.
 
 Core packages (`kernel`, `plot`, `symbolic`, `modes`, `view/src/core`) have no DOM, timers, network or `Date`. They run in Node, a worker and on mobile.
 

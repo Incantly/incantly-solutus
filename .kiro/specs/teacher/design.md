@@ -33,4 +33,4 @@ The feature design is `docs/features/teacher/design.md`; this file says where ea
 ## Changes to other areas
 
 - `docs/features/errors/errors.md`: rows T003 to T006.
-- Core design 10 and 11: OpenRouter is the default provider and Muse Spark the second; the teacher may import the SDK's headless app, `modes` and `board/core`.
+- Core design 10 and 11: OpenRouter is the only provider; the teacher may import the SDK's headless app, `modes` and `board/core`.

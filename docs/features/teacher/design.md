@@ -187,5 +187,4 @@ The recordings are `packages/teacher/test/fixtures/lesson-pendulum.json`, `lesso
 
 ## 12. Open questions
 
-1. Muse Spark's API: the client waits for the documentation the product owner gives (server design 4).
-2. Whether the live teacher may change a learner's own objects without asking (today: only through `show_me` on free values and sliders).
+1. Whether the live teacher may change a learner's own objects without asking (today: only through `show_me` on free values and sliders).

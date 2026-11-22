@@ -50,7 +50,7 @@ interface IncantlyFigureAttrs {
 - Selecting the figure shows its toolbar: edit lines, AI, mode, size, caption, delete.
 - **Edit lines** opens a code panel under the figure. Each line shows its result or its error (the error format in `docs/features/errors/`). Lines apply as the writer types, after 300 ms without a key.
 - The script in the node updates when a batch of edits commits, as one Tiptap transaction, so undo in the editor undoes the edit.
-- **AI:** the writer types a request. The server's Muse Spark model writes lines through `draw` (core design section 10). Lines stream into the figure; when it finishes, the script is committed in one transaction.
+- **AI:** the writer types a request. The server's model (a free OpenRouter model) writes lines through `draw` (core design section 10). Lines stream into the figure; when it finishes, the script is committed in one transaction.
 
 ## 5. Collaboration
 
