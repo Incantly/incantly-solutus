@@ -49,7 +49,7 @@ packages/
   sdk/        createApp, embed API, file format, export
   tiptap/     the Tiptap extension
   teacher/    draw and figure tools, catalogue, streaming
-  server/     model calls (OpenRouter, Muse Spark), keys, headless checks
+  server/     model calls (OpenRouter), keys, headless checks
 apps/
   studio/     the full web app
 docs/

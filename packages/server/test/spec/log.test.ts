@@ -106,7 +106,7 @@ describe('a whole server never logs a key, a token, a header secret or a body (R
     const out = capture();
     let t = 0;
     const log = createLog(out, () => (t += 1));
-    const run = await start({ OPENROUTER_API_KEY: SECRET_KEY, MUSE_API_KEY: `${SECRET_KEY}-muse` }, { log });
+    const run = await start({ OPENROUTER_API_KEY: SECRET_KEY }, { log });
     try {
       const secrets = { authorization: 'Bearer BEARER-SECRET-VALUE', 'x-api-key': 'XAPIKEY-SECRET-VALUE', cookie: 'sid=COOKIE-SECRET-VALUE' };
       await getJson(run.port, '/v1/health', secrets);

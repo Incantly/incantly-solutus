@@ -22,7 +22,7 @@ Area: `docs/features/server/` (`design.md`, `errors.md`), with `docs/features/te
 1. The OpenRouter client SHALL stream chat completions with tools, read the events itself, and give a tool call only with complete arguments.
 2. Models SHALL be tried in order; 429, 5xx, a network error or no first byte in 15 s SHALL pass to the next; a model that gave 429 SHALL be skipped for 60 s; all busy SHALL give `model_busy` with `retryAfterMs`.
 3. A request with a picture SHALL use the vision list.
-4. Muse Spark SHALL sit behind the same `ModelClient`, built from the owner's API documentation; until then it SHALL answer `model_unavailable`.
+4. OpenRouter SHALL be the only provider; any other `MODEL_PROVIDER` SHALL be `config_invalid`.
 5. No test SHALL call the network; tests use `fakeModel`.
 
 ### R4. Headless checks (design 5)

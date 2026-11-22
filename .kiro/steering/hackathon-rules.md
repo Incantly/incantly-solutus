@@ -11,5 +11,5 @@ These rules apply to every task in this repository. Where another rule disagrees
 3. **Public repository and open source licence.** The repository must be public on GitHub before submission and carry an open source licence file that GitHub detects.
 4. **README.** It must explain how to install and run the project, and have a "Pre-existing work" section listing the code that existed before the fresh start (everything on the `legacy/v1` branch).
 5. **No third-party trademarks, copyrighted music or other copyrighted material** without permission. Refer to the app we studied only as "the reference app".
-6. **Only third-party SDKs, APIs and data we are licensed to use.** Libraries come only from `docs/design/libraries.md`; OpenRouter (the default) and Muse Spark are used under our own API keys and their terms.
+6. **Only third-party SDKs, APIs and data we are licensed to use.** Libraries come only from `docs/design/libraries.md`; OpenRouter is used under our own API key and its terms.
 7. **Keep the Kiro usage log.** Every use of a Kiro feature (specs, hooks, steering, MCP, custom agents, property-based tests, powers) gets a dated entry in `.kiro/steering/kiro-usage-log.md`. This log and a "built with Kiro" line in the README are the only places that credit an AI tool (see `AGENTS.md`, Attribution).

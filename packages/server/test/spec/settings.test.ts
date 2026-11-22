@@ -67,8 +67,7 @@ describe('defaults (design 3)', () => {
 
   it('every setting can be changed from the environment', () => {
     const t = settingsOf({
-      MODEL_PROVIDER: 'muse',
-      MUSE_API_KEY: 'm',
+      MODEL_PROVIDER: 'openrouter',
       OPENROUTER_TEXT_MODELS: 'a/b:free,c/d:free',
       OPENROUTER_VISION_MODELS: 'e/f:free',
       OPENROUTER_SPEECH_MODELS: 'g/h:free',
@@ -79,7 +78,7 @@ describe('defaults (design 3)', () => {
       RATE_PER_MINUTE: '5',
       DAILY_MODEL_CALLS: '50',
     });
-    expect(t).toMatchObject({ provider: 'muse', host: '0.0.0.0', port: 9000, ratePerMinute: 5, dailyModelCalls: 50, speechVoice: 'nadine' });
+    expect(t).toMatchObject({ provider: 'openrouter', host: '0.0.0.0', port: 9000, ratePerMinute: 5, dailyModelCalls: 50, speechVoice: 'nadine' });
     expect([...t.textModels]).toEqual(['a/b:free', 'c/d:free']);
     expect([...t.visionModels]).toEqual(['e/f:free']);
     expect([...t.speechModels]).toEqual(['g/h:free']);
@@ -114,8 +113,8 @@ describe('only free models: config_invalid (R1.2, errors.md)', () => {
     expect(readSettings({ OPENROUTER_TEXT_MODELS: ' x/y:free , z/w:free ' }).ok).toBe(true);
   });
 
-  it('a paid id in a list nobody uses (provider muse) is still refused: every setting is checked on start', () => {
-    expect(failure({ MODEL_PROVIDER: 'muse', MUSE_API_KEY: 'k', OPENROUTER_TEXT_MODELS: 'x/y' }).kind).toBe('config_invalid');
+  it('openrouter is the only provider: muse is refused', () => {
+    expect(failure({ MODEL_PROVIDER: 'muse' }).kind).toBe('config_invalid');
   });
 });
 
@@ -156,11 +155,9 @@ describe('keys (R1.3, design 7)', () => {
     expect(s.keySet).toBe(false);
   });
 
-  it('a key makes keySet true; the provider decides which key counts', () => {
+  it('the OpenRouter key makes keySet true; nothing else does', () => {
     expect(settingsOf({ OPENROUTER_API_KEY: SECRET_KEY }).keySet).toBe(true);
-    expect(settingsOf({ MUSE_API_KEY: SECRET_KEY }).keySet).toBe(false);
-    expect(settingsOf({ MODEL_PROVIDER: 'muse', MUSE_API_KEY: SECRET_KEY }).keySet).toBe(true);
-    expect(settingsOf({ MODEL_PROVIDER: 'muse', OPENROUTER_API_KEY: SECRET_KEY }).keySet).toBe(false);
+    expect(settingsOf({}).keySet).toBe(false);
   });
 
   it('a blank key is no key', () => {
@@ -168,7 +165,7 @@ describe('keys (R1.3, design 7)', () => {
   });
 
   it('the settings object holds the key nowhere a log, a JSON dump or a string can reach', () => {
-    const s = settingsOf({ OPENROUTER_API_KEY: SECRET_KEY, MUSE_API_KEY: `${SECRET_KEY}-muse` });
+    const s = settingsOf({ OPENROUTER_API_KEY: SECRET_KEY });
     expect(JSON.stringify(s)).not.toContain('TESTONLY');
     expect(leaves(s).join('\n')).not.toContain('TESTONLY');
     expect(String(s)).not.toContain('TESTONLY');
@@ -180,8 +177,8 @@ describe('keys (R1.3, design 7)', () => {
     expect(s.secrets.openrouter()).toBe(SECRET_KEY);
   });
 
-  it('/v1/health never shows a key, whatever the provider', async () => {
-    for (const env of [{ OPENROUTER_API_KEY: SECRET_KEY }, { MODEL_PROVIDER: 'muse', MUSE_API_KEY: SECRET_KEY }, { OPENROUTER_API_KEY: SECRET_KEY, MUSE_API_KEY: SECRET_KEY }]) {
+  it('/v1/health never shows a key', async () => {
+    for (const env of [{ OPENROUTER_API_KEY: SECRET_KEY }]) {
       const run = await start(env);
       try {
         const r = await getJson(run.port, '/v1/health');
@@ -211,7 +208,7 @@ describe('.env and .env.example (R1.1)', () => {
   it('.env.example lists every setting of design 3', () => {
     const example = readFileSync(`${root}packages/server/.env.example`, 'utf8');
     for (const name of [
-      'MODEL_PROVIDER', 'OPENROUTER_API_KEY', 'OPENROUTER_TEXT_MODELS', 'OPENROUTER_VISION_MODELS', 'OPENROUTER_SPEECH_MODELS', 'OPENROUTER_SPEECH_VOICE', 'MUSE_API_KEY',
+      'MODEL_PROVIDER', 'OPENROUTER_API_KEY', 'OPENROUTER_TEXT_MODELS', 'OPENROUTER_VISION_MODELS', 'OPENROUTER_SPEECH_MODELS', 'OPENROUTER_SPEECH_VOICE',
       'HOST', 'PORT', 'ALLOWED_ORIGINS', 'RATE_PER_MINUTE', 'DAILY_MODEL_CALLS',
     ]) {
       expect(example, name).toMatch(new RegExp(`^#?\\s*${name}=`, 'm'));
@@ -221,7 +218,6 @@ describe('.env and .env.example (R1.1)', () => {
   it('.env.example holds no real key: key settings are empty', () => {
     const example = readFileSync(`${root}packages/server/.env.example`, 'utf8');
     expect(example).toMatch(/^OPENROUTER_API_KEY=$/m);
-    expect(example).toMatch(/^MUSE_API_KEY=$/m);
     expect(example).not.toMatch(/sk-or-|sk-[A-Za-z0-9]{20,}/);
   });
 

@@ -34,8 +34,6 @@ describe('GET /v1/health (design 3, R2.4)', () => {
   it('lists the provider', async () => {
     const run = await up();
     expect(JSON.stringify((await getJson(run.port, '/v1/health')).json)).toContain('openrouter');
-    const muse = await up({ MODEL_PROVIDER: 'muse' });
-    expect(JSON.stringify((await getJson(muse.port, '/v1/health')).json)).toContain('muse');
   });
 
   it('lists the model ids: text, vision and speech', async () => {
@@ -58,8 +56,8 @@ describe('GET /v1/health (design 3, R2.4)', () => {
     expect(diffs.some(([, v]) => v === true)).toBe(true);
   });
 
-  it('never shows a key: not in the body, not in a header, not with a key in either provider slot', async () => {
-    const run = await up({ OPENROUTER_API_KEY: SECRET_KEY, MUSE_API_KEY: SECRET_KEY });
+  it('never shows a key: not in the body, not in a header', async () => {
+    const run = await up({ OPENROUTER_API_KEY: SECRET_KEY });
     const r = await getJson(run.port, '/v1/health');
     expect(r.text).not.toContain('TESTONLY');
     expect(JSON.stringify(r.headers)).not.toContain('TESTONLY');

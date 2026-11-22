@@ -22,7 +22,7 @@ The first two endpoints follow the contracts the clients already speak. The serv
 packages/server/src/
   env.ts         read and check settings from process.env (loaded from .env by Node)
   http/          node:http server, routes, body limits, CORS, NDJSON writer
-  providers/     ModelClient for OpenRouter and Muse Spark, SSE reader, fallback across models
+  providers/     ModelClient for OpenRouter, SSE reader, fallback across models
   limits/        rate limits per client, daily budget, concurrency
   jobs/          one file per endpoint: builds the teacher turn and its target, maps events to the stream
   log.ts         structured log lines with keys and bodies removed
@@ -40,13 +40,12 @@ All from `packages/server/.env` (ignored by git); `.env.example` lists them.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `MODEL_PROVIDER` | `openrouter` | `openrouter` or `muse` |
+| `MODEL_PROVIDER` | `openrouter` | Only `openrouter`; any other value is `config_invalid` |
 | `OPENROUTER_API_KEY` | none | Required for `openrouter` |
 | `OPENROUTER_TEXT_MODELS` | the list in `.env.example` | Free model ids, tried in order |
 | `OPENROUTER_VISION_MODELS` | the list in `.env.example` | Free model ids for requests with a picture |
 | `OPENROUTER_SPEECH_MODELS` | `fish-audio/s2.1-pro-free:free,heygen/heygen-voice-1-turbo:free` | Free voice models for `/v1/speech`, tried in order |
 | `OPENROUTER_SPEECH_VOICE` | `bram` | The voice for models that need one named (HeyGen) |
-| `MUSE_API_KEY` | none | Required for `muse` |
 | `HOST` | `127.0.0.1` | Bind address |
 | `PORT` | `8787` | Port |
 | `ALLOWED_ORIGINS` | `http://127.0.0.1:5173,http://localhost:5173` | Browser origins that may call the server |
@@ -73,7 +72,7 @@ type ChatEvent =
 
 **Fallback.** The models are tried in order. A model passes to the next on HTTP 429, 5xx, a network error, or no first byte within 15 s. The first byte is the first chat event with content (text, a tool call, `done` or an error); a keep-alive comment or a chunk that holds only the role does not count. A model that answers a request that carries tools with text only is treated as a text reply. A model that gave 429 is skipped for 60 s. When all are busy, the answer is `model_busy` with `retryAfterMs`. A model never changes in the middle of a reply that has already streamed text or a tool call.
 
-**Muse Spark.** The second provider, behind the same `ModelClient`. It follows the Muse Spark API documentation the product owner gives; until then the client is a stub that answers `model_unavailable`.
+**One provider.** OpenRouter is the only provider (product owner, 2026-11-22). Muse Spark is not used.
 
 **Fake.** `fakeModel(script)` replays recorded replies. Every test and bench uses it. No test calls the network.
 
@@ -169,5 +168,4 @@ The benches use the fake model, so they measure our code only.
 
 ## 10. Open questions
 
-1. Muse Spark's API documentation, for its client.
-2. Where the server runs for the demo: the developer's machine, or the Coolify VPS. The design holds for both; the VPS needs `ALLOWED_ORIGINS`, `HOST=0.0.0.0` behind its proxy, and `TRUST_PROXY=1`.
+1. Where the server runs for the demo: the developer's machine, or the Coolify VPS. The design holds for both; the VPS needs `ALLOWED_ORIGINS`, `HOST=0.0.0.0` behind its proxy, and `TRUST_PROXY=1`.

@@ -6,4 +6,4 @@ Built together with the teacher spec (`.kiro/specs/teacher/`), in the same round
 - [x] 2. Round 2: the OpenRouter client, the events reader and fallback; `/v1/figure/draw` over the teacher's `streamFigure`; the studio proxy and Tiptap on the real server (R2.1, R3, R4.1, R7.1, R7.2)
 - [x] 3. Round 3: `/v1/board/ask` for circle and talk, with pictures on the vision list; the studio board switches from the demo agent to the server when it answers (R2.2, R3.3, R4.2, R7.2)
 - [x] 4. Round 4: `/v1/teach`, `/v1/speech` with the free voices, and the studio's voice lesson (listening in the browser, the teacher's voice from the server, the browser's voice as fallback, barge-in) (R2.3, R7.3 to R7.5)
-- [ ] 5. Round 5: `/v1/export/svg`; benches against design 9; `smoke:models`; the Muse Spark client if its API docs are in (R2.4, R3.4, R8)
+- [x] 5. Round 5 (shrunk by the product owner): Muse Spark removed, OpenRouter the only provider (R3.4); a live run on the real free models, with times (`handoff/teacher/live-run.md`); screenshots. `/v1/export/svg` dropped (the SDK exports SVG in the browser); benches were run in rounds 1 to 4 (R8)
