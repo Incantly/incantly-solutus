@@ -40,11 +40,11 @@ Server:
 
 ## Round 2: OpenRouter and prompt to figure
 
-1. `providers/sse.ts`: read `data:` lines, `[DONE]`, comment lines; join `tool_calls[i].function.arguments` pieces by index; emit a tool call when its arguments parse as JSON or the choice ends.
+1. `providers/sse.ts`: read `data:` lines, `[DONE]`, comment lines; join `tool_calls[i].function.arguments` pieces by index; emit a tool call when its arguments parse as JSON or the choice ends. A reply is whole at `[DONE]` or at a choice's `finish_reason`; a stream that ends with neither is `stream_cut` (review r2, TR-13).
 2. `providers/openrouter.ts`: `POST https://openrouter.ai/api/v1/chat/completions`, `stream: true`, OpenAI-style `tools`, a picture as an `image_url` data URL; headers `HTTP-Referer` and `X-Title: Incantly`.
 3. `providers/fallback.ts`: order, 429/5xx/network/15 s first byte pass on; 60 s skip after 429; `model_busy` with `retryAfterMs`; never switch after output started. The job's signal is `AbortSignal.any([client close, AbortSignal.timeout(60_000)])`, so the turn limit holds while a model sends nothing (TR-6).
 4. Teacher `stream/split.ts` and `stream/apply.ts` `streamFigure` (design 7).
-5. `jobs/figure.ts`: Tiptap's `AiRequest` in, `lines`/`done`/`error` out; every line checked on a headless copy (server design 5).
+5. `jobs/figure.ts`: Tiptap's `AiRequest` in, `lines`/`done`/`error` out; every line checked on a headless copy (server design 5). Once the checks pass the answer is a `200` stream and every later error is its last event; `done` carries the notices; a request a newer one replaced ends with `superseded` (review r2, TR-14 to TR-16). The clients read the `kind` and `message` of an HTTP error body (TR-17). The plan call is skipped for a figure of fewer than 3 objects.
 6. Studio: Vite proxy `/v1` to `127.0.0.1:8787`; probe `/v1/health` at start; Tiptap demo and AI panel use `httpTransport('')` (same origin) when the server answers.
 7. Recorded OpenRouter streams (one text reply, one with two tool calls split in pieces, a 429) in `packages/server/test/fixtures/`, captured once by hand with the key and checked in with no key in them.
 

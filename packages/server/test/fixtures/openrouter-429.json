@@ -1,0 +1,18 @@
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "20"
+  },
+  "body": {
+    "error": {
+      "message": "Provider returned error",
+      "code": 429,
+      "metadata": {
+        "raw": "baidu/ernie-5.5-flash-preview:free is temporarily rate-limited upstream. Please retry shortly.",
+        "provider_name": "Baidu"
+      }
+    },
+    "user_id": "user_fixture"
+  }
+}

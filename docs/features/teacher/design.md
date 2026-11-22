@@ -121,13 +121,14 @@ Every other move is refused and reported (`state-refusal-reported`).
 
 Tiptap's AI and the board's `figure` action use this path. It follows core design 10, "Non-live generation".
 
-1. **Plan call.** The model gets the request, the mode, the catalogue and the current script. It answers with a short plan: the objects to make, in order, with no lines. Skipped for an edit of fewer than 3 lines and for circle to ask with a choice that names the result (`graph`, `solve`, `steps`).
+1. **Plan call.** The model gets the request, the mode, the catalogue and the current script. It answers with a short plan: the objects to make, in order, with no lines. Skipped for an edit of a figure with fewer than 3 objects and for circle to ask with a choice that names the result (`graph`, `solve`, `steps`).
 2. **Script call.** The model writes lines only, one a line. The splitter cuts the stream at each newline, drops blank lines, comments the model wraps in code fences and leading numbers, and applies each line the moment it ends. Each good line goes out at once as a `lines` event.
 3. **Repair call.** Failed lines are kept with their errors. After the stream ends, one repair call gets the script so far and the failures, and writes replacement lines, applied the same way. Lines still failing are reported and left out.
 
 - The first line can show within about 1 s of the model's first token: a line applies in under 1 ms, and the splitter waits only for the newline.
 - The script grows only by lines that passed, so what the client commits is always a script that loads.
-- Lines are capped at the target's script limit; past it the stream stops with `limit`.
+- Lines are capped at a script limit the caller passes as an option (default: the SDK's script limit); past it the stream stops with `limit`.
+- The final `done` carries the notices (`retry_spent` for each line left out, `stream_cut` for a cut answer); the server sends them on to the client.
 
 ## 8. Speech
 

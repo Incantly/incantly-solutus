@@ -1,7 +1,7 @@
 /**
  * The job of one request (docs/state-machines.md SV1): one field over `SERVER_JOB_MACHINE`. It owns the response, so
  * exactly one answer ends each request, nothing is written after the job is final, and the head of an NDJSON answer is
- * written with its first event (an error before that is still an HTTP error).
+ * written with its first event, or by `open()` on a model route, once its checks pass (an error after that is the last event).
  */
 import type { ServerResponse } from 'node:http';
 import { StateMachine } from '@incantly/kernel';
@@ -59,6 +59,17 @@ export class Job {
   refuse(error: ServerError): void {
     if (!this.machine.can('refuse') || !this.machine.send('refuse')) return;
     this.writeError(error);
+  }
+
+  /**
+   * A model route: the checks passed, so the answer is a stream (design 6). `checked` and `firstEvent` follow at once and
+   * the head goes out before any event, so every later error, from the model or the deadline, is the stream's last event.
+   */
+  open(): boolean {
+    if (!this.checked()) return false;
+    if (!this.machine.send('firstEvent')) return false;
+    openNdjson(this.ctx.res, this.ctx.headers);
+    return true;
   }
 
   /** The answer is one JSON body. */

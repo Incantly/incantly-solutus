@@ -59,3 +59,56 @@ Checked by hand (scratch scripts, no network): prompts of the four jobs are 2,90
 - The 413 path and the preflight were only tried by hand for preflight; the daily and minute limits were never run.
 - `tasks.md` of both specs is not ticked (as asked).
 - A watch point for the tester: the built bundle is about 3.6 MB because `@incantly/sdk`'s index pulls in its screen code; the server uses only the headless app. Splitting that is a later change.
+
+---
+
+# Round 2: OpenRouter and prompt to figure
+
+Branch `feat/teacher-r2`, cut from `integration` after round 1 merged. Items 1 to 7 of `handoff/teacher/plan.md` Round 2. No tests were written (testers do that); the builder ran scratch tests (deleted) over the fixtures, the fallback, `streamFigure` and the route with a fake model and a fake `fetch`. No network was reached and `packages/server/.env` was never read. `npm run lint`, `npm run typecheck` and `npx vitest run` pass.
+
+## What was built
+
+| Item | Where |
+|---|---|
+| State machines first: `TE3` figure stream, `SV2` model call through the fallback | `docs/state-machines.md` (two commits before the code) |
+| 1. SSE reader and chunk joiner | `packages/server/src/providers/sse.ts`: `readSse`, `ChunkJoiner`, `chatEvents` |
+| 2. OpenRouter client | `providers/openrouter.ts`: `openRouterOpener` (one model), `openRouterClient` (with the fallback), `requestBody` |
+| 3. Fallback | `providers/fallback.ts`: `FallbackClient`, `CALL_MACHINE`; the job signal and the daily count in `jobs/model.ts` (`jobSignal`, `meteredClient`) |
+| 4. Splitter and streaming apply | `packages/teacher/src/stream/split.ts` (`LineSplitter`, `cleanLine`, `splitLines`), `stream/apply.ts` (`streamFigure`, `FIGURE_STREAM_MACHINE`), `stream/race.ts` |
+| 5. `POST /v1/figure/draw` | `packages/server/src/jobs/figure.ts`, route in `http/server.ts` |
+| Wiring | `providers/client.ts` `clientFor(settings)`; `main.ts` builds the OpenRouter client when the key is set |
+| 6. Studio | `apps/studio/vite.config.ts` (proxy `/v1` to `127.0.0.1:8787`, dev and preview), `apps/studio/src/server.ts` (`probeServer`), `apps/studio/src/notes.ts` (Tiptap demo) |
+| 7. Fixtures | `packages/server/test/fixtures/`: `openrouter-text.sse`, `openrouter-tool-calls.sse`, `openrouter-429.json`, `openrouter-cut.sse`, `README.md` |
+
+Other changes: `ChatImage` and an optional `images` list on the user `ChatMessage` (`packages/teacher/src/loop/model.ts`, exported), so a picture can reach `image_url`; error helpers in `packages/server/src/errors.ts` (`modelTimeout`, `modelBadOutput`, `toStreamError`, `fromStreamError`); exports in both `index.ts` files. I removed `/v1/figure/draw` from the "not there yet" list in `packages/server/test/spec/http.test.ts` (the route now exists; that test would fail). The `it.todo` for the no-key answer is untouched.
+
+**The fixtures were written by hand** from OpenRouter's documented chat completions stream format. They are not live captures. A live capture is left for round 5's smoke run.
+
+## Choices where the docs were silent
+
+1. **SSE end.** A stream that ends with `[DONE]` or after a choice with a `finish_reason` is whole (`done`, with the model and usage). Any other end is a `stream_cut` error event. The reason: a reply that finished but lost `[DONE]` should not cut a turn that has tool results to send back. A tool call is given when its joined arguments parse as a JSON object, or at the `finish_reason`, with empty arguments as `{}`.
+2. **Error text.** An HTTP status, a network failure or an error chunk becomes a fixed message (`model_busy` for 429 with `retryAfterMs` from `retry-after`, else 60 s; `model_unavailable` for anything else). The provider's own text is never passed on.
+3. **First byte** is the first `ChatEvent` of a model (text, a tool call, `done` or an error). A role-only first chunk and `: OPENROUTER PROCESSING` comments do not count, so a model that only sends keep-alives for 15 s passes the call on.
+4. **Pass on** happens for 429, 5xx, every other non-2xx status, a network error, no first byte in 15 s, and an error event before any output. Only a 429 (`model_busy`) starts the 60 s skip. When all passes were busy: `model_busy` with the shortest wait; all timeouts: `model_timeout`; any mix: `model_unavailable`. After the first event a model's error is forwarded as the last event, and a stream that ends with no `done` is a `stream_cut`.
+5. **Daily budget** is counted once per `ModelClient.chat` call of a job (`meteredClient`), not once per HTTP attempt of the fallback, so it also holds with a fake client. A fallback that tries three models counts one. `daily_budget` is an error event from the client, so it answers HTTP 429 before the first event.
+6. **Job signal** is `AbortSignal.any([client close, newer request of the same client, AbortSignal.timeout(60000)])`. The newer-request part comes from the limiter's `exclusive` slot (round 1 built it, round 2 is its first user). A superseded request ends with `done`, as a stop does.
+7. **`streamFigure`:**
+   - The plan call is skipped when `plan: 'never'`, when `choice` is given, or (`auto`) when the figure being edited has 1 or 2 objects. "An edit of fewer than 3 lines" has no line count at the target, so I used the object count.
+   - The script and repair calls send no tools (`tools: []`; `tools` is left out of the request).
+   - The splitter drops blank lines, lines that start with a code fence, comment-only lines (`#`) and a leading `1.`, `1)`, `-`, `*` or bullet. A last line with no newline counts when the reply was whole; a cut reply's last partial line is dropped.
+   - Each line is applied alone through `target.run([line])`. A good line goes out at once as `{ lines: [line] }`. The tool guard is not used (the stream owns its target).
+   - A failed line is kept with its error. After the script reply ends, one repair call gets the lines that passed and the failures (kernel errors in compact form). A replacement counts when a line with the same left side (`lineKey`) passes. Failures that stay are left out and reported as one `retry_spent` (T005) notice each in the final `done`.
+   - A cut script call ends with `stream_cut` (T006) and no repair. A cut or failed repair call leaves the failures out and ends with `done`.
+   - No line passed at all gives an `error` event of kind `model_bad_output` (errors.md), also when the model wrote nothing.
+   - The script limit is `scriptChars` (default 64 KB, the server passes 64 KB less the request's script); past it the stream ends with `turn_limit`.
+8. **`/v1/figure/draw`:** `request` 1 to 4,000 characters; `mode` a known mode; `script` up to 64 KB; `figure` an object, `null` or missing (it is not used: the summary comes from the headless copy); `before` and `after` are cut to their last and first 500 characters and go to the model as two `<material>` blocks. A missing key is a 503 before streaming. The slot (one model request at a time, `RATE_PER_MINUTE`) is taken after the checks pass. Errors before the first event are HTTP errors (`model_busy` is 503 with `retry-after`); `turn_limit` becomes `model_timeout`. The `done` event has no `notices` (Tiptap's `AiEvent` has none).
+9. **Studio:** the notes demo opens its editor after `/v1/health` answers, and uses `httpTransport('')` only when the answer says `ready: true` (a key is set). A server with no key leaves the demo as before (`ai_unavailable`). The probe waits at most 1.5 s. Tiptap's `httpTransport` shows only the status for an HTTP error (`http_503`), not the server's message; the rate-limit and busy messages therefore do not reach the writer. Changing that is a Tiptap change and was not part of this round.
+10. **Muse Spark:** `clientFor` gives no client for `MODEL_PROVIDER=muse` (round 5 item 4).
+
+## Left undone
+
+- No tests, benches or live capture (testers; round 5).
+- No screenshot of Tiptap prompt to figure (optional in the brief): it needs a running server with a fake model, and there is no launcher for one yet. Round 5's screenshots cover it.
+- `/v1/board/ask`, `/v1/teach`, `/v1/speech`, `/v1/export/svg`, the board and voice in the studio: rounds 3 to 5.
+- The studio's board still uses the demo agent. The main studio page has no AI panel to switch; only the Tiptap demo page does.
+- `tasks.md` of both specs is not ticked (as asked).
