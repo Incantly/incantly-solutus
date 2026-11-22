@@ -86,6 +86,15 @@ export class RateLimiter {
     return { ok: true };
   }
 
+  /** Whether a model call is left today, without taking it: `daily_budget` when the day's calls are used up. */
+  checkDailyBudget(): { readonly ok: true } | ServerError {
+    const t = this.now();
+    const today = Math.floor(t / DAY);
+    const used = today === this.day ? this.calls : 0;
+    if (used >= this.config.dailyModelCalls) return dailyBudget((today + 1) * DAY - t);
+    return { ok: true };
+  }
+
   /** Model calls taken today (UTC). */
   get callsToday(): number {
     return Math.floor(this.now() / DAY) === this.day ? this.calls : 0;

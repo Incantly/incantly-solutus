@@ -189,8 +189,15 @@ describe('chatEvents: a stream that ends without [DONE] is a stream_cut', () => 
     expect('error' in (out[0] as ChatEvent) ? (out[0] as { error: { kind: string } }).error.kind : '').toBe('stream_cut');
   });
 
-  it('after a finish_reason and usage but with no [DONE] marker (the reply is not known to be whole)', async () => {
+  it('after a finish_reason and usage but with no [DONE] marker the reply is whole (review ruling TR-13): done, with the usage', async () => {
     const out = await events(sseOf([textChunk('a = 1\n'), finishChunk('stop'), usageChunk(3, 2)], 'none'));
+    const last = lastOf(out);
+    expect(last !== undefined && 'done' in last ? last.done : undefined).toMatchObject({ inputTokens: 3, outputTokens: 2 });
+    expect(out.some((e) => 'error' in e)).toBe(false);
+  });
+
+  it('with neither a finish_reason nor [DONE] the stream is cut (review ruling TR-13)', async () => {
+    const out = await events(sseOf([textChunk('a = 1\n'), usageChunk(3, 2)], 'none'));
     const last = lastOf(out);
     expect(last !== undefined && 'error' in last ? last.error.kind : 'done-or-other').toBe('stream_cut');
   });

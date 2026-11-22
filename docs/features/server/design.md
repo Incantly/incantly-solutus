@@ -69,9 +69,9 @@ type ChatEvent =
   | { done: { model: string; inputTokens: number; outputTokens: number } };
 ```
 
-**OpenRouter.** `POST https://openrouter.ai/api/v1/chat/completions` with `stream: true` and the toolset as OpenAI-style `tools`. The reader parses server-sent events itself, joins each tool call's argument pieces, and gives a `toolCall` only when its arguments are complete. A picture goes as an `image_url` part with a data URL.
+**OpenRouter.** `POST https://openrouter.ai/api/v1/chat/completions` with `stream: true` and the toolset as OpenAI-style `tools`. The reader parses server-sent events itself, joins each tool call's argument pieces, and gives a `toolCall` only when its arguments are complete. A picture goes as an `image_url` part with a data URL. A reply is whole when a choice carries a `finish_reason` (the model's own end) or the stream ends with `[DONE]` (the transport's end); either one gives `done`. A stream that ends with neither is `stream_cut`.
 
-**Fallback.** The models are tried in order. A model passes to the next on HTTP 429, 5xx, a network error, no first byte within 15 s, or a reply with tool calls when the model is known not to support them. A model that gave 429 is skipped for 60 s. When all are busy, the answer is `model_busy` with `retryAfterMs`. A model never changes in the middle of a reply that has already streamed text or a tool call.
+**Fallback.** The models are tried in order. A model passes to the next on HTTP 429, 5xx, a network error, or no first byte within 15 s. The first byte is the first chat event with content (text, a tool call, `done` or an error); a keep-alive comment or a chunk that holds only the role does not count. A model that answers a request that carries tools with text only is treated as a text reply. A model that gave 429 is skipped for 60 s. When all are busy, the answer is `model_busy` with `retryAfterMs`. A model never changes in the middle of a reply that has already streamed text or a tool call.
 
 **Muse Spark.** The second provider, behind the same `ModelClient`. It follows the Muse Spark API documentation the product owner gives; until then the client is a stub that answers `model_unavailable`.
 
@@ -92,13 +92,15 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 
 | Endpoint | Events |
 |---|---|
-| `/v1/figure/draw` | `{ "lines": [...] }`, then `{ "done": true }` |
+| `/v1/figure/draw` | `{ "lines": [...] }`, then `{ "done": true, "notices"? }` |
 | `/v1/board/ask` | `{ "actions": [...] }`, then `{ "done": true }` |
 | `/v1/teach` | `{ "say": "..." }`, `{ "lines": [...] }`, `{ "actions": [...] }`, `{ "control": { "op": "pause" \| "resume" \| "seek", "t"? } }`, then `{ "done": true, "notices"? }` |
 | any | `{ "error": { "kind", "message", "hint"?, "detail"? } }`, which ends the stream |
 
 - When the client closes the connection, the server aborts the model call at once.
-- A request that fails before streaming (bad JSON, too large, wrong origin, rate limit) answers with an HTTP status and one JSON error body: `400`, `413`, `403`, `429` with `retry-after`.
+- A request that fails a check answers with an HTTP status and one JSON error body: `400`, `413`, `403`, `429` with `retry-after`, and `503` when no key is set. The checks of a model route are the method, the origin, the size, the JSON, the fields, the rate limit, the daily budget and the key. Once they pass, the answer is `200` NDJSON, and every later error (`model_busy`, `model_timeout`, `model_bad_output`, a failed model, the turn limit) is the stream's last event. A model route never answers a model error with an HTTP status.
+- `done` carries `notices` when the teacher reported any (`retry_spent` for a line left out, `stream_cut` for a cut answer); a client that does not read them still sees `done`.
+- A request that a newer one from the same client replaced ends with `{ "error": { "kind": "superseded" } }`, not `done`, so the client does not take a half figure for a finished one.
 - `/v1/check` answers one JSON body: the per-line results of the kernel, as `draw` gives them.
 - `/v1/export/svg` answers `image/svg+xml`, painted by the SDK export.
 - `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters, and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish, or `audio/pcm` with `x-sample-rate` from HeyGen. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models, counts toward the client's rate limit at one tenth of a model request, and answers `model_busy` or `model_unavailable` when no voice is free, so the studio uses the browser's voice.
@@ -117,8 +119,8 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 |---|---|
 | Request body | 2 MB with a picture, 256 KB without |
 | Picture | PNG or JPEG by magic number, at most 1.5 MB, at most 2,048 px a side |
-| Spoken or typed text | 4,000 characters |
-| Script | the SDK's script limit |
+| Spoken or typed text | 4,000 characters (`413 payload_too_large`) |
+| Script | the SDK's script limit; a caller option of the model job, default that limit (the figure route passes 64 KB less the request's script) |
 | Model requests per client | 20 a minute (`RATE_PER_MINUTE`), one at a time; a newer one aborts the older |
 | Model calls per day | 900 (`DAILY_MODEL_CALLS`) |
 | Whole turn | 60 s |
@@ -133,7 +135,7 @@ The rate limiter and the daily budget are counters, not states. The job of one r
 
 | From | Event | To |
 |---|---|---|
-| `received` | checks pass | `running` |
+| `received` | checks pass | `running` (a model route goes on to `streaming` at once: the head is written with no event) |
 | `received` | a check fails | `refused` |
 | `running` | first event written | `streaming` |
 | `running`, `streaming` | turn done | `done` |

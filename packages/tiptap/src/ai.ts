@@ -51,6 +51,23 @@ export function parseEvent(line: string): AiEvent | undefined {
 const badStream = (): AiEvent => ({ error: { kind: 'bad_stream', message: 'The server sent an answer that is not lines of a figure.' } });
 
 /**
+ * The error of an answer that is not `200`: the server's own `kind` and `message` when the body is the SDK error shape
+ * (`{ ok: false, kind, message }`), else `http_<status>`. Reading the body never throws.
+ */
+export async function failedAnswer(res: Response): Promise<{ readonly kind: string; readonly message: string }> {
+  try {
+    const body: unknown = JSON.parse(await res.text());
+    if (typeof body === 'object' && body !== null) {
+      const { ok, kind, message } = body as { ok?: unknown; kind?: unknown; message?: unknown };
+      if (ok === false && typeof kind === 'string' && kind !== '' && typeof message === 'string' && message !== '') return { kind, message };
+    }
+  } catch {
+    // not JSON, or the body could not be read: the status says it
+  }
+  return { kind: `http_${res.status}`, message: `The server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}.` };
+}
+
+/**
  * The HTTP client: `POST {server}/v1/figure/draw` with the request as JSON; the answer is NDJSON, `{lines}` events then
  * `{done: true}`, or `{error: {kind, message}}`. A network failure throws; the job turns it into `ai_unavailable`.
  */
@@ -64,7 +81,7 @@ export function httpTransport(server: string, fetchImpl: typeof fetch = (input, 
       signal,
     });
     if (!res.ok) {
-      yield { error: { kind: `http_${res.status}`, message: `The server answered ${res.status}${res.statusText ? ` ${res.statusText}` : ''}.` } };
+      yield { error: await failedAnswer(res) };
       return;
     }
     const body = res.body;

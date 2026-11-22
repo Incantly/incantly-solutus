@@ -18,6 +18,7 @@ export type ServerErrorKind =
   | 'model_busy'
   | 'model_timeout'
   | 'model_bad_output'
+  | 'superseded'
   | 'not_found'
   | 'internal';
 
@@ -42,6 +43,8 @@ export const STATUS: Readonly<Record<ServerErrorKind, number>> = {
   model_busy: 503,
   model_timeout: 504,
   model_bad_output: 502,
+  /** Stream only (errors.md): a newer request replaced this one after the stream began; never an HTTP status. */
+  superseded: 409,
   not_found: 404,
   internal: 500,
 };
@@ -77,6 +80,8 @@ export const originBlocked = (): ServerError => serverError('origin_blocked', 'T
 export const modelTimeout = (): ServerError => serverError('model_timeout', 'The AI took too long.', { hint: 'Try again.' });
 
 export const modelBadOutput = (): ServerError => serverError('model_bad_output', 'The AI could not draw this.', { hint: 'Say it in other words.' });
+
+export const superseded = (): ServerError => serverError('superseded', 'A newer request replaced this one.');
 
 /**
  * An error as the teacher's stream carries it (the SDK shape with plain-data `detail`). The server's own error and the

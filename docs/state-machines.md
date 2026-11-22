@@ -2271,19 +2271,19 @@ Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/s
 | `aborted` | the model call aborted; nothing more is written |
 | `failed` | `internal` (500 or a last event) with a fingerprint, or the job's own error |
 
-- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once, with the first event, so an error before the first event is still an HTTP error; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection; a handler that returns without answering is failed through the machine (`ensureEnded` sends `fail`, as `internal`), never answered from the response's own flags, which only the low-level writers (`write*`) read (`incantly/state-no-io-flags`).
+- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once. On a model route it is written as soon as `checked` passes (`firstEvent` follows at once, with no event), so every error after the checks is the stream's last event and only a check answers with an HTTP status; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection; a handler that returns without answering is failed through the machine (`ensureEnded` sends `fail`, as `internal`), never answered from the response's own flags, which only the low-level writers (`write*`) read (`incantly/state-no-io-flags`).
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
 |---|---|---|---|---|
-| `received` | `checked` | method, route, origin, size, JSON, rate and budget pass | `running` | slot taken |
+| `received` | `checked` | method, route, origin, size, JSON, fields, rate, budget and key pass | `running` | slot taken; on a model route `firstEvent` follows at once and the head is written |
 | `received` | `refuse` | a check failed | `refused` | HTTP error body written |
 | `received` | `fail` | an exception while checking | `failed` | `internal` HTTP error body written |
 | `running` | `firstEvent` | an NDJSON answer begins | `streaming` | head and first event written, flushed |
 | `running` | `finish` | a JSON answer is ready | `done` | body written |
 | `streaming` | `finish` | the turn ended | `done` | last event written, response ended |
 | `running`, `streaming` | `close` | the client closed | `aborted` | model call aborted, slot released |
-| `running` | `fail` | an error before any event | `failed` | HTTP error body written |
+| `running` | `fail` | an error before any event (a route that is not a model route) | `failed` | HTTP error body written |
 | `streaming` | `fail` | an error after the first event | `failed` | `{ "error": … }` written as the last event, response ended |
 
 - **Reachable invalid states or transitions:** `finish`, `fail` and `close` in a final state have no row; the writer asks `can` first, so a late event of a closed connection is dropped, not reported. `firstEvent` in `streaming` has no row: the writer asks `can`. `checked` and `refuse` in `running` or later have no row.
@@ -2303,7 +2303,7 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 | `failed` | one error event: `model_busy`, `model_timeout` or `model_unavailable` before output; the model's own error after output |
 | `stopped` | the open request to the model is aborted; nothing more goes out |
 
-- **Invariants:** a model never changes after output reached the caller (the machine has no row from `streaming` back to `trying`); the first event of a model is its first byte, and the 15 s timer is set only in `trying` and cleared by the first event or by the pass; a model that gave 429 is skipped for 60 s from the call that saw it (`skipUntil`, on the injected clock), and a call that finds every model skipped or busy ends as `model_busy` with the shortest wait as `retryAfterMs`; an error event before output passes to the next model, an error event after output is the caller's last event; the model request is aborted when the call ends in any final state; no event goes out after a final state.
+- **Invariants:** a model never changes after output reached the caller (the machine has no row from `streaming` back to `trying`); the first event of a model is its first byte (the first chat event with content: text, a tool call, `done` or an error; a keep-alive comment or a chunk with only the role does not count), and the 15 s timer is set only in `trying` and cleared by the first event or by the pass; a model that gave 429 is skipped for 60 s from the call that saw it (`skipUntil`, on the injected clock), and a call that finds every model skipped or busy ends as `model_busy` with the shortest wait as `retryAfterMs`; an error event before output passes to the next model, an error event after output is the caller's last event; the model request is aborted when the call ends in any final state; no event goes out after a final state.
 - **Transitions:**
 
 | From | Event | Guard | To | Side effects |
@@ -2312,8 +2312,8 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 | `trying` | `output` | the model's first event is text or a tool call | `streaming` | the event goes out |
 | `trying` | `finish` | the model's first event is `done` | `done` | the event goes out |
 | `trying` | `exhaust` | no model is left | `failed` | `model_busy`, `model_timeout` or `model_unavailable` error event |
-| `streaming` | `finish` | the model's `done` event | `done` | the event goes out |
-| `streaming` | `fail` | the model's error event, or the stream ended without `done` | `failed` | the error event goes out (a cut stream is `stream_cut`) |
+| `streaming` | `finish` | the model's `done` event (the stream ended with `[DONE]`, or a choice carried a `finish_reason`) | `done` | the event goes out |
+| `streaming` | `fail` | the model's error event, or the stream ended with neither `done` nor a `finish_reason` | `failed` | the error event goes out (a cut stream is `stream_cut`) |
 | `trying`, `streaming` | `abort` | the caller's signal fired | `stopped` | the model's request aborted |
 
 - **Reachable invalid states or transitions:** `passOn` in `streaming` has no row (the fallback asks `can` first and forwards the error). `output` and `finish` in a final state have no row; the loop returns first.

@@ -7,7 +7,7 @@
 import { MODES, MODE_IDS } from '@incantly/modes';
 import { createHeadlessApp } from '@incantly/sdk';
 import { figureTarget, streamFigure } from '@incantly/teacher';
-import { badRequest, fromStreamError, modelUnavailable } from '../errors';
+import { badRequest, fromStreamError, modelUnavailable, superseded as supersededError, tooLarge } from '../errors';
 import type { Context } from './context';
 import { TURN_MS, jobSignal, meteredClient } from './model';
 
@@ -22,7 +22,7 @@ export async function figureDraw(ctx: Context): Promise<void> {
   const { job, body } = ctx;
   const request = body['request'];
   if (typeof request !== 'string' || request.trim() === '') return job.refuse(badRequest('"request" must be the text of what the figure should show.'));
-  if (request.length > REQUEST_CHARS) return job.refuse(badRequest(`"request" has ${request.length} characters; at most ${REQUEST_CHARS}.`));
+  if (request.length > REQUEST_CHARS) return job.refuse(tooLarge('"request"', REQUEST_CHARS));
   const mode = body['mode'];
   if (typeof mode !== 'string' || !Object.hasOwn(MODES, mode)) return job.refuse(badRequest('"mode" is not a mode of the app.', `The modes are: ${MODE_IDS.join(', ')}.`));
   const script = body['script'] ?? '';
@@ -39,11 +39,14 @@ export async function figureDraw(ctx: Context): Promise<void> {
   }
   const client = ctx.client;
   if (client === undefined) return job.refuse(modelUnavailable());
+  const budget = ctx.limiter.checkDailyBudget();
+  if (!budget.ok) return job.refuse(budget);
   const superseded = new AbortController();
   const slot = ctx.limiter.acquire(ctx.clientId, { exclusive: true, controller: superseded });
   if (!slot.ok) return job.refuse(slot);
   try {
-    if (!job.checked()) return;
+    // the checks passed: from here the answer is a stream and every error is its last event (errors.md)
+    if (!job.open()) return;
     const signal = jobSignal(job.abort.signal, superseded.signal);
     const app = createHeadlessApp({ mode: mode as keyof typeof MODES, ...(script !== '' ? { script } : {}) });
     try {
@@ -57,10 +60,15 @@ export async function figureDraw(ctx: Context): Promise<void> {
         limits: { ms: TURN_MS, scriptChars: Math.max(0, SCRIPT_CHARS - script.length) },
       });
       for await (const ev of events) {
+        if (superseded.signal.aborted) {
+          // a newer request of this client replaced this one: what was applied stays with the client, which is told
+          job.fail(supersededError());
+          break;
+        }
         if ('lines' in ev) {
           job.event({ lines: ev.lines });
         } else if ('done' in ev) {
-          job.event({ done: true });
+          job.event(ev.notices !== undefined && ev.notices.length > 0 ? { done: true, notices: ev.notices } : { done: true });
           job.end();
         } else if ('error' in ev) {
           const error = fromStreamError(ev.error);

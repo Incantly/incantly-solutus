@@ -179,7 +179,8 @@ describe('every line is checked before it streams (R4.1, server design 5)', () =
     expect(r.text).not.toContain('Nope(');
     const events = r.text.split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as AiEvent);
     expect(lineEvents(events)).toEqual(['c = Circle((0, 0), 2)', 'P = PointOn(c)']);
-    expect(events[events.length - 1]).toEqual({ done: true });
+    // review ruling TR-15: the line left out is reported in the `done` event (it was a plain `{ done: true }`)
+    expect(events[events.length - 1]).toMatchObject({ done: true, notices: [{ kind: 'retry_spent', names: ['bad'] }] });
   });
 
   it('the repair call gets the failure and its replacement streams in', async () => {
@@ -237,11 +238,11 @@ describe('errors that end the stream (errors.md)', () => {
     expect(errorEvent(events)?.kind).toBe('model_bad_output');
   });
 
-  it('every model busy: model_busy (503 or a stream event), with retryAfterMs, and the message of errors.md', async () => {
+  it('every model busy: model_busy as a stream event (200 NDJSON, review ruling TR-14), with retryAfterMs, and the message of errors.md', async () => {
     const b = await boot({ env: { OPENROUTER_TEXT_MODELS: 'one/first:free,two/second:free' }, answers: () => status(429, { 'retry-after': '20' }) });
     const r = await ask(b.run.port, { method: 'POST', path: '/v1/figure/draw', body: JSON.stringify(EDIT), headers: { 'content-type': 'application/json' } });
     const body = r.status === 200 ? (JSON.parse(r.text.split('\n').filter((l) => l !== '').pop() ?? '{}') as { error: Record<string, unknown> }).error : (r.json as Record<string, unknown>);
-    expect([200, 503]).toContain(r.status);
+    expect(r.status).toBe(200);
     expect(body['kind']).toBe('model_busy');
     expect(String(body['message'])).toMatch(/^The AI is busy; try again in \d+ s\.$/);
     expect(typeof (body['detail'] as Record<string, unknown> | undefined)?.['retryAfterMs']).toBe('number');
@@ -311,11 +312,12 @@ describe('no key (R1.4, errors.md model_unavailable)', () => {
     expect(b.fake.calls).toHaveLength(0);
   });
 
-  it('Tiptap\'s transport shows it as an error event (the status is all it reports)', async () => {
+  it('Tiptap\'s transport shows it as an error event with the server\'s kind and message (review ruling TR-17; it was http_503)', async () => {
     const b = await boot({ key: false });
     const events = await aiEvents(b, NEW_FIGURE);
     expect(events).toHaveLength(1);
-    expect(errorEvent(events)?.kind).toBe('http_503');
+    expect(errorEvent(events)?.kind).toBe('model_unavailable');
+    expect(errorEvent(events)?.message).toBe('The AI is not set up.');
   });
 
   it('/v1/check and /v1/health keep working with no key', async () => {
