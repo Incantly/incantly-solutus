@@ -42,7 +42,7 @@ Server:
 
 1. `providers/sse.ts`: read `data:` lines, `[DONE]`, comment lines; join `tool_calls[i].function.arguments` pieces by index; emit a tool call when its arguments parse as JSON or the choice ends.
 2. `providers/openrouter.ts`: `POST https://openrouter.ai/api/v1/chat/completions`, `stream: true`, OpenAI-style `tools`, a picture as an `image_url` data URL; headers `HTTP-Referer` and `X-Title: Incantly`.
-3. `providers/fallback.ts`: order, 429/5xx/network/15 s first byte pass on; 60 s skip after 429; `model_busy` with `retryAfterMs`; never switch after output started.
+3. `providers/fallback.ts`: order, 429/5xx/network/15 s first byte pass on; 60 s skip after 429; `model_busy` with `retryAfterMs`; never switch after output started. The job's signal is `AbortSignal.any([client close, AbortSignal.timeout(60_000)])`, so the turn limit holds while a model sends nothing (TR-6).
 4. Teacher `stream/split.ts` and `stream/apply.ts` `streamFigure` (design 7).
 5. `jobs/figure.ts`: Tiptap's `AiRequest` in, `lines`/`done`/`error` out; every line checked on a headless copy (server design 5).
 6. Studio: Vite proxy `/v1` to `127.0.0.1:8787`; probe `/v1/health` at start; Tiptap demo and AI panel use `httpTransport('')` (same origin) when the server answers.
