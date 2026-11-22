@@ -624,11 +624,16 @@ export class FigureCard {
 /** Nothing is over a card: the one empty list every such frame is given. */
 const NO_OVER_CARDS: readonly OverCardItem[] = Object.freeze([]);
 
-/** The draw items of the shapes above the shown `cards`, each with the card outlines it shows inside, at `scale` device pixels per page unit. */
+/**
+ * The draw items of the shapes above the shown `cards`, each with the card outlines it shows inside, at `scale` device pixels
+ * per page unit. The shapes a gesture holds are left out: the overlay draws them over everything while they move (BR-82).
+ */
 export function overCardItems(core: BoardCore, cards: readonly ShapeRecord[], scale: number): readonly OverCardItem[] {
   if (cards.length === 0) return NO_OVER_CARDS;
   const out: OverCardItem[] = [];
+  const held = core.lift.held;
   for (const over of shapesOverCards(core, cards)) {
+    if (held.has(over.shape.id)) continue;
     const item = core.drawList.itemOf(over.shape, scale);
     if (item !== undefined) out.push({ item, clip: over.clip });
   }
@@ -761,8 +766,10 @@ export class FigureLayer {
     if (this.#marks.disposed) return false;
     if (this.#core.pages.current !== this.#page) this.#changePage();
     if (this.#marks.stale) this.#reconcile();
-    this.#covering.length = 0;
+    // written by index and cut to its count each frame (`no-length-reset`, BR-77)
+    let covered = 0;
     if (this.cards.size === 0) {
+      this.#covering.length = 0;
       this.#bar.sync(undefined, camera, width, height);
       return false;
     }
@@ -783,9 +790,10 @@ export class FigureLayer {
       card.slot.style.display = isNear || inView ? '' : 'none';
       if (isNear || inView) {
         this.#place(card, camera, x, y);
-        this.#covering.push(s);
+        this.#covering[covered++] = s;
       }
     }
+    this.#covering.length = covered;
     this.#publish(visible, nearSet);
     this.#bar.sync(this.#activeCard(), camera, width, height);
     this.#askForPictures(nearSet);
@@ -901,6 +909,7 @@ export class FigureLayer {
   }
 
   #mountedCount(except?: FigureCard): number {
+    if (this.cards.size === 0) return 0;
     let n = 0;
     for (const card of this.cards.values()) if (card !== except && card.wantsMount) n++;
     return n;

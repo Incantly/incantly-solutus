@@ -15,6 +15,7 @@ import { TILE_CAP_BYTES, TILE_CAP_BYTES_LOW, TileCache } from '../core/draw';
 import type { BoardPainter, DrawItem, LiveStrokeView, OverlayItems, SelectionView, Tile, TileContent } from '../core/draw';
 import { boardError, DONE, refusedMove } from '../core/errors';
 import type { BoardError, BoardResult } from '../core/errors';
+import type { Bounds } from '../core/types';
 import { GlRaster } from './painter-gl';
 import { CanvasRaster, drawItems2D, fillTriangles, rgbCss } from './painter-2d';
 import { LiveGl } from './painter-live';
@@ -108,8 +109,17 @@ export class WebPainter implements BoardPainter {
   #raster: TileRaster | null = null;
   /** Where image shapes get their pictures; handed to every raster the painter opens. */
   #images: ImageLookup = () => null;
+  /**
+   * The tiles shown and the items over them this frame. Each list keeps a count and is written by index: emptying an array with
+   * `length = 0` drops its storage, and the frame's first push would make a new one (BR-77, `no-length-reset`).
+   */
   readonly #shown: Tile[] = [];
+  #shownCount = 0;
   readonly #extra: DrawItem[] = [];
+  #extraCount = 0;
+  /** Items drawn only inside page boxes, one group a call, kept in a pool so a frame makes nothing for them. */
+  readonly #clipped: { items: DrawItem[]; clip: Bounds[] }[] = [];
+  #clippedCount = 0;
   #tail: LiveStrokeView | null = null;
   /** The camera and pixel ratio of the frame being built. */
   readonly frame = { x: 0, y: 0, zoom: 1, dpr: 1 };
@@ -331,8 +341,9 @@ export class WebPainter implements BoardPainter {
       this.size.devH = Math.max(1, Math.round(this.size.h * dpr));
       this.#applySize();
     }
-    this.#shown.length = 0;
-    this.#extra.length = 0;
+    this.#shownCount = 0;
+    this.#extraCount = 0;
+    this.#clippedCount = 0;
     this.#tail = null;
     return DONE;
   }
@@ -359,19 +370,30 @@ export class WebPainter implements BoardPainter {
       }
       if (!drawn.ok) return drawn;
       if (raster instanceof GlRaster && raster.pending === tile && this.#backend.state === 'gl') {
-        if (tile.state === 'fresh' || tile.state === 'stale') this.#shown.push(tile);
+        if (tile.state === 'fresh' || tile.state === 'stale') this.#shown[this.#shownCount++] = tile;
         return DONE;
       }
       this.tiles.markDrawn(tile);
       this.#counters.tilesDrawn++;
     }
-    if (tile.state === 'fresh' || tile.state === 'stale') this.#shown.push(tile);
+    if (tile.state === 'fresh' || tile.state === 'stale') this.#shown[this.#shownCount++] = tile;
     return DONE;
   }
 
-  drawItems(items: readonly DrawItem[]): BoardResult<undefined> {
+  drawItems(items: readonly DrawItem[], clip?: readonly Bounds[]): BoardResult<undefined> {
     if (this.#frameState.state !== 'drawing') return this.#outside('drawItems');
-    this.#extra.push(...items);
+    if (clip === undefined) {
+      for (let i = 0; i < items.length; i++) this.#extra[this.#extraCount++] = items[i] as DrawItem;
+      return DONE;
+    }
+    if (items.length === 0 || clip.length === 0) return DONE;
+    let group = this.#clipped[this.#clippedCount];
+    if (group === undefined) this.#clipped.push((group = { items: [], clip: [] }));
+    this.#clippedCount++;
+    for (let i = 0; i < items.length; i++) group.items[i] = items[i] as DrawItem;
+    for (let i = 0; i < clip.length; i++) group.clip[i] = clip[i] as Bounds;
+    group.items.length = items.length;
+    group.clip.length = clip.length;
     return DONE;
   }
 
@@ -534,8 +556,22 @@ export class WebPainter implements BoardPainter {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.#overlayCanvas.width, this.#overlayCanvas.height);
     const k = zoom * dpr;
-    // items that are in no tile
-    drawItems2D(ctx, this.#extra, k, camX, camY, this.#images);
+    // items that are in no tile, and those shown only over some tiles
+    for (let g = 0; g < this.#clippedCount; g++) {
+      const group = this.#clipped[g] as { items: DrawItem[]; clip: Bounds[] };
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath();
+      for (const b of group.clip) ctx.rect((b.minX - camX) * k, (b.minY - camY) * k, (b.maxX - b.minX) * k, (b.maxY - b.minY) * k);
+      ctx.clip();
+      drawItems2D(ctx, group.items, k, camX, camY, this.#images);
+      ctx.restore();
+    }
+    // an empty list is not handed over: its three numbers would be boxed for the call every frame (BR-77)
+    if (this.#extraCount > 0) {
+      if (this.#extra.length !== this.#extraCount) this.#extra.length = this.#extraCount;
+      drawItems2D(ctx, this.#extra, k, camX, camY, this.#images);
+    }
     ctx.globalAlpha = 1;
     // the part of the live stroke that is not final yet, and its predicted tail
     const tail = this.#tail;
@@ -710,8 +746,9 @@ export class WebPainter implements BoardPainter {
     if (!this.#frameState.send('end')) return boardError('bad_argument', 'There is no frame to end.', { detail: { field: 'endFrame' } });
     const raster = this.#raster;
     if (raster === null || this.#backend.state === 'lost') return DONE;
+    if (this.#shown.length !== this.#shownCount) this.#shown.length = this.#shownCount;
+    if (this.#unchanged()) return DONE;
     const { x, y, zoom, dpr } = this.frame;
-    if (this.#unchanged(x, y, zoom, dpr)) return DONE;
     let composed = raster.compose(this.#shown, x, y, zoom, dpr);
     if (!composed.ok && this.#backend.state === 'gl') {
       this.#fallBack(composed);
@@ -724,7 +761,9 @@ export class WebPainter implements BoardPainter {
   }
 
   /** True when the tile canvas already shows what composing the shown tiles would draw. */
-  #unchanged(x: number, y: number, zoom: number, dpr: number): boolean {
+  #unchanged(): boolean {
+    // the camera is read here, not passed in: four numbers as arguments would be boxed every frame (BR-77)
+    const { x, y, zoom, dpr } = this.frame;
     const s = this.#screen;
     const shown = this.#shown;
     const was = this.#composed;
@@ -742,8 +781,9 @@ export class WebPainter implements BoardPainter {
     s.devW = this.size.devW;
     s.devH = this.size.devH;
     s.drawn = this.#counters.tilesDrawn;
-    this.#composed.length = 0;
-    for (const tile of this.#shown) this.#composed.push(tile);
+    const shown = this.#shown;
+    for (let i = 0; i < shown.length; i++) this.#composed[i] = shown[i] as Tile;
+    this.#composed.length = shown.length;
   }
 
   #outside(call: string): BoardResult<never> {

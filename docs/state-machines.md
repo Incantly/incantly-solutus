@@ -2148,6 +2148,21 @@ Written before the code of round 5 (`core/agent.ts`, `core/agent-service.ts`, `c
 
 - **Reachable invalid states or transitions:** `begin` in `busy` has no row (a newer request that replaces the running one keeps the panel `busy`: the panel asks first and does not send `begin`); `close` in `closed` has no row; `open` in `open` and `busy` has no row; `end` in `open` has no row.
 
+### B36. Lift (fix round, branch `fix/board-drag-gc`, BR-82)
+
+- **Where:** `core/lift.ts` `Lift`, `LIFT_MACHINE`; `BoardCore.lift`. Written by `Gesture` (B25) for origin `user`; read by the web view's tiles (`DrawList.plan(…, leave)`, `diffRegions(…, leave)`) and its overlay.
+- **States:** `resting` (no shape is held; some may still be settling); `held` (a person's gesture is open and holds the shapes it wrote).
+- **Invariants:** the held ids and the settling ids are two sets of data of the machine, not flags: a shape is in at most one of them; a held shape is in no tile and is drawn on the overlay every frame; a shape is held from the write after the first that changed it, so the tiles that showed it are drawn again once, without it; a removed shape is let go; only shape records are held, at most `LIFT_MAX` (400), the rest stay in the tiles; `release` moves every held id to settling and tells the listeners which ones (the view draws their tiles again); a settling shape is drawn over the visible tiles not drawn yet and is let go (`settled`) when none of them meets it; `clear` (a page change) forgets both sets; the model's gestures hold nothing.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `resting` | `hold` | a person's gesture wrote a shape | `held` | its id is held (it leaves settling) |
+| `held` | `hold` | | `held` | more ids held |
+| `held` | `release` | the gesture was committed or cancelled | `resting` | the held ids settle; listeners told |
+
+- **Reachable invalid states or transitions:** `release` in `resting` has no row (a gesture that wrote nothing ends with nothing held; `release` asks first). `clear` sends `release` when it can and empties both sets.
+
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
 Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same. `GRID_MACHINE` and `ERROR_MACHINE` first had one row copied into every state; `incantly/state-table-refuses` found them (board review BR-1) and their rows now list only the moves that may happen.

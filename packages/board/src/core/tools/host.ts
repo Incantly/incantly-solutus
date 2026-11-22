@@ -34,6 +34,8 @@ export class ToolHost {
   readonly #list: ToolList;
   readonly #machine = new StateMachine(TOOLS_MACHINE, 'chosen', refusedMove('tool host', () => this.#ctx.core.store.sink));
   readonly #instances = new Map<string, ToolHandlers>();
+  /** The same tools in a list, so a frame's `tick` walks them without an iterator. */
+  readonly #made: ToolHandlers[] = [];
   readonly #listeners: ((id: string) => void)[] = [];
   /** Actions the shell carries out (zoom, pages, a figure card): the key map names them, the shell registers them. */
   readonly #actions = new Map<string, () => boolean>();
@@ -222,7 +224,7 @@ export class ToolHost {
   /** Called every frame with the input clock. True while a tool still wants frames. */
   tick(now: number): boolean {
     let more = false;
-    for (const tool of this.#instances.values()) if (tool.tick?.(now) === true) more = true;
+    for (let i = 0; i < this.#made.length; i++) if ((this.#made[i] as ToolHandlers).tick?.(now) === true) more = true;
     return more;
   }
 
@@ -233,6 +235,7 @@ export class ToolHost {
     if (def === undefined) return undefined;
     const made = def.create(this.#ctx);
     this.#instances.set(id, made);
+    this.#made.push(made);
     return made;
   }
 

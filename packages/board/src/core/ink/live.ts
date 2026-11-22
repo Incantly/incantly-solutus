@@ -45,16 +45,19 @@ function lastIndexOn(store: Store, page: string): string | null {
 }
 
 const PREDICTED_MAX = 32;
+/** The points the live stroke's arrays hold before they grow. */
+const LIVE_POINTS = 2048;
 
 /** The numbers the painter reads, written in place each frame so a frame makes no garbage (BR-16). */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
 
 export class LiveStroke {
   /** The triangles of the stroke so far, rebuilt by `rebuild`; the painter reads them. */
-  readonly outliner = new Outliner();
+  /** Sized for a ten-second stroke (1,200 samples at 120 a second, with room), so a long stroke grows no array (BR-77). */
+  readonly outliner = new Outliner(LIVE_POINTS);
   readonly #report: ErrorSink | undefined;
   readonly #machine = new StateMachine(LIVE_MACHINE, 'idle', refusedMove('live stroke', () => this.#report));
-  readonly #samplers: Readonly<Record<Stride, InkSampler>> = { 3: new InkSampler(3), 5: new InkSampler(5) };
+  readonly #samplers: Readonly<Record<Stride, InkSampler>> = { 3: new InkSampler(3, LIVE_POINTS), 5: new InkSampler(5, LIVE_POINTS) };
   readonly #predicted = new Float32Array(PREDICTED_MAX * 2);
   #predictedCount = 0;
   #sampler: InkSampler = this.#samplers[3];

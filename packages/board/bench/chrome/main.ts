@@ -40,4 +40,13 @@ async function open(count: number): Promise<OpenResult> {
   return result;
 }
 
-(window as unknown as { boardOpen: typeof open }).boardOpen = open;
+/** An empty board that stays, for the garbage row's bare page (`--gcpage bare`): the board without the studio round it. */
+function mount(): string {
+  const host = document.getElementById('host') as HTMLElement;
+  host.replaceChildren();
+  const made = createBoard({ container: host });
+  return made.ok ? 'ok' : `${made.kind}: ${made.message}`;
+}
+
+(window as unknown as { boardOpen: typeof open; boardMount: typeof mount }).boardOpen = open;
+(window as unknown as { boardMount: typeof mount }).boardMount = mount;

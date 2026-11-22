@@ -1,6 +1,7 @@
 /**
  * Layer 3 on the web (design 3, 6.1, 6.5): Pointer Events become `InputSample`s. Every coalesced sample of a move is
- * given, with pressure, tilt, twist and buttons; the predicted samples follow, marked `predicted`. One sample object
+ * given, with pressure, tilt, twist and buttons; two guessed samples follow, marked `predicted`, from the core's
+ * `Predictor` (not the browser's `getPredictedEvents()`, whose new event objects are garbage, BR-77). One sample object
  * is reused for every event, so input makes no garbage. The palm rule and the pen that only reports 0.5 are the core's
  * `PointerGate` and `PressureProbe`. Wheel, trackpad pinch and two-finger gestures go to the sink as `WheelInput` and
  * `GestureInput`; keys as `KeyInput`.
@@ -8,11 +9,15 @@
 import { MOD_ALT, MOD_MOD, MOD_SHIFT, PointerGate, PressureProbe } from '../core/input';
 import type { Device, GestureInput, InputSample, InputSink, KeyInput, Phase, TouchDraws, WheelInput } from '../core/input';
 import type { ErrorSink } from '../core/errors';
+import { Predictor } from '../core/ink/predict';
+
+/** What `getCoalescedEvents` gives where the browser has none: one empty list. */
+const NO_EVENTS: readonly PointerEvent[] = Object.freeze([]);
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 /** The one sample every event reuses. `phase` is read through a getter so the field that holds it is not called a state. */
-class ReusedSample implements InputSample {
+export class ReusedSample implements InputSample {
   pointer = 0;
   device: Device = 'mouse';
   x = 0;
@@ -60,6 +65,9 @@ export class WebInput {
   readonly #probe: PressureProbe;
   /** The one sample object every event reuses. */
   readonly #sample = new ReusedSample();
+  /** The guess of where the pen goes next, and the record it writes a guess into. */
+  readonly #predictor = new Predictor();
+  readonly #guess = new Float64Array(3);
   readonly #key: Mutable<KeyInput> = { key: '', down: true, shift: false, alt: false, mod: false, repeat: false };
   readonly #wheel: Mutable<WheelInput> = { x: 0, y: 0, dx: 0, dy: 0, zoom: false, time: 0 };
   readonly #gesture: Mutable<GestureInput> = { x: 0, y: 0, dx: 0, dy: 0, scale: 1, time: 0 };
@@ -154,6 +162,7 @@ export class WebInput {
     }
     if (e.pointerType === 'touch') this.#touches.set(e.pointerId, { x: e.clientX - this.#left, y: e.clientY - this.#top });
     e.preventDefault();
+    this.#predictor.reset();
     this.#route(this.#fill(e, 'down', false), e);
   }
 
@@ -168,22 +177,37 @@ export class WebInput {
         t.y = e.clientY - this.#top;
       }
     }
-    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : NO_EVENTS;
     if (coalesced.length > 0) {
-      for (const c of coalesced) this.#route(this.#fill(c, phase, false), c);
-    } else {
-      this.#route(this.#fill(e, phase, false), e);
-    }
-    if (phase === 'move' && typeof e.getPredictedEvents === 'function') {
-      for (const p of e.getPredictedEvents()) {
-        this.#fill(p, 'move', true);
-        if (this.#gate.state === 'penDown' || this.#gate.state === 'mouseDown' || this.#gate.state === 'touchDown') this.#sink.sample(this.#sample);
+      for (let i = 0; i < coalesced.length; i++) {
+        const c = coalesced[i] as PointerEvent;
+        const s = this.#fill(c, phase, false);
+        if (phase === 'move') this.#predictor.push(s);
+        this.#route(s, c);
       }
+    } else {
+      const s = this.#fill(e, phase, false);
+      if (phase === 'move') this.#predictor.push(s);
+      this.#route(s, e);
+    }
+    // the tail is guessed here from the samples (BR-77): the browser's `getPredictedEvents()` makes new event objects at every move
+    const gate = this.#gate.state;
+    if (phase !== 'move' || (gate !== 'penDown' && gate !== 'mouseDown' && gate !== 'touchDown')) return;
+    const s = this.#sample;
+    const n = this.#predictor.ready;
+    for (let i = 0; i < n; i++) {
+      if (!this.#predictor.guess(i, this.#guess)) break;
+      s.x = this.#guess[0] as number;
+      s.y = this.#guess[1] as number;
+      s.time = this.#guess[2] as number;
+      s.predicted = true;
+      this.#sink.sample(s);
     }
   }
 
   #up(e: PointerEvent, phase: 'up' | 'cancel'): void {
     if (this.#refused.delete(e.pointerId)) return;
+    this.#predictor.reset();
     this.#route(this.#fill(e, phase, false), e);
     this.#touches.delete(e.pointerId);
     try {

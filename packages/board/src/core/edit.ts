@@ -100,13 +100,17 @@ export class Gesture {
     for (const r of diff.added) if (!this.#before.has(r.id)) this.#before.set(r.id, undefined);
     for (const u of diff.updated) if (!this.#before.has(u.before.id)) this.#before.set(u.before.id, u.before);
     for (const r of diff.removed) if (!this.#before.has(r.id)) this.#before.set(r.id, r);
+    // a person's drag moves its shapes on the overlay until it ends (BR-82); the model's writes are drawn by its hand
+    if (this.#origin === 'user') this.#core.lift.take(diff);
     this.#writes++;
     return ok(done.value.value);
   }
 
   /** The gesture is finished: its writes stay, and the next write with any key starts a new undo step. */
   commit(): void {
-    if (sendIfAble(this.#machine, 'commit')) this.#core.history.seal();
+    if (!sendIfAble(this.#machine, 'commit')) return;
+    this.#core.history.seal();
+    if (this.#origin === 'user') this.#core.lift.release();
   }
 
   /** The gesture is dropped: every record any write changed is put back, and the undo step it made is gone. */
@@ -127,6 +131,7 @@ export class Gesture {
       );
     }
     this.#core.history.seal();
+    if (this.#origin === 'user') this.#core.lift.release();
   }
 }
 

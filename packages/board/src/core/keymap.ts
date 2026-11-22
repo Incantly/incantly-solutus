@@ -166,7 +166,7 @@ export class KeyMap {
     if (!this.#machine.send('rebind')) return;
     this.#byKey.clear();
     this.#byAction.clear();
-    this.#errors.length = 0;
+    this.#errors.splice(0);
     this.#fill(defaults, options);
     this.#machine.send('seal');
   }

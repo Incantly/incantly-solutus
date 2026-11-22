@@ -116,8 +116,9 @@ export class History {
   /** Forgets every step. */
   clear(): void {
     if (this.#undo.length === 0 && this.#redo.length === 0) return;
-    this.#undo.length = 0;
-    this.#redo.length = 0;
+    // the steps are let go with their storage: a cleared history is not filled again at once
+    this.#undo.splice(0);
+    this.#redo.splice(0);
     this.#notify();
   }
 
@@ -190,7 +191,7 @@ export class History {
         if (entry?.before !== undefined && entry.after !== undefined && sameValue(entry.before, entry.after)) step.entries.delete(r.id);
       }
     }
-    this.#redo.length = 0;
+    this.#redo.splice(0);
     if (!merges) {
       if (step.entries.size === 0) return;
       this.#undo.push(step);

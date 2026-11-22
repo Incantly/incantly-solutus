@@ -34,9 +34,10 @@ export class StateMachine<S extends string, E extends string> {
     return this.#state;
   }
 
-  /** True when the machine is in one of `states`. */
-  is(...states: readonly S[]): boolean {
-    return states.includes(this.#state);
+  /** True when the machine is in one of the states given (up to four; a call makes no array, so a frame can ask it freely). */
+  is(a: S, b?: S, c?: S, d?: S): boolean {
+    const s = this.#state;
+    return s === a || s === b || s === c || s === d;
   }
 
   can(event: E): boolean {

@@ -300,6 +300,44 @@ tester.run('state-refusal-reported', rules['state-refusal-reported'], {
   ],
 });
 
+tester.run('gl-clear-masks', rules['gl-clear-masks'], {
+  valid: [
+    'function f(gl) { gl.depthMask(true); gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }',
+    'function f(gl) { gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT); }',
+    'function f(gl) { gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT); }',
+    // a clear of something else, and calls named clear that are not a GL clear
+    'function f(gl, list) { gl.clear(gl.STENCIL_BUFFER_BIT); list.clear(); cache.clear(); }',
+  ],
+  invalid: [
+    { code: 'function f(gl) { gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }, { messageId: 'color' }] },
+    { code: 'function f(gl) { gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+    // set after the clear, or turned off, does not count
+    { code: 'function f(gl) { gl.clear(gl.DEPTH_BUFFER_BIT); gl.depthMask(true); }', errors: [{ messageId: 'depth' }] },
+    { code: 'function f(gl) { gl.depthMask(false); gl.clear(gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+    { code: 'function f(gl) { gl.colorMask(true, true, true, false); gl.clear(gl.COLOR_BUFFER_BIT); }', errors: [{ messageId: 'color' }] },
+    // in another function, it is not known to run first
+    { code: 'function g(gl) { gl.depthMask(true); } function f(gl) { gl.clear(gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+  ],
+});
+
+tester.run('no-length-reset', rules['no-length-reset'], {
+  valid: [
+    // written by index and cut to the count
+    'function f(out, xs) { let n = 0; for (const x of xs) out[n++] = x; out.length = n; }',
+    // emptied and never filled again here
+    'class H { #undo = []; clear() { this.#undo.length = 0; } }',
+    // pushed in another function: a local list of its own
+    'function a(list) { list.length = 0; } function b(list) { list.push(1); }',
+    // a number field called length
+    'function f(s) { s.length = 0; s.points++; }',
+  ],
+  invalid: [
+    { code: 'function f(out, xs) { out.length = 0; for (const x of xs) out.push(x); }', errors: [{ messageId: 'reset' }] },
+    { code: 'class P { #shown = []; begin() { this.#shown.length = 0; } draw(t) { this.#shown.push(t); } }', errors: [{ messageId: 'reset' }] },
+    { code: 'class P { items = []; begin() { this.items.length = 0; } add(t) { this.items.push(t); } }', errors: [{ messageId: 'reset' }] },
+  ],
+});
+
 describe('libraries.md reading', () => {
   it('reads the library names of one table', () => {
     const md = '## Ship in the product\n\n| Library | L |\n|---|---|\n| [KaTeX](https://x) | MIT |\n| [Tone.js](https://y) | MIT |\n\n## Dev and test only\n\n| [mathjs](https://z) | A |\n';

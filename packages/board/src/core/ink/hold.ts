@@ -54,15 +54,26 @@ export class HoldWatch {
     return true;
   }
 
-  /** The pen reached the screen point `x, y` at `time`. */
-  move(x: number, y: number, time: number): void {
+  /**
+   * The pen reached the screen point `at.x, at.y` at `at.time` (or `move(x, y, time)`). The pen tool passes the sample whole: three numbers as arguments would
+   * be boxed on the heap at every sample when the call is not inlined (BR-77).
+   */
+  move(at: { readonly x: number; readonly y: number; readonly time: number } | number, atY = 0, atTime = 0): void {
     if (!sendIfAble(this.#machine, 'move')) return;
+    // the three numbers on their own are still taken (`move(x, y, time)`)
+    const x = typeof at === 'number' ? at : at.x;
+    const y = typeof at === 'number' ? atY : at.y;
+    const time = typeof at === 'number' ? atTime : at.time;
     const s = this.#since;
-    s.length += Math.hypot(x - s.lastX, y - s.lastY);
+    const mx = x - s.lastX;
+    const my = y - s.lastY;
+    s.length += Math.sqrt(mx * mx + my * my);
     s.lastX = x;
     s.lastY = y;
     s.points++;
-    if (Math.hypot(x - s.x, y - s.y) > HOLD_SLOP_PX) {
+    const dx = x - s.x;
+    const dy = y - s.y;
+    if (dx * dx + dy * dy > HOLD_SLOP_PX * HOLD_SLOP_PX) {
       s.x = x;
       s.y = y;
       s.time = time;
