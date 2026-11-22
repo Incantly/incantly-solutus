@@ -7,7 +7,7 @@ import { glClearMasks } from './gl.js';
 import { noLengthReset } from './arrays.js';
 import { allowedImports } from './imports.js';
 import { noImportedMutation, stateRefusalReported } from './purity.js';
-import { noFlagSoup, noShadowNull, noStaleAfterAwait, tableRefuses, tableRequired, transitionOnly, unionType } from './state.js';
+import { noFlagSoup, noIoFlags, noShadowNull, noStaleAfterAwait, tableRefuses, tableRequired, transitionOnly, unionType } from './state.js';
 
 export const rules = {
   'state-no-flag-soup': noFlagSoup,
@@ -17,6 +17,7 @@ export const rules = {
   'state-table-refuses': tableRefuses,
   'state-no-stale-after-await': noStaleAfterAwait,
   'state-no-shadow-null': noShadowNull,
+  'state-no-io-flags': noIoFlags,
   'allowed-imports': allowedImports,
   'no-throw-export': noThrowExport,
   'no-ai-credit': noAiCredit,

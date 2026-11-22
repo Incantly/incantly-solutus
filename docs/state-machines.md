@@ -2163,6 +2163,93 @@ Written before the code of round 5 (`core/agent.ts`, `core/agent-service.ts`, `c
 
 - **Reachable invalid states or transitions:** `release` in `resting` has no row (a gesture that wrote nothing ends with nothing held; `release` asks first). `clear` sends `release` when it can and empties both sets.
 
+## teacher
+
+Written before the code of round 1 (branch `feat/teacher-r1`, `packages/teacher/src/`). Later rounds append their machines below (round 4: `VOICE_MACHINE` in the studio). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is a bug, so the turn ends with an `internal` error event (`loop/turn.ts`) and a target reports it to the host's `onFault` (`tools/targets.ts`); a call that may come in any state asks `can` first. Data that is not a state (the counters of model and tool calls, the retry book, the failure streak, the loaded catalogue groups) sits next to the machine and is named in the invariants.
+
+### TE1. Turn
+
+- **Where:** `loop/turn.ts` `Turn`, `TURN_MACHINE`; `runTurn`.
+- **States:** `idle` (made, not started), `calling` (a model call is open and no tool call has arrived in it yet, or the next call is about to open), `running_tool` (the open reply has given at least one tool call, which runs as soon as its arguments are complete), `done` (a reply ended with no tool calls, or the stream was cut and reported), `limited` (a limit was hit: 8 model calls, 24 tool calls, or 60 s on the caller's clock or by the caller's `AbortSignal.timeout`, which aborts with a `TimeoutError` reason), `stopped` (the caller's `AbortSignal` fired), `failed` (the model client reported an error). `done`, `limited`, `stopped` and `failed` are final.
+
+| State | Holds |
+|---|---|
+| `idle` | the request; nothing sent |
+| `calling` | the messages so far; the reply's text goes out as `say` events as it arrives |
+| `running_tool` | the same, and the results of the tool calls run in this reply |
+| `done` | the notices of the turn (`retry_spent`, `stream_cut`) |
+| `limited` | what was drawn stays; one `turn_limit` (T003) error event ends the stream |
+| `stopped` | what was applied stays; a final `done` event with the notices |
+| `failed` | one error event, in the SDK shape, ends the stream |
+
+- **Invariants:** the model-call counter, the tool-call counter, the start time (from the caller's `now()`), the retry book (per line key: how many failures, the fingerprints, and whether the line is spent), the failure streak (kind and length, reset by a line that passes) and the loaded catalogue groups are data of the turn, never states; the counters only grow; a tool call never runs in `idle`, `done`, `limited`, `stopped` or `failed`; a tool call that arrives after a limit or an abort is not run; `say` events go out before the reply's tool calls run; the messages of a turn are the assistant reply (text and tool calls) followed by one tool message per tool call, in call order, then at most one line naming what did not draw; a final state sends no event to the machine again (the loop returns).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `start` | | `calling` | the prompt is built |
+| `calling` | `toolCall` | calls < 24 | `running_tool` | the tool runs; its outputs (`lines`, `control`) go out |
+| `calling` | `replyEnd` | the reply had no tool call | `done` | `done` event with the notices |
+| `calling` | `cut` | the client reported `stream_cut` | `done` | `done` event with a `stream_cut` notice |
+| `running_tool` | `toolCall` | calls < 24 | `running_tool` | another call of the same reply runs |
+| `running_tool` | `results` | the reply ended | `calling` | the messages grow by the reply and its results; model calls < 8 |
+| `running_tool` | `cut` | the client reported `stream_cut` | `done` | the calls that ran stay; `done` event with a `stream_cut` notice |
+| `calling`, `running_tool` | `limit` | a counter or the clock passed its limit, or the signal fired with a `TimeoutError` reason, also while the model sends nothing | `limited` | `turn_limit` error event |
+| `calling`, `running_tool` | `abort` | `signal.aborted` with any other reason | `stopped` | `done` event |
+| `calling`, `running_tool` | `modelError` | the client sent an error event | `failed` | error event |
+
+- **Reachable invalid states or transitions:** none known. `start` in any state but `idle` has no row (`runTurn` makes a new `Turn` each call). `replyEnd` in `running_tool` has no row: a reply that gave tool calls ends with `results`. `toolCall`, `results`, `replyEnd` in a final state have no row; the loop returns before it could send one.
+
+### TE2. Tool guard
+
+- **Where:** `tools/guard.ts` `ToolGuard`, `TOOL_MACHINE`; held by each target (`figureTarget`), used by `Toolset.call`.
+- **States:** `idle` (no tool runs on this target), `running` (one tool call runs on this target).
+- **Invariants:** at most one tool call runs on a target; a call that finds the guard `running` gets `tool_busy` (T002), is not run and does not change the guard; `end` always follows `begin`, also when the tool returns an error or throws (the throw is caught and becomes an `internal` error).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | | `running` | |
+| `running` | `end` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `begin` in `running` has no row: `enter()` asks `can` first and answers `tool_busy`. `end` in `idle` has no row: `leave()` asks `can` first.
+
+## server
+
+Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/src/`). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is logged as `internal` with its fingerprint (`log.ts`) and the response is ended with `internal`. The rate limiter and the daily budget are counters, not states (server design 7).
+
+### SV1. Request job
+
+- **Where:** `jobs/job.ts` `Job`, `SERVER_JOB_MACHINE`; `http/ndjson.ts` writes through the job.
+- **States:** `received` (the request is read; checks not done), `running` (the checks passed; nothing is written yet), `streaming` (the first event of an NDJSON answer is written), `done` (the answer is complete: a JSON body, or the last event), `refused` (a check failed; the HTTP error body is the answer), `aborted` (the client closed the connection; the model call is aborted), `failed` (an error ended the job; before streaming it is an HTTP error, after it the last event). `done`, `refused`, `aborted` and `failed` are final.
+
+| State | Holds |
+|---|---|
+| `received` | the method, the path, the client's address and origin |
+| `running` | the parsed request, the job's `AbortController`, the client's rate slot |
+| `streaming` | the response head sent (`200`, `application/x-ndjson`); events flushed one by one |
+| `done` | the response ended; the rate slot released |
+| `refused` | one HTTP error body (`400`, `403`, `404`, `413`, `429`) |
+| `aborted` | the model call aborted; nothing more is written |
+| `failed` | `internal` (500 or a last event) with a fingerprint, or the job's own error |
+
+- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once, with the first event, so an error before the first event is still an HTTP error; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection; a handler that returns without answering is failed through the machine (`ensureEnded` sends `fail`, as `internal`), never answered from the response's own flags, which only the low-level writers (`write*`) read (`incantly/state-no-io-flags`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `received` | `checked` | method, route, origin, size, JSON, rate and budget pass | `running` | slot taken |
+| `received` | `refuse` | a check failed | `refused` | HTTP error body written |
+| `received` | `fail` | an exception while checking | `failed` | `internal` HTTP error body written |
+| `running` | `firstEvent` | an NDJSON answer begins | `streaming` | head and first event written, flushed |
+| `running` | `finish` | a JSON answer is ready | `done` | body written |
+| `streaming` | `finish` | the turn ended | `done` | last event written, response ended |
+| `running`, `streaming` | `close` | the client closed | `aborted` | model call aborted, slot released |
+| `running` | `fail` | an error before any event | `failed` | HTTP error body written |
+| `streaming` | `fail` | an error after the first event | `failed` | `{ "error": … }` written as the last event, response ended |
+
+- **Reachable invalid states or transitions:** `finish`, `fail` and `close` in a final state have no row; the writer asks `can` first, so a late event of a closed connection is dropped, not reported. `firstEvent` in `streaming` has no row: the writer asks `can`. `checked` and `refuse` in `running` or later have no row.
+
 ## Explicit since the lint rules (branch `fix/lint-warnings`)
 
 Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same. `GRID_MACHINE` and `ERROR_MACHINE` first had one row copied into every state; `incantly/state-table-refuses` found them (board review BR-1) and their rows now list only the moves that may happen.

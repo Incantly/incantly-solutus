@@ -139,6 +139,7 @@ The rate limiter and the daily budget are counters, not states. The job of one r
 | `running`, `streaming` | turn done | `done` |
 | `running`, `streaming` | client closed | `aborted` |
 | `running`, `streaming` | error | `failed` |
+| `received` | error (a crash before the checks) | `failed` |
 
 ## 8. Running it
 

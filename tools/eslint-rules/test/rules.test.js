@@ -188,6 +188,42 @@ tester.run('state-no-shadow-null', rules['state-no-shadow-null'], {
   ],
 });
 
+tester.run('state-no-io-flags', rules['state-no-io-flags'], {
+  valid: [
+    // a low-level writer may read the flags, as a last guard
+    `const M = new StateMachine(A_MACHINE, 'a');
+      function writeJson(res) { if (res.writableEnded) return; res.end(); }`,
+    `class Job { m = new StateMachine(A_MACHINE, 'a'); private writeError(): void { const res = this.res; if (res.writableEnded || res.headersSent) return; } }`,
+    // inside a callback of a writer
+    `class Job { m = new StateMachine(A_MACHINE, 'a'); writeAll() { items.forEach((r) => { if (r.destroyed) return; }); } }`,
+    // a writer held in a variable
+    `const m = new StateMachine(A_MACHINE, 'a'); const writeLine = (res) => res.destroyed;`,
+    // a file with no machine owns no second record
+    `function onClose(res) { return res.writableFinished || res.destroyed; }`,
+    // other names
+    `const m = new StateMachine(A_MACHINE, 'a'); function f(res) { return res.statusCode; }`,
+    // setting a flag is not reading one
+    `const m = new StateMachine(A_MACHINE, 'a'); function f(res) { res.destroyed = true; }`,
+    // a part's own getter, derived from its machine
+    `import { x } from 'node:fs'; class V { m = new StateMachine(A_MACHINE, 'a'); get destroyed() { return this.m.is('gone'); } f() { return this.destroyed; } }`,
+    // \`destroyed\` in a file with no Node module is a part's own state (an app handle)
+    `import { createApp } from '@incantly/sdk'; const m = new StateMachine(A_MACHINE, 'a'); function f(app) { return app.destroyed; }`,
+  ],
+  invalid: [
+    {
+      code: `class Job { m = new StateMachine(A_MACHINE, 'a'); ensureEnded() { if (this.res.writableEnded) return; if (!this.res.headersSent) this.x(); } }`,
+      errors: [{ messageId: 'io' }, { messageId: 'io' }],
+    },
+    { code: `const m = new StateMachine(A_MACHINE, 'a'); function empty(res) { if (res.writableEnded) return; }`, errors: [{ messageId: 'io' }] },
+    { code: `const m = new StateMachine(A_MACHINE, 'a'); const done = (s) => s.readyState === 1;`, errors: [{ messageId: 'io' }] },
+    { code: `import { createServer } from 'node:http'; const m = new StateMachine(A_MACHINE, 'a'); const f = (s) => s['destroyed'];`, errors: [{ messageId: 'io' }] },
+    // the machine is made after the read: the file still counts
+    { code: `function f(res) { return res.writableFinished; } const m = new StateMachine(A_MACHINE, 'a');`, errors: [{ messageId: 'io' }] },
+    // a callback in a function that is not a writer
+    { code: `import { Socket } from 'node:net'; const m = new StateMachine(A_MACHINE, 'a'); function send() { items.forEach((r) => r.destroyed); }`, errors: [{ messageId: 'io' }] },
+  ],
+});
+
 tester.run('allowed-imports', rules['allowed-imports'], {
   valid: [
     "import { a } from './a';",

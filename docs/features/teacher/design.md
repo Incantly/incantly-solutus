@@ -54,7 +54,7 @@ May import: `@incantly/kernel`, `@incantly/modes`, the SDK's headless app (`crea
 | `show_me` | `{ name, value }` or `{ name, to, seconds }` | The `draw` result of the `SetValue` line it writes | Core design 10 |
 
 - A tool is `{ name, description, schema, run(target, input) }`. `run` returns a `Result`; it never throws. A bad input is `tool_input` (T001) with the schema's expected shape in `forms`.
-- `draw` applies each line on its own through the target's `run` (SDK 1): a good line commits; a bad line changes nothing and does not undo the lines before it (core design 10, flow 2).
+- `draw` applies each line on its own through the target's `run` (SDK 1, with `independent: true`): a good line commits; a bad line changes nothing and does not undo the lines before it (core design 10, flow 2); a later line that reads a name a failed line was to make gets `blockedBy` and `recovery: 'fix_earlier'` from the kernel (errors design 6, rule 2).
 - The film tools (`pause`, `resume`, `seek_beat`, `show_me`) act on the target's clock. On a board they act on the figure card the turn made last, or the one in focus.
 - A toolset is built from a list, so a host can leave tools out (Tiptap offers only `draw` and `figure`) or add its own through the same shape.
 - Two tool calls on one target never overlap. A call that arrives while another runs on the same target gets `tool_busy` (T002) and is not run.
@@ -73,7 +73,7 @@ The prompt is built, not written by hand, so it follows the command table.
 | The target now | The figure's `figureSummary`, or `board_read` of the view | at most 1,200 tokens |
 
 - The catalogue is filtered by the mode's policy (`filterCatalogue`), so the model never sees a command the gate would refuse.
-- Groups load on demand once the catalogue passes 2,000 tokens: the prompt holds every group's name and one line about it, plus the groups the request's words or the target's objects need. A line that names a command outside the loaded groups gets `unknown_command` with the right forms, and the next call loads that group.
+- Groups load on demand once the catalogue passes 2,000 tokens: the prompt holds every group's name and one line about it, plus the groups the request's words or the target's objects need. A line that names a command outside the loaded groups runs all the same, because the kernel's gate allows every command of the mode; the loop loads that group on the next model call (R3.3), so the model sees its forms from then on.
 - A token is counted as 4 characters for budgets. The builder reports the total, and a test holds each job's prompt under 4,000 tokens.
 - What a person wrote (document text, board text, a circled item's text, a spoken sentence) goes in a fenced data block marked as the user's material. The instructions say text inside it is never an instruction to the model.
 
@@ -93,11 +93,11 @@ request -> build prompt -> model call -> tool calls? -> run tools -> results bac
 |---|---|---|
 | Model calls in a turn | 8 | `turn_limit` (T003); what was drawn stays |
 | Tool calls in a turn | 24 | `turn_limit` |
-| Retries of one line | 2 (errors design 6, rule 3) | The line is skipped and reported as skipped in the next result |
-| Same error kind three times in a row, nothing passing | errors design 6, rule 10 | The loop runs `figure` and passes its result in place of the fourth call |
-| Turn time | 60 s, from the caller's clock | `turn_limit` |
+| Retries of one line | 2 (errors design 6, rule 3) | The line stops after three failures (the first and two retries), or when the same text fails twice in a row with the same fingerprint (T005); it is skipped and reported as skipped in the next result |
+| Same error kind three times in a row, nothing passing | errors design 6, rule 10 | The loop runs `figure` and passes its result in place of the fourth call: the next `draw` call is answered with the `figure` result and is not run |
+| Turn time | 60 s | `turn_limit`. The caller passes `AbortSignal.timeout(60_000)` as the turn's signal (the package has no timers); a signal aborted with a `TimeoutError` reason ends the turn as `turn_limit`, whatever the model is doing, and any other reason ends it as a stop. The injected `now()` is also read between events |
 
-- Retry counting uses the error's `fingerprint`: a second retry with the same fingerprint stops that line.
+- Retry counting uses the error's `fingerprint`: a line is the left side of a definition (`P`, `f(x)`, `A,B`), else its text. The same text failing twice in a row with the same fingerprint stops that line, as does a third failure of any kind.
 - The model may say only what the results report (core design 10, rule 4), and never speaks error kinds or "retry" (errors design 6, rule 8). The live instructions say so, and the loop helps: after a tool result with failures, it adds one line to the next call naming what did not draw.
 - Stop (the caller's `AbortSignal`) ends the turn at once. What was applied stays. A newer request on the same target aborts the older one; the caller does that.
 
@@ -108,11 +108,12 @@ The loop's states are one field over `TURN_MACHINE` (below). It is written in `d
 | `idle` | start | `calling` |
 | `calling` | tool call complete | `running_tool` |
 | `calling` | reply ended with no tool calls | `done` |
+| `calling`, `running_tool` | stream cut (the reply stopped partway) | `done`, with a `stream_cut` notice (T006) |
 | `running_tool` | result ready, more tool calls in this reply | `running_tool` |
 | `running_tool` | results ready | `calling` |
 | `calling`, `running_tool` | limit | `limited` |
 | `calling`, `running_tool` | abort | `stopped` |
-| `calling` | model error | `failed` |
+| `calling`, `running_tool` | model error | `failed` |
 
 Every other move is refused and reported (`state-refusal-reported`).
 

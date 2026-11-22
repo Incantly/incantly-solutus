@@ -26,8 +26,8 @@ Area: `docs/features/teacher/` (`design.md`, `errors.md`, `agent.md`), with core
 
 1. The loop SHALL run model calls and tool calls until a reply has no tool calls, or a limit (8 model calls, 24 tool calls, 60 s) gives `turn_limit` (T003).
 2. Spoken text SHALL stream out as `say` events before the reply's tool calls run.
-3. A line SHALL be retried at most twice, and stop early when the second retry's fingerprint equals the first (`retry_spent`, T005).
-4. Three failures in a row of the same kind, with nothing passing, SHALL make the loop run `figure` before the next model call.
+3. A line SHALL be retried at most twice, and stop after three failures, or when the same text fails twice in a row with the same fingerprint (`retry_spent`, T005).
+4. Three failures in a row of the same kind, with nothing passing, SHALL make the loop answer the next `draw` call with the `figure` result, in place of running it (design 6).
 5. An abort SHALL end the turn at once and keep what was applied.
 6. The loop's state SHALL be one field over `TURN_MACHINE`, written in `docs/state-machines.md` before the code.
 

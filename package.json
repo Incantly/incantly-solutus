@@ -17,7 +17,9 @@
     "bench": "vitest bench --run",
     "check": "npm run lint && npm run typecheck && npm test",
     "build:wasm": "node packages/kernel/wasm/build.mjs",
-    "studio": "npm run dev --workspace @incantly/studio"
+    "studio": "npm run dev --workspace @incantly/studio",
+    "server": "vite build -c packages/server/vite.config.ts && node --env-file-if-exists=packages/server/.env packages/server/dist/main.js",
+    "smoke:models": "node tools/smoke-models.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

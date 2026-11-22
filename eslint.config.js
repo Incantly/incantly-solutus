@@ -27,6 +27,7 @@ const stateRules = (level) => ({
   'incantly/state-table-refuses': level,
   'incantly/state-no-stale-after-await': level,
   'incantly/state-no-shadow-null': level,
+  'incantly/state-no-io-flags': level,
 });
 
 export default defineConfig([
@@ -63,7 +64,7 @@ export default defineConfig([
   },
   {
     // a refused move is reported, never silent
-    files: ['packages/board/**/*.ts', 'packages/tiptap/**/*.ts', 'tools/**/*.js'],
+    files: ['packages/board/**/*.ts', 'packages/tiptap/**/*.ts', 'packages/teacher/**/*.ts', 'packages/server/**/*.ts', 'tools/**/*.js'],
     rules: { 'incantly/state-refusal-reported': 'error' },
   },
   {
@@ -73,7 +74,30 @@ export default defineConfig([
   },
   {
     files: ['packages/server/src/**/*.ts'],
-    rules: { 'incantly/allowed-imports': ['error', { nodeBuiltins: true }] },
+    rules: {
+      'incantly/allowed-imports': ['error', { nodeBuiltins: true }],
+      // the server is Node only: no page globals
+      'no-restricted-globals': ['error', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    },
+  },
+  {
+    // the teacher runs in Node and in the browser and reaches a model only through the `ModelClient` the caller passes:
+    // no DOM, timers, network, clock or unseeded randomness (teacher design 3)
+    files: ['packages/teacher/src/**/*.ts'],
+    rules: {
+      'no-restricted-globals': ['error', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'setInterval', 'fetch', 'Date'],
+      'no-restricted-properties': ['error', { object: 'Math', property: 'random', message: 'Recordings must replay the same; the teacher has no unseeded randomness.' }],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: ['@incantly/ui', '@incantly/tiptap', '@incantly/audio', '@incantly/board', '@incantly/studio', '@incantly/view', '@incantly/sdk/screen'].map((name) => ({
+            name,
+            message: 'The teacher imports no package with a screen; use the SDK headless app and @incantly/board/core.',
+          })),
+          patterns: [{ group: ['**/web', '**/web/**', '**/gl', '**/gl/**'], message: 'The teacher may not import a web or GPU layer.' }],
+        },
+      ],
+    },
   },
   {
     files: ['apps/*/vite.config.ts'],

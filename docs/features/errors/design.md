@@ -199,7 +199,7 @@ These are the rules every caller follows. They are part of the contract, tested 
 
 1. **Atomic line.** A failed line changes nothing. Always (`committed: false`).
 2. **Independent lines.** In a batch run with `mode: 'independent'`, lines run in order; a failure does not stop later lines (the default `atomic` mode rolls the whole batch back instead). A later line that reads an object an earlier line failed to make gets `blockedBy`, and `recovery: 'fix_earlier'`.
-3. **Retry budget.** The teacher retries a line at most twice. The `fingerprint` of the second retry's error equal to the first means stop. After the budget, `skip`.
+3. **Retry budget.** The teacher retries a line at most twice: a line (named by the left side of its definition) stops after three failures, or when the same text fails twice in a row with the same fingerprint. After the budget, `skip`.
 4. **Prefer `suggest`.** If `suggest` is non-empty and `recovery` is `use_suggestion`, send the first suggestion unchanged.
 5. **No silent repair by the engine.** The engine never fixes a line itself. (A UI may apply a suggestion only on the learner's click.)
 6. **Never loop on `internal`.** `recovery: 'report'` or `'skip'`: do not retry the same text.
