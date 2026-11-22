@@ -195,6 +195,52 @@ describe('queries', () => {
     expect(sorted(g.queryLasso(tri))).toEqual(['crossing', 'inside']);
   });
 
+  it('BR-75: queryLassoSplit says what testing every edge says, for loops of many corners and boxes of every size (a grid of cells over the loop answers the easy ones)', () => {
+    // a small deterministic generator: the test is the same every run
+    let seed = 12345;
+    const next = (): number => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    for (let round = 0; round < 40; round++) {
+      const corners = 3 + Math.floor(next() * 60);
+      const loop: number[] = [];
+      for (let i = 0; i < corners; i++) {
+        const a = (i / corners) * Math.PI * 2;
+        const r = 200 + next() * (round % 2 === 0 ? 60 : 160);
+        loop.push(400 + Math.cos(a) * r, 400 + Math.sin(a) * r);
+      }
+      const g = new IndexGrid();
+      const boxes = new Map<string, Bounds>();
+      for (let i = 0; i < 300; i++) {
+        const x = next() * 900 - 50;
+        const y = next() * 900 - 50;
+        const w = next() < 0.8 ? next() * 25 : next() * 300;
+        const h = next() < 0.8 ? next() * 25 : next() * 300;
+        const b = box(x, y, x + w, y + h);
+        boxes.set(`s${i}`, b);
+        must(g.insert(`s${i}`, b));
+      }
+      const ids: string[] = [];
+      const whole: boolean[] = [];
+      g.queryLassoSplit(loop, ids, whole);
+      const got = new Map(ids.map((id, i) => [id, whole[i] as boolean]));
+      const xs = loop.filter((_, i) => i % 2 === 0);
+      const ys = loop.filter((_, i) => i % 2 === 1);
+      const lo = { x: Math.min(...xs), y: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+      for (const [id, b] of boxes) {
+        const meets = polygonMeetsBox(loop, b.minX, b.minY, b.maxX, b.maxY);
+        const inBox = b.maxX >= lo.x && b.minX <= lo.x1 && b.maxY >= lo.y && b.minY <= lo.y1;
+        expect(got.has(id), `round ${round} ${id} found`).toBe(meets && inBox);
+        if (!got.has(id)) continue;
+        // a box that is reported whole has every corner inside the loop and no edge of the loop crossing it
+        if (got.get(id) === true) {
+          for (const [cx, cy] of [[b.minX, b.minY], [b.maxX, b.minY], [b.maxX, b.maxY], [b.minX, b.maxY]] as const) expect(pointInPolygon(cx, cy, loop), `round ${round} ${id} corner`).toBe(true);
+        }
+      }
+    }
+  });
+
   it('polygon helpers: point in polygon (even-odd) and polygon meets box', () => {
     const square = [0, 0, 10, 0, 10, 10, 0, 10];
     expect(pointInPolygon(5, 5, square)).toBe(true);

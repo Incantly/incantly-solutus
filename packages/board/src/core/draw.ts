@@ -31,6 +31,8 @@ export const TILE_PX = 512;
 export const TILE_BYTES = (TILE_PX + 4) * (TILE_PX + 4) * 4;
 export const TILE_CAP_BYTES = 64 * 1024 * 1024;
 export const TILE_CAP_BYTES_LOW = 24 * 1024 * 1024;
+/** More tiles than this in a view at the steady step, and the step of the zoom as it is now is used instead. */
+export const MAX_VISIBLE_TILES = 48;
 
 /** The zoom step of a zoom: tiles are drawn at `2^k` device pixels per page unit, never more than half a step too coarse. */
 export function stepOf(zoom: number, dpr: number): number {
@@ -90,7 +92,7 @@ export class Tile {
 
   /** True when the tile has to be drawn before it is shown. */
   get needsDraw(): boolean {
-    return this.#machine.is('blank', 'stale');
+    return this.#machine.state === 'blank' || this.#machine.state === 'stale';
   }
 
   get box(): Bounds {
@@ -164,14 +166,21 @@ export class TileCache {
   /** Starts a frame: tiles used in it are the newest. */
   beginFrame(): void {
     this.#frame++;
-    // a tile that was never drawn and is out of sight is only a place holder: forget it
-    for (const tile of this.#tiles.values()) {
-      if (tile.state === 'blank' && tile.lastUsed < this.#frame - 1) {
-        this.#tiles.delete(tile.id);
-        tile.evict();
-      }
-    }
+    // a tile that was never drawn and is out of sight is only a place holder: forget it (a method kept on the cache, so a
+    // frame makes no iterator and no closure for it)
+    this.#tiles.forEach(this.#sweep);
   }
+
+  readonly #sweep = (tile: Tile): void => {
+    if (tile.state === 'blank' && tile.lastUsed < this.#frame - 1) {
+      this.#tiles.delete(tile.id);
+      tile.evict();
+    }
+  };
+
+  /** The view the last call of `visible` answered, and its tiles: the same view again is answered from them. */
+  readonly #seen = { valid: false, k: 0, tx0: 0, ty0: 0, tx1: 0, ty1: 0 };
+  readonly #seenTiles: Tile[] = [];
 
   /**
    * Fills `out` with the tiles that cover the screen `width × height` CSS pixels at the camera's steady zoom (made
@@ -180,12 +189,36 @@ export class TileCache {
   visible(camera: CameraView & { readonly steadyZoom: number }, width: number, height: number, dpr: number, out: Tile[]): number {
     out.length = 0;
     if (!(width > 0) || !(height > 0)) return 0;
-    const k = stepOf(camera.steadyZoom, dpr);
-    const span = tileSpan(k);
-    const tx0 = Math.floor(camera.x / span);
-    const ty0 = Math.floor(camera.y / span);
-    const tx1 = Math.floor((camera.x + width / camera.zoom) / span);
-    const ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    let k = stepOf(camera.steadyZoom, dpr);
+    let span = tileSpan(k);
+    let tx0 = Math.floor(camera.x / span);
+    let ty0 = Math.floor(camera.y / span);
+    let tx1 = Math.floor((camera.x + width / camera.zoom) / span);
+    let ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    // zoomed far out from the steady zoom, the steady step would need a great many tiles, all to be drawn again when the zoom
+    // settles: the step the zoom is at now needs the few that the settled view needs
+    const ideal = stepOf(camera.zoom, dpr);
+    if (ideal < k && (tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_VISIBLE_TILES) {
+      k = ideal;
+      span = tileSpan(k);
+      tx0 = Math.floor(camera.x / span);
+      ty0 = Math.floor(camera.y / span);
+      tx1 = Math.floor((camera.x + width / camera.zoom) / span);
+      ty1 = Math.floor((camera.y + height / camera.zoom) / span);
+    }
+    const seen = this.#seen;
+    const kept = this.#seenTiles;
+    let again = seen.valid && seen.k === k && seen.tx0 === tx0 && seen.ty0 === ty0 && seen.tx1 === tx1 && seen.ty1 === ty1;
+    for (let i = 0; again && i < kept.length; i++) if ((kept[i] as Tile).state === 'gone') again = false;
+    if (again) {
+      // the same tiles as the last frame (a stroke being drawn, a still page): their ids are not worked out again
+      for (let i = 0; i < kept.length; i++) {
+        const tile = kept[i] as Tile;
+        tile.lastUsed = this.#frame;
+        out.push(tile);
+      }
+      return out.length;
+    }
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {
         const id = tileId(k, tx, ty);
@@ -195,6 +228,14 @@ export class TileCache {
         out.push(tile);
       }
     }
+    seen.valid = true;
+    seen.k = k;
+    seen.tx0 = tx0;
+    seen.ty0 = ty0;
+    seen.tx1 = tx1;
+    seen.ty1 = ty1;
+    this.#seenTiles.length = 0;
+    for (let i = 0; i < out.length; i++) this.#seenTiles.push(out[i] as Tile);
     return out.length;
   }
 
@@ -229,6 +270,7 @@ export class TileCache {
 
   /** Drops every tile (a page change, or the painter went away). */
   clear(): void {
+    this.#seen.valid = false;
     for (const tile of this.#tiles.values()) this.#drop(tile);
     this.#tiles.clear();
     this.#bytes = 0;
@@ -286,6 +328,13 @@ export interface TileContent {
   readonly items: readonly DrawItem[];
   /** The page's paper, drawn under the items in each tile (BR-18); absent or `none` for plain. */
   readonly background?: PageBackground;
+  /**
+   * A tile with many shapes is made in slices (BR-73): `items` holds the first ones, `total` is how many shapes the whole tile
+   * has (at most), and `more(count)` makes the items of up to `count` more shapes, appends them to `items` and says whether
+   * there are no more to come. A painter that cannot draw in slices calls it until it says so.
+   */
+  readonly total?: number;
+  readonly more?: (count: number) => boolean;
 }
 
 /** Level of detail by the size a shape has on screen (design 9, item 6). */
@@ -303,6 +352,12 @@ export class DrawList {
   readonly outlines: OutlineCache;
   readonly #ids: string[] = [];
   readonly #parts = new WeakMap<object, { generation: number; byLod: Partial<Record<Lod, readonly Part[]>> }>();
+  /**
+   * The draw item of a stored shape at the last scale it was asked for, with the text measure it was made under. A stored
+   * record never changes (an edit is a new record), so the item stays right while the scale and the measure stay the same;
+   * a shape inside a group or a frame is not kept, because its clip is the frame's record, not its own.
+   */
+  readonly #items = new WeakMap<object, { scale: number; generation: number; item: DrawItem | undefined }[]>();
 
   constructor(index: PageIndex, outlines: OutlineCache = new OutlineCache()) {
     this.#index = index;
@@ -318,22 +373,80 @@ export class DrawList {
   itemsIn(box: Bounds, scale: number): DrawItem[] {
     this.#ids.length = 0;
     this.cull(box, 0, this.#ids);
-    const shapes: ShapeRecord[] = [];
-    for (const id of this.#ids) {
-      const s = this.#index.shape(id);
-      if (s !== undefined) shapes.push(s);
+    // highlighters go under everything else: the two layers are sorted by order key on their own, so the sort does not ask for a
+    // layer at every comparison
+    const under: ShapeRecord[] = [];
+    const over: ShapeRecord[] = [];
+    for (let i = 0; i < this.#ids.length; i++) {
+      const s = this.#index.shape(this.#ids[i] as string);
+      // a shape that is not drawn (too small to see) is left out before the sort, which is the dearest part of a busy tile
+      if (s !== undefined && this.itemOf(s, scale) !== undefined) (layerOf(s) === 0 ? under : over).push(s);
     }
-    shapes.sort((a, b) => layerOf(a) - layerOf(b) || (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    under.sort(byOrder);
+    over.sort(byOrder);
     const out: DrawItem[] = [];
-    for (const s of shapes) {
-      const item = this.itemOf(s, scale);
+    for (let i = 0; i < under.length; i++) {
+      const item = this.itemOf(under[i] as ShapeRecord, scale);
+      if (item !== undefined) out.push(item);
+    }
+    for (let i = 0; i < over.length; i++) {
+      const item = this.itemOf(over[i] as ShapeRecord, scale);
       if (item !== undefined) out.push(item);
     }
     return out;
   }
 
+  /**
+   * The strokes and shapes that meet `box`, made in slices: the shapes are found and put in order at once (the cheap part),
+   * and their items are made `count` shapes at a time by `more`, which appends them to `items`. `itemsIn` is this and all
+   * of it at once.
+   */
+  plan(box: Bounds, scale: number): { readonly items: DrawItem[]; readonly total: number; readonly more: (count: number) => boolean } {
+    this.#ids.length = 0;
+    this.cull(box, 0, this.#ids);
+    const under: ShapeRecord[] = [];
+    const over: ShapeRecord[] = [];
+    for (let i = 0; i < this.#ids.length; i++) {
+      const s = this.#index.shape(this.#ids[i] as string);
+      if (s !== undefined) (layerOf(s) === 0 ? under : over).push(s);
+    }
+    under.sort(byOrder);
+    over.sort(byOrder);
+    const ordered = under.length === 0 ? over : under.concat(over);
+    const items: DrawItem[] = [];
+    let next = 0;
+    const more = (count: number): boolean => {
+      const end = Math.min(ordered.length, next + count);
+      for (; next < end; next++) {
+        const item = this.itemOf(ordered[next] as ShapeRecord, scale);
+        if (item !== undefined) items.push(item);
+      }
+      return next >= ordered.length;
+    };
+    return { items, total: ordered.length, more };
+  }
+
   /** One shape as a draw item, or undefined when it is not drawn (unknown kind, too small to see). */
   itemOf(shape: ShapeRecord, scale: number): DrawItem | undefined {
+    if (shape.parent !== null) return this.#makeItem(shape, scale);
+    const generation = measureGeneration();
+    let kept = this.#items.get(shape);
+    if (kept === undefined) {
+      kept = [];
+      this.#items.set(shape, kept);
+    }
+    for (let i = 0; i < kept.length; i++) {
+      const known = kept[i] as { scale: number; generation: number; item: DrawItem | undefined };
+      if (known.scale === scale && known.generation === generation) return known.item;
+    }
+    const item = this.#makeItem(shape, scale);
+    // the last few scales are kept: a zoom goes in and out over a few steps
+    if (kept.length >= ITEM_SCALES) kept.shift();
+    kept.push({ scale, generation, item });
+    return item;
+  }
+
+  #makeItem(shape: ShapeRecord, scale: number): DrawItem | undefined {
     const kinds = this.#index.kinds;
     const geometry = shapeGeometry(shape, kinds);
     if (geometry === undefined) return undefined;
@@ -420,6 +533,11 @@ export class DrawList {
 }
 
 const NO_PIVOT = { x: 0, y: 0 } as const;
+
+/** Back to front: the shape's order key, then its id. */
+const byOrder = (a: ShapeRecord, b: ShapeRecord): number => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+/** How many scales the draw item of a stored shape is kept for. */
+const ITEM_SCALES = 4;
 
 function layerOf(shape: ShapeRecord): 0 | 1 {
   return isInk(shape) && shape.props.nib === 'highlighter' ? 0 : 1;
@@ -534,7 +652,7 @@ export interface OverlayItems {
 export interface BoardPainter {
   beginFrame(camera: CameraView, dpr: number): BoardResult<undefined>;
   /** Shows a tile. With `content` the tile's picture is drawn (again) first; without, its cached picture is reused. */
-  drawTile(tile: Tile, content: TileContent | null): BoardResult<undefined>;
+  drawTile(tile: Tile, content: TileContent | null, until?: number): BoardResult<undefined>;
   /** Items not in a tile (what an agent animates, a dragged shape), drawn this frame only. */
   drawItems(items: readonly DrawItem[]): BoardResult<undefined>;
   drawLiveStroke(stroke: LiveStrokeView | null): BoardResult<undefined>;

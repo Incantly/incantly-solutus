@@ -114,7 +114,7 @@ export class LiveStroke {
 
   /** Adds a guess of a future sample, in screen pixels, for the overlay. Never stored. */
   predict(s: InputSample): void {
-    if (!this.#machine.is('drawing') || this.#predictedCount >= PREDICTED_MAX) return;
+    if (this.#machine.state !== 'drawing' || this.#predictedCount >= PREDICTED_MAX) return;
     this.#predicted[this.#predictedCount * 2] = s.x;
     this.#predicted[this.#predictedCount * 2 + 1] = s.y;
     this.#predictedCount++;

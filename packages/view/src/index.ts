@@ -31,6 +31,7 @@ export * from './core/export';
 export * from './core/describe';
 export * from './core/budgets';
 export * from './core/gpu';
+export * from './core/tessellate';
 export * from './backends/webgl2';
 export * from './backends/software';
 export * from './backends/svg';

@@ -12,8 +12,8 @@ import { Camera } from '../core/camera';
 import type { BoardCoreOptions } from '../core/board';
 import { addImage } from '../core/assets';
 import { clipboardText, copySelection, pasteAny, readClipboardText, isBoardClipboard, pasteData } from '../core/clipboard';
-import { diffRegions, tileBox } from '../core/draw';
-import type { OverlayItems, Tile } from '../core/draw';
+import { diffRegions, tileBox, tileSpan } from '../core/draw';
+import type { OverlayItems, Tile, TileContent } from '../core/draw';
 import { alignShapes, deleteShapes, distributeShapes, flipShapes, groupShapes, orderShapes, setLocked, styleShapes, ungroupShapes } from '../core/edit';
 import type { AlignHow } from '../core/edit';
 import type { BoardError, BoardResult } from '../core/errors';
@@ -73,6 +73,8 @@ class FrameLoop {
   readonly #cancel: (id: number) => void;
   readonly #body: (now: number) => boolean;
   #handle = 0;
+  /** The callback handed to every animation frame request: made once, so a frame makes no closure. */
+  readonly #tick = (now: number): void => this.#run(now);
 
   constructor(schedule: (cb: (now: number) => void) => number, cancel: (id: number) => void, body: (now: number) => boolean, report?: (error: BoardError) => void) {
     this.#machine = new StateMachine(LOOP_MACHINE, 'idle', refusedMove('frame loop', () => report));
@@ -88,13 +90,13 @@ class FrameLoop {
   request(): void {
     const was = this.#machine.state;
     this.#machine.send('request');
-    if (was === 'idle') this.#handle = this.#schedule((now) => this.#run(now));
+    if (was === 'idle') this.#handle = this.#schedule(this.#tick);
   }
 
   /** Runs the body now (a test, or the first frame). */
   runNow(now: number): void {
-    if (this.#machine.is('queued')) this.#cancel(this.#handle);
-    else if (!this.#machine.is('idle')) return;
+    if (this.#machine.state === 'queued') this.#cancel(this.#handle);
+    else if (this.#machine.state !== 'idle') return;
     this.#machine.send('request');
     this.#run(now);
   }
@@ -107,16 +109,16 @@ class FrameLoop {
     } catch {
       // a frame that failed is dropped; the next request draws again
     }
-    const again = this.#machine.is('again');
+    const again = this.#machine.state === 'again';
     this.#machine.send('done');
     if (again || more) {
-      if (this.#machine.is('idle')) this.request();
+      if (this.#machine.state === 'idle') this.request();
       else this.#handle = this.#schedule((t) => this.#run(t));
     }
   }
 
   dispose(): void {
-    if (this.#machine.is('queued')) this.#cancel(this.#handle);
+    if (this.#machine.state === 'queued') this.#cancel(this.#handle);
   }
 }
 
@@ -198,6 +200,20 @@ const HIGHLIGHTS = ['#ffd400', '#ff7aa8', '#5eead4', '#a3e635', '#93c5fd'] as co
 const NIB_LABELS = [['pen', 'Pen nib'], ['marker', 'Marker nib'], ['pencil', 'Pencil nib']] as const;
 /** At most this many tiles are drawn in one frame; the rest follow on the next ones. */
 const TILES_PER_FRAME = 6;
+/** Tiles are drawn until a frame has spent this long (at least one a frame): a heavy tile is one frame, never six. */
+const TILE_BUDGET_MS = 4;
+
+/** The middle of the view in page units, for ordering the tiles of one frame. */
+const order = { cx: 0, cy: 0 };
+const needsDraw = (t: Tile): boolean => t.needsDraw;
+/** The distance of a tile's middle from the view's middle, squared: no object and no root, so ordering makes no garbage. */
+const farFromMiddle = (t: Tile): number => {
+  const span = tileSpan(t.k);
+  const dx = (t.tx + 0.5) * span - order.cx;
+  const dy = (t.ty + 0.5) * span - order.cy;
+  return dx * dx + dy * dy;
+};
+const nearTheMiddle = (a: Tile, b: Tile): number => farFromMiddle(a) - farFromMiddle(b);
 
 /** The widths of glyphs from a canvas, for the text and maths layout of the core. */
 function installFontMeasure(doc: Document): void {
@@ -246,6 +262,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const overlay = createOverlayState();
   const styles = defaultStyles();
   const list: Tile[] = [];
+  /** The tile being drawn in slices over several frames, with what it is drawn from; dropped when the board changes. */
+  let tileJob: { readonly tile: Tile; readonly content: TileContent } | null = null;
 
   // the agent (design 11): the closures below are called only after the view is built
   let panel: AgentPanel | undefined;
@@ -343,11 +361,15 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
 
   // ---- the frame
   const sizeOf = (): { w: number; h: number } => ({ w: surface.clientWidth, h: surface.clientHeight });
+  // the overlay's items and what the root's data attributes say, kept between frames (a frame makes no new object for them)
+  const items: { -readonly [K in keyof OverlayItems]: OverlayItems[K] } = { laser: null, loop: null, selection: [], cursor: null, selected: null, guides: [], marquee: null, hint: null };
+  const shown = { percent: -1, backend: '', selected: -1, shapes: -1, tool: '', editing: '', tiles: -1, cards: -1, live: -1 };
   const render = (now: number): boolean => {
     const camera = core.camera;
     const page = core.pages.current;
     if (camera === undefined || page === null) return false;
-    const { w, h: height } = sizeOf();
+    const w = surface.clientWidth;
+    const height = surface.clientHeight;
     if (w < 1 || height < 1) return false;
     const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
     painter.resize(w, height, dpr);
@@ -356,22 +378,43 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     if (camera.motion === 'zooming') more = true;
     painter.tiles.beginFrame();
     painter.tiles.visible(camera, w, height, dpr, list);
-    // the tiles nearest the middle first, so a busy page fills in from where the eyes are
-    const cx = camera.x + w / camera.zoom / 2;
-    const cy = camera.y + height / camera.zoom / 2;
-    list.sort((a, b) => Math.hypot(a.box.minX - cx, a.box.minY - cy) - Math.hypot(b.box.minX - cx, b.box.minY - cy));
+    // the tiles nearest the middle first, so a busy page fills in from where the eyes are (only when one has to be drawn: a
+    // frame that draws no tile keeps the order it has and makes nothing for the garbage collector)
+    if (list.some(needsDraw)) {
+      order.cx = camera.x + w / camera.zoom / 2;
+      order.cy = camera.y + height / camera.zoom / 2;
+      list.sort(nearTheMiddle);
+    }
     const began = painter.beginFrame(camera, dpr);
     if (!began.ok) return true;
+    const frameStart = typeof performance !== 'undefined' ? performance.now() : now;
     const background = core.pages.get(page)?.background ?? 'none';
     let drawn = 0;
     let waiting = 0;
+    // a tile with many shapes is drawn in slices that stop at the frame's budget (and go on in the next frame); while one is
+    // unfinished no other tile is started
+    const deadline = frameStart + TILE_BUDGET_MS;
+    let busy = false;
     for (const tile of list) {
-      if (tile.needsDraw && drawn < TILES_PER_FRAME) {
-        const scale = Math.pow(2, tile.k);
-        const box = tileBox(tile.k, tile.tx, tile.ty);
-        const grow = TILE_GUTTER / scale;
-        const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
-        painter.drawTile(tile, { box: region, items: core.drawList.itemsIn(region, scale), background });
+      if (tile.needsDraw && !busy && drawn < TILES_PER_FRAME && (drawn === 0 || performance.now() < deadline)) {
+        let job = tileJob;
+        if (job === null || job.tile !== tile) {
+          const scale = Math.pow(2, tile.k);
+          const box = tileBox(tile.k, tile.tx, tile.ty);
+          const grow = TILE_GUTTER / scale;
+          const region: Bounds = { minX: box.minX - grow, minY: box.minY - grow, maxX: box.maxX + grow, maxY: box.maxY + grow };
+          const plan = core.drawList.plan(region, scale);
+          job = { tile, content: { box: region, items: plan.items, background, total: plan.total, more: plan.more } };
+          tileJob = job;
+        }
+        painter.drawTile(tile, job.content, deadline);
+        if (tile.needsDraw) {
+          // stopped at the budget: the rest of it comes in the next frame
+          busy = true;
+          waiting++;
+        } else {
+          tileJob = null;
+        }
         drawn++;
       } else {
         if (tile.needsDraw) waiting++;
@@ -387,16 +430,13 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       painter.drawLiveStroke(null);
     }
     if (waiting === 0) painter.settleLive();
-    const items: OverlayItems = {
-      laser: overlay.laser,
-      loop: overlay.loop,
-      selection: [],
-      cursor: overlay.cursor,
-      selected: editor.state === 'closed' ? selectionView(core, camera.zoom) : null,
-      guides: overlay.guides,
-      marquee: overlay.marquee,
-      hint: overlay.hint,
-    };
+    items.laser = overlay.laser;
+    items.loop = overlay.loop;
+    items.cursor = overlay.cursor;
+    items.selected = editor.state === 'closed' ? selectionView(core, camera.zoom) : null;
+    items.guides = overlay.guides;
+    items.marquee = overlay.marquee;
+    items.hint = overlay.hint;
     placeField();
     if (figures.sync(camera, w, height, now)) more = true;
     painter.drawOverCards(overCardItems(core, figures.covering, camera.zoom * dpr));
@@ -409,15 +449,22 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     circleMenu.place(camera);
     painter.drawOverlay(items);
     painter.endFrame();
-    zoomOut.value = `${Math.round(camera.zoom * 100)}%`;
-    root.dataset['backend'] = painter.backend;
-    root.dataset['selected'] = String(core.selection.size);
-    root.dataset['shapes'] = String(core.store.shapeCount(page));
-    root.dataset['tool'] = host.tool;
-    root.dataset['editing'] = editor.state;
-    root.dataset['tiles'] = String(painter.tiles.size);
-    root.dataset['cards'] = String(figures.cards.size);
-    root.dataset['live'] = String(figures.liveCount);
+    // what the page shows of the board is written when it changes, not every frame (a write makes a string and a style check)
+    const percent = Math.round(camera.zoom * 100);
+    if (percent !== shown.percent) {
+      shown.percent = percent;
+      zoomOut.value = `${percent}%`;
+    }
+    const d = root.dataset;
+    if (shown.backend !== painter.backend) d['backend'] = shown.backend = painter.backend;
+    if (shown.selected !== core.selection.size) d['selected'] = String((shown.selected = core.selection.size));
+    const shapes = core.store.shapeCount(page);
+    if (shown.shapes !== shapes) d['shapes'] = String((shown.shapes = shapes));
+    if (shown.tool !== host.tool) d['tool'] = shown.tool = host.tool;
+    if (shown.editing !== editor.state) d['editing'] = shown.editing = editor.state;
+    if (shown.tiles !== painter.tiles.size) d['tiles'] = String((shown.tiles = painter.tiles.size));
+    if (shown.cards !== figures.cards.size) d['cards'] = String((shown.cards = figures.cards.size));
+    if (shown.live !== figures.liveCount) d['live'] = String((shown.live = figures.liveCount));
     return more;
   };
   const loop = new FrameLoop(
@@ -443,6 +490,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
 
   // ---- store and pages
   const stopStore = core.store.on((diff) => {
+    tileJob = null;
     const page = core.pages.current;
     if (page !== null) for (const region of diffRegions(diff, page, core.store.kinds)) painter.tiles.invalidate(region);
     // a page's paper changed: every tile shows it
@@ -460,6 +508,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     kit.circle.dismiss();
     painter.abortLive();
     painter.tiles.clear();
+    tileJob = null;
     core.selection.clear();
     overlay.laser = null;
     overlay.loop = null;

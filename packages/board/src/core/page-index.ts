@@ -44,6 +44,14 @@ export class PageIndex {
     return r !== undefined && isShape(r) && r.page === this.#page ? r : undefined;
   }
 
+  /**
+   * The shape with this id, for an id that this index's own grid just gave: the grid holds only shapes of the indexed page, so
+   * the checks `shape` makes are not made (thousands of ids from one query are looked up with one call each).
+   */
+  held(id: string): ShapeRecord | undefined {
+    return this.#store.get(id) as ShapeRecord | undefined;
+  }
+
   /** Reads the page's shapes again: their boxes changed without a diff (the text measuring function was replaced). */
   refresh(): void {
     this.#switch(this.#page);

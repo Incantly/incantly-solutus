@@ -64,7 +64,7 @@ export class ToolHost {
 
   /** The id of the tool that answers input now. */
   get active(): string {
-    return this.#machine.is('eraserEnd') ? 'eraser' : this.#machine.is('handHeld') ? 'hand' : this.#machine.is('askHeld') ? 'ask' : this.#current;
+    return this.#machine.state === 'eraserEnd' ? 'eraser' : this.#machine.state === 'handHeld' ? 'hand' : this.#machine.state === 'askHeld' ? 'ask' : this.#current;
   }
 
   get tools(): readonly ToolDef[] {
@@ -113,7 +113,7 @@ export class ToolHost {
   sample(s: InputSample): void {
     if (s.phase === 'down') {
       this.#down = s.pointer;
-      if (this.#machine.is('chosen')) {
+      if (this.#machine.state === 'chosen') {
         if ((s.buttons & BUTTON_ERASER) !== 0 && this.#list.get('eraser') !== undefined) {
           this.#instance(this.#current)?.onCancel();
           this.#machine.send('eraserDown');
@@ -189,7 +189,7 @@ export class ToolHost {
       return false;
     }
     if (k.key === ' ' && !k.repeat) {
-      if (this.#machine.is('chosen') && this.#down < 0 && this.#list.get('hand') !== undefined) {
+      if (this.#machine.state === 'chosen' && this.#down < 0 && this.#list.get('hand') !== undefined) {
         this.#machine.send('handDown');
         this.#heldBy = 'space';
       }
@@ -238,8 +238,8 @@ export class ToolHost {
 
   #release(pointer: number): void {
     if (pointer === this.#down) this.#down = -1;
-    if (this.#machine.is('eraserEnd')) this.#machine.send('eraserUp');
-    else if (this.#machine.is('askHeld')) this.#machine.send('askUp');
+    if (this.#machine.state === 'eraserEnd') this.#machine.send('eraserUp');
+    else if (this.#machine.state === 'askHeld') this.#machine.send('askUp');
     else if (this.#heldBy === 'middle') this.#endHand();
   }
 

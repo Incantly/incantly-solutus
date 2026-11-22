@@ -17,6 +17,7 @@ import { boardError, DONE, refusedMove } from '../core/errors';
 import type { BoardError, BoardResult } from '../core/errors';
 import { GlRaster } from './painter-gl';
 import { CanvasRaster, drawItems2D, fillTriangles, rgbCss } from './painter-2d';
+import { LiveGl } from './painter-live';
 import type { ImageLookup, TileRaster } from './painter-2d';
 
 type BackendState = 'gl' | 'lost' | 'canvas2d';
@@ -95,6 +96,10 @@ export class WebPainter implements BoardPainter {
   readonly #liveCanvas: HTMLCanvasElement;
   readonly #overlayCanvas: HTMLCanvasElement;
   readonly #topCanvas: HTMLCanvasElement;
+  /** The live layer's drawing: WebGL 2 where the browser has it (the stroke and its tail from typed arrays), else a 2D context. */
+  #liveGl: LiveGl | null = null;
+  /** The numbers a live frame hands to the GL layer, written again each frame. */
+  readonly #liveParams = new Float64Array(7);
   readonly #live: CanvasRenderingContext2D | null;
   readonly #overlay: CanvasRenderingContext2D | null;
   readonly #top: CanvasRenderingContext2D | null;
@@ -113,7 +118,15 @@ export class WebPainter implements BoardPainter {
   /** The live layer's marks: which stroke, how many groups are on it, the camera it was drawn under. */
   readonly ink = { serial: -1, drawn: 0, x: 0, y: 0, zoom: 1, dpr: 1 };
   readonly #counters = { tilesDrawn: 0, drawCalls: 0 };
+  /**
+   * What the tile canvas shows now: the camera, the size, how many tiles had been drawn and which tiles were put on it. A
+   * frame that would put the same picture there again does not (a stroke being drawn changes the live layer and the
+   * overlay, never the tiles, so it costs the GPU and the garbage collector nothing).
+   */
+  readonly #screen = { x: Number.NaN, y: Number.NaN, zoom: Number.NaN, dpr: Number.NaN, devW: 0, devH: 0, drawn: -1 };
+  readonly #composed: Tile[] = [];
   readonly #stops: (() => void)[] = [];
+  readonly #liveStops: (() => void)[] = [];
 
   constructor(options: WebPainterOptions = {}) {
     this.#options = options;
@@ -134,7 +147,9 @@ export class WebPainter implements BoardPainter {
     this.#topCanvas.style.pointerEvents = 'none';
     this.#overlayCanvas.style.pointerEvents = 'none';
     this.element.append(this.#tileCanvas, this.#liveCanvas, this.#topCanvas, this.#overlayCanvas);
-    this.#live = this.#context(this.#liveCanvas, { alpha: true, desynchronized: true });
+    if (options.canvas2dOnly !== true) this.#liveGl = LiveGl.open(this.#liveCanvas);
+    this.#live = this.#liveGl === null ? this.#context(this.#liveCanvas, { alpha: true, desynchronized: true }) : null;
+    if (this.#liveGl !== null) this.#watchLive();
     this.#top = this.#context(this.#topCanvas, { alpha: true });
     this.#overlay = this.#context(this.#overlayCanvas, { alpha: true });
     this.#openRaster();
@@ -146,6 +161,25 @@ export class WebPainter implements BoardPainter {
     } catch {
       return null;
     }
+  }
+
+  /** The live layer's GL context may be lost and come back: the layer is opened again on the same canvas and the stroke drawn again. */
+  #watchLive(): void {
+    const canvas = this.#liveCanvas;
+    const lost = (e: Event): void => e.preventDefault();
+    const restored = (): void => {
+      this.#liveGl = LiveGl.open(canvas);
+      this.#liveGl?.resize(this.size.devW, this.size.devH);
+      this.ink.serial = -1;
+      this.ink.drawn = 0;
+      this.#options.requestFrame?.();
+    };
+    canvas.addEventListener('webglcontextlost', lost);
+    canvas.addEventListener('webglcontextrestored', restored);
+    this.#liveStops.push(() => {
+      canvas.removeEventListener('webglcontextlost', lost);
+      canvas.removeEventListener('webglcontextrestored', restored);
+    });
   }
 
   /**
@@ -221,6 +255,7 @@ export class WebPainter implements BoardPainter {
   /** WebGL 2 failed: tell the host once and draw with Canvas 2D from now on. */
   #fallBack(error: BoardError): void {
     if (!this.#backend.send('fail')) return;
+    this.#screen.drawn = -1;
     this.tiles.lose();
     this.#raster?.dispose();
     this.#raster = null;
@@ -235,7 +270,7 @@ export class WebPainter implements BoardPainter {
 
   /** The context came back: build the GPU pieces again, or fall back. */
   #restore(): void {
-    if (!this.#backend.is('lost')) return;
+    if (this.#backend.state !== 'lost') return;
     this.#raster?.dispose();
     const gl = GlRaster.open(this.#tileCanvas);
     if (!gl.ok) {
@@ -243,6 +278,7 @@ export class WebPainter implements BoardPainter {
       return;
     }
     this.#raster = gl.value;
+    this.#screen.drawn = -1;
     gl.value.setImages(this.#images);
     this.#backend.send('contextRestored');
     this.tiles.invalidateAll();
@@ -272,10 +308,12 @@ export class WebPainter implements BoardPainter {
       c.style.width = `${w}px`;
       c.style.height = `${h}px`;
     }
-    // changing a canvas's size empties it: the live layer starts again from the stroke's first group
+    // changing a canvas's size empties it: the live layer starts again from the stroke's first group, and the tiles are composed again
+    this.#screen.drawn = -1;
     this.ink.drawn = 0;
     this.ink.serial = -1;
     this.#topDrawn = false;
+    this.#liveGl?.resize(devW, devH);
     const raster = this.#raster?.resize(devW, devH);
     if (raster !== undefined && !raster.ok) this.#fallBack(raster);
   }
@@ -299,18 +337,31 @@ export class WebPainter implements BoardPainter {
     return DONE;
   }
 
-  drawTile(tile: Tile, content: TileContent | null): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawTile');
-    if (this.#backend.is('lost')) return DONE;
+  /**
+   * Shows a tile. With `content` the tile's picture is drawn first; on the GPU a tile with many shapes stops after `until` (a
+   * `performance.now` time) and goes on the next time it is called with the same `content`, and it is drawn (fresh) when the
+   * last slice is. The Canvas 2D backup always draws a tile whole.
+   */
+  drawTile(tile: Tile, content: TileContent | null, until?: number): BoardResult<undefined> {
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawTile');
+    if (this.#backend.state === 'lost') return DONE;
     if (content !== null) {
       const raster = this.#raster;
       if (raster === null) return boardError('render_failed', 'The board has no way to draw.', { detail: { backend: this.#backend.state } });
-      let drawn = raster.render(tile, content);
-      if (!drawn.ok && this.#backend.is('gl')) {
+      // the Canvas 2D backup draws a tile whole: the shapes whose items are not made yet are made now
+      if (content.more !== undefined && !(raster instanceof GlRaster)) while (!content.more(1 << 20)) continue;
+      let drawn = raster.render(tile, content, until);
+      if (!drawn.ok && this.#backend.state === 'gl') {
         this.#fallBack(drawn);
+        // the slices not made yet are made now
+        if (content.more !== undefined) while (!content.more(1 << 20)) continue;
         drawn = this.#raster === null ? drawn : (this.#raster as TileRaster).render(tile, content);
       }
       if (!drawn.ok) return drawn;
+      if (raster instanceof GlRaster && raster.pending === tile && this.#backend.state === 'gl') {
+        if (tile.state === 'fresh' || tile.state === 'stale') this.#shown.push(tile);
+        return DONE;
+      }
       this.tiles.markDrawn(tile);
       this.#counters.tilesDrawn++;
     }
@@ -319,7 +370,7 @@ export class WebPainter implements BoardPainter {
   }
 
   drawItems(items: readonly DrawItem[]): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawItems');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawItems');
     this.#extra.push(...items);
     return DONE;
   }
@@ -330,7 +381,7 @@ export class WebPainter implements BoardPainter {
    * clears it.
    */
   drawOverCards(entries: readonly OverCardItem[]): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawOverCards');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawOverCards');
     const ctx = this.#top;
     if (ctx === null) return DONE;
     if (entries.length === 0 && !this.#topDrawn) return DONE;
@@ -363,13 +414,15 @@ export class WebPainter implements BoardPainter {
    * with one group of overlap so no seam shows. The groups not final yet are drawn on the overlay by `drawOverlay`.
    */
   drawLiveStroke(view: LiveStrokeView | null): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawLiveStroke');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawLiveStroke');
     const ctx = this.#live;
     if (view === null) {
-      if (this.#layer.is('inking')) this.abortLive();
+      if (this.#layer.state === 'inking') this.abortLive();
       return DONE;
     }
-    if (ctx === null || this.#layer.is('holding')) return DONE;
+    const gl = this.#liveGl;
+    if (gl !== null) return this.#drawLiveGl(gl, view);
+    if (ctx === null || this.#layer.state === 'holding') return DONE;
     this.#layer.send('ink');
     const f = this.frame;
     const ink = this.ink;
@@ -401,6 +454,52 @@ export class WebPainter implements BoardPainter {
     return DONE;
   }
 
+  /**
+   * The live layer on WebGL 2: the whole stroke so far, tail groups and predicted samples included, drawn again from the
+   * outliner's typed arrays each frame. (The Canvas 2D layer cannot take things back, so it draws only what is final and
+   * leaves the rest to the overlay; a canvas cleared and drawn again can.)
+   */
+  #drawLiveGl(gl: LiveGl, view: LiveStrokeView): BoardResult<undefined> {
+    if (this.#layer.state === 'holding') return DONE;
+    this.#layer.send('ink');
+    const f = this.frame;
+    const ink = this.ink;
+    if (view.serial !== ink.serial) {
+      ink.serial = view.serial;
+      this.#liveCanvas.style.opacity = String(view.opacity);
+      this.#liveCanvas.style.mixBlendMode = view.multiply ? 'multiply' : 'normal';
+    }
+    ink.x = f.x;
+    ink.y = f.y;
+    ink.zoom = f.zoom;
+    ink.dpr = f.dpr;
+    const o = view.outliner;
+    const { devW, devH, w, h } = this.size;
+    const k = f.zoom * f.dpr;
+    gl.clear();
+    const q = this.#liveParams;
+    q[0] = (2 * k) / devW;
+    q[1] = (-2 * k) / devH;
+    q[2] = (2 * (view.originX - f.x) * k) / devW - 1;
+    q[3] = 1 - (2 * (view.originY - f.y) * k) / devH;
+    q[4] = view.r;
+    q[5] = view.g;
+    q[6] = view.b;
+    gl.drawStroke(o.vertices, o.vertexCount, o.indices, o.indexCount, q);
+    const p = view.predicted;
+    if (p !== null && p.count > 1) {
+      q[0] = Math.max(1, view.size * f.zoom * 0.7);
+      q[1] = w;
+      q[2] = h;
+      q[3] = view.r;
+      q[4] = view.g;
+      q[5] = view.b;
+      q[6] = 0.5;
+      gl.drawTail(p.xy, p.count, q);
+    }
+    return DONE;
+  }
+
   /** The stroke ended and was stored: the live layer keeps showing it until the tile that holds it is drawn. */
   releaseLive(): void {
     sendIfAble(this.#layer, 'release');
@@ -417,6 +516,7 @@ export class WebPainter implements BoardPainter {
   }
 
   #clearLive(): void {
+    this.#liveGl?.clear();
     const ctx = this.#live;
     if (ctx !== null) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -427,7 +527,7 @@ export class WebPainter implements BoardPainter {
   }
 
   drawOverlay(overlay: OverlayItems): BoardResult<undefined> {
-    if (!this.#frameState.is('drawing')) return this.#outside('drawOverlay');
+    if (this.#frameState.state !== 'drawing') return this.#outside('drawOverlay');
     const ctx = this.#overlay;
     if (ctx === null) return DONE;
     const { dpr, zoom, x: camX, y: camY } = this.frame;
@@ -609,15 +709,41 @@ export class WebPainter implements BoardPainter {
   endFrame(): BoardResult<undefined> {
     if (!this.#frameState.send('end')) return boardError('bad_argument', 'There is no frame to end.', { detail: { field: 'endFrame' } });
     const raster = this.#raster;
-    if (raster === null || this.#backend.is('lost')) return DONE;
+    if (raster === null || this.#backend.state === 'lost') return DONE;
     const { x, y, zoom, dpr } = this.frame;
+    if (this.#unchanged(x, y, zoom, dpr)) return DONE;
     let composed = raster.compose(this.#shown, x, y, zoom, dpr);
-    if (!composed.ok && this.#backend.is('gl')) {
+    if (!composed.ok && this.#backend.state === 'gl') {
       this.#fallBack(composed);
       composed = this.#raster === null ? composed : (this.#raster as TileRaster).compose(this.#shown, x, y, zoom, dpr);
     }
+    if (composed.ok) this.#remember(x, y, zoom, dpr);
+    else this.#screen.drawn = -1;
     if (raster instanceof GlRaster) this.#counters.drawCalls = raster.drawCalls;
     return composed;
+  }
+
+  /** True when the tile canvas already shows what composing the shown tiles would draw. */
+  #unchanged(x: number, y: number, zoom: number, dpr: number): boolean {
+    const s = this.#screen;
+    const shown = this.#shown;
+    const was = this.#composed;
+    if (s.drawn !== this.#counters.tilesDrawn || s.x !== x || s.y !== y || s.zoom !== zoom || s.dpr !== dpr || s.devW !== this.size.devW || s.devH !== this.size.devH || was.length !== shown.length) return false;
+    for (let i = 0; i < shown.length; i++) if (was[i] !== shown[i]) return false;
+    return true;
+  }
+
+  #remember(x: number, y: number, zoom: number, dpr: number): void {
+    const s = this.#screen;
+    s.x = x;
+    s.y = y;
+    s.zoom = zoom;
+    s.dpr = dpr;
+    s.devW = this.size.devW;
+    s.devH = this.size.devH;
+    s.drawn = this.#counters.tilesDrawn;
+    this.#composed.length = 0;
+    for (const tile of this.#shown) this.#composed.push(tile);
   }
 
   #outside(call: string): BoardResult<never> {
@@ -626,6 +752,9 @@ export class WebPainter implements BoardPainter {
 
   dispose(): void {
     for (const stop of this.#stops.splice(0)) stop();
+    for (const stop of this.#liveStops.splice(0)) stop();
+    this.#liveGl?.dispose();
+    this.#liveGl = null;
     this.tiles.clear();
     this.#raster?.dispose();
     this.#raster = null;

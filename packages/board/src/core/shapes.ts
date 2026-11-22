@@ -80,7 +80,12 @@ export function leavesOf(store: Store, group: ShapeRecord): string[] {
 /** Selection ids with every group replaced by its leaves, and shapes of a group that are alone completed to the whole group. */
 export function expandGroups(store: Store, ids: readonly string[]): string[] {
   const out = new Set<string>();
-  for (const id of ids) for (const s of selectionFor(store, id)) out.add(s);
+  for (const id of ids) {
+    // a shape that is no group and has no parent stands alone: no list to make for it
+    const own = shapeOf(store, id);
+    if (own !== undefined && own.parent === null && own.kind !== 'group') out.add(id);
+    else for (const s of selectionFor(store, id)) out.add(s);
+  }
   return [...out];
 }
 
