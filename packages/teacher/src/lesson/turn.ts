@@ -9,8 +9,10 @@
  * learner who asks to end the lesson ("stop", "end the lesson", "that's all") gets a closing turn that only summarises,
  * with `done` carrying `ended: true`; only the learner ends a lesson, so the model has no tool for it.
  *
- * The memory is written as the turn goes (the plan, the step), and the turn is recorded in it when it ends with `done` and
- * was not stopped. Nothing here throws. No DOM, timers, network or `Date`.
+ * The memory is written as the turn goes (the plan, the step), and the turn is recorded in it when it ends: with `done` it is
+ * recorded as it was; a turn that was stopped (the signal aborted, or the consumer closed the stream) is recorded with the
+ * learner's words and what the teacher had said so far, marked `(interrupted)` (LR-3); a turn that ends with an error is not.
+ * Nothing here throws. No DOM, timers, network or `Date`.
  */
 import { streamErrorOf } from '../errors';
 import type { TurnRequest } from '../prompt/build';
@@ -24,7 +26,7 @@ import type { BoardCheck, BoardPort, Target } from '../tools/types';
 import type { ModelClient } from '../loop/model';
 import { runTurn } from '../loop/turn';
 import type { TurnEvent, TurnLimits } from '../loop/turn';
-import { historyOf, memoryBlock, newMemory, recordTurn } from './memory';
+import { historyOf, memoryBlock, newMemory, recordInterrupted, recordTurn } from './memory';
 import type { LessonMemory } from './memory';
 import { lessonTools } from './tools';
 
@@ -158,31 +160,50 @@ async function* run(o: LessonTurnOptions): AsyncGenerator<TurnEvent> {
       yield { say: sentence };
     }
   };
-  for await (const ev of runTurn({
-    job: 'lesson',
-    client: o.client,
-    toolset: tools.value,
-    target: lessonTarget(o),
-    request,
-    now: o.now,
-    ...(o.signal !== undefined ? { signal: o.signal } : {}),
-    ...(o.limits !== undefined ? { limits: o.limits } : {}),
-  })) {
-    if ('say' in ev) {
-      for (const sentence of splitter.push(ev.say)) {
-        said.push(sentence);
-        yield { say: sentence };
+  // how the turn ended, for the memory: recorded (whole, or cut short: LR-3), or ended with an error (nothing kept), or still open
+  let outcome: 'open' | 'recorded' | 'failed' = 'open';
+  // the learner spoke over the turn, a newer turn replaced it, the connection closed or the time ran out: the next turn must
+  // know what was asked and how far the answer went. This runs the moment the signal fires, so the newer turn, which builds
+  // its prompt before this one has seen the stop, already finds it in the memory.
+  const cutShort = (): void => {
+    if (outcome !== 'open' || ending) return;
+    outcome = 'recorded';
+    recordInterrupted(o.memory, o.text, said.join(' '));
+  };
+  o.signal?.addEventListener('abort', cutShort, { once: true });
+  try {
+    for await (const ev of runTurn({
+      job: 'lesson',
+      client: o.client,
+      toolset: tools.value,
+      target: lessonTarget(o),
+      request,
+      now: o.now,
+      ...(o.signal !== undefined ? { signal: o.signal } : {}),
+      ...(o.limits !== undefined ? { limits: o.limits } : {}),
+    })) {
+      if ('say' in ev) {
+        for (const sentence of splitter.push(ev.say)) {
+          said.push(sentence);
+          yield { say: sentence };
+        }
+        continue;
       }
-      continue;
+      // anything but words ends the sentence being written: a reply's text comes before its tool calls
+      yield* flush();
+      if ('done' in ev && o.signal?.aborted !== true) {
+        if (!ending) recordTurn(o.memory, o.text, said.join(' '));
+        outcome = 'recorded';
+        yield ending ? { ...ev, ended: true } : ev;
+        continue;
+      }
+      if ('error' in ev) outcome = 'failed';
+      yield ev;
     }
-    // anything but words ends the sentence being written: a reply's text comes before its tool calls
-    yield* flush();
-    if ('done' in ev && o.signal?.aborted !== true) {
-      if (!ending) recordTurn(o.memory, o.text, said.join(' '));
-      yield ending ? { ...ev, ended: true } : ev;
-      continue;
-    }
-    yield ev;
+  } finally {
+    // a turn whose stream the consumer closed, or whose signal was already aborted, is cut short too
+    o.signal?.removeEventListener('abort', cutShort);
+    cutShort();
   }
 }
 

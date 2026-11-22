@@ -219,14 +219,22 @@ describe('POST /v1/lesson/end (design 7, errors.md)', () => {
 });
 
 describe('checks answer with an HTTP status; after the stream opens every error is its last event (errors.md, review-r2 TR-14)', () => {
-  it('no key: model_unavailable, 503, "The AI is not set up.", no model call', async () => {
+  it('no key: /start is model_unavailable, 503, "The AI is not set up.", no lesson made and no model call (LR-5)', async () => {
     const b = await bootVoice({ key: false });
     const s = await start(b);
-    const id = s.status === 200 ? (s.json as { lessonId: string }).lessonId : '11111111-2222-4333-8444-555555555555';
-    const r = s.status === 200 ? await turn(b, id, 'Teach me') : s;
+    expect(s.status).toBe(503);
+    expect(s.json).toMatchObject({ ok: false, kind: 'model_unavailable', message: 'The AI is not set up.' });
+    expect(b.run.server.lessons.size).toBe(0);
+    const r = await turn(b, '11111111-2222-4333-8444-555555555555', 'Teach me');
     expect(r.status).toBe(503);
     expect(r.json).toMatchObject({ ok: false, kind: 'model_unavailable', message: 'The AI is not set up.' });
     expect(b.fake.calls).toHaveLength(0);
+  });
+
+  it('no key: a bad /start body is still the 400 that names the field (the fields are read first)', async () => {
+    const b = await bootVoice({ key: false });
+    const s = await post(b, '/v1/lesson/start', { topic: 7, board: BOARD });
+    expect(s.status).toBe(400);
   });
 
   it('a model that fails after the checks passed: 200, and the error is the last event of the stream', async () => {
@@ -501,16 +509,24 @@ describe('what /start holds, what the log keeps, the numbers over many calls', (
     const b = await bootVoice({ env: { RATE_PER_MINUTE: '100000', DAILY_MODEL_CALLS: '100000' }, answers: () => says('Next idea. Ready?') });
     const id = await begin(b);
     let last: Reply | undefined;
+    let says199 = '';
     for (let i = 1; i <= 200; i++) {
       last = await turn(b, id, `turn number ${i}`);
       expect(last.status, `turn ${i}`).toBe(200);
       if (i === 199) {
+        says199 = last.text;
         const held = b.run.server.lessons.check(id, 'x');
         expect('memory' in held && held.memory.turns.length).toBe(6);
         expect(Buffer.byteLength(JSON.stringify('memory' in held ? held.memory : {}))).toBeLessThan(64 * 1024);
       }
     }
-    expect(last?.events[last.events.length - 1]).toEqual({ done: true, ended: true });
+    const tail = last?.events.slice(-3);
+    // the server says one closing sentence before the `done` of the 200th turn, which carries ended: true (LR-4)
+    expect(tail?.[tail.length - 1]).toEqual({ done: true, ended: true });
+    expect(tail?.[tail.length - 2]).toEqual({ say: "That's the end of this lesson. Start a new one to go on." });
+    expect(last?.events.filter((e) => 'ended' in e)).toHaveLength(1);
+    // turn 199 did not end the lesson and had no such sentence
+    expect(says199).not.toContain("That's the end of this lesson. Start a new one to go on.");
     const after = await turn(b, id, 'one more');
     expect(after.status).toBe(404);
     expect(after.json).toMatchObject({ kind: 'lesson_unknown' });

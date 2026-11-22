@@ -67,13 +67,26 @@ export const stateRefusalReported = {
     schema: [],
     messages: {
       silent: '`new StateMachine(table, initial)` needs a third argument, `onRefused`, so a refused move is reported (the board through its `onError` as `internal`, tiptap through `reportError`).',
+      maybeSilent: 'The third argument of `new StateMachine` can be `undefined` or `null`, so a refused move can be silent. Pass a function that always reports (the server through its log as `internal`).',
     },
   },
   create(context) {
+    /** True when the expression can be nothing: `undefined`, `null`, `void 0`, or a choice with such a branch. */
+    const canBeNothing = (node) => {
+      if (!node) return false;
+      if (node.type === 'Identifier') return node.name === 'undefined';
+      if (node.type === 'Literal') return node.value === null && node.raw === 'null';
+      if (node.type === 'UnaryExpression') return node.operator === 'void';
+      if (node.type === 'ConditionalExpression') return canBeNothing(node.consequent) || canBeNothing(node.alternate);
+      if (node.type === 'LogicalExpression') return canBeNothing(node.right) || (node.operator !== '??' && canBeNothing(node.left));
+      if (node.type === 'TSAsExpression' || node.type === 'TSNonNullExpression' || node.type === 'TSSatisfiesExpression') return canBeNothing(node.expression);
+      return false;
+    };
     return {
       NewExpression(node) {
         if (node.callee.type !== 'Identifier' || node.callee.name !== 'StateMachine') return;
         if (node.arguments.length < 3) context.report({ node, messageId: 'silent' });
+        else if (canBeNothing(node.arguments[2])) context.report({ node, messageId: 'maybeSilent' });
       },
     };
   },

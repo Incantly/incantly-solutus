@@ -3,9 +3,9 @@
  * agent.md 1; requirements R2, R3; plan round 1 item 5; TR-9, TR-38, TR-49). Public exports only; no network.
  */
 import { describe, expect, it } from 'vitest';
-import { TURN_LIMITS, isEndRequest, memoryBlock, newMemory } from '../../src/index';
+import { INTERRUPTED, TURN_LIMITS, fakeModel, isEndRequest, lessonTurn, memoryBlock, newMemory, recordInterrupted } from '../../src/index';
 import type { ChatRequest, TurnEvent } from '../../src/index';
-import { modelItem } from './board-helpers';
+import { PAGE, modelItem } from './board-helpers';
 import { PLAN_5, finalOf, lessonEvents, newPage, planReply, runLesson, sentActions, says, textReply, write } from './lesson-helpers';
 
 const FIRST_TURN = [
@@ -139,10 +139,66 @@ describe('the memory comes back as the next turn\'s context (design 4, TR-9, TR-
     expect(lessonEvents(events).map((l) => l.step)).toEqual([2]);
   });
 
-  it('a turn the client aborted is not in the memory\'s turns (nothing half-said is kept as said)', async () => {
+  // LR-3 (review-r1): a turn that was stopped is in the memory, so the next turn knows what the learner asked
+  it('a turn whose signal was already aborted is in the memory: the learner\'s words and "(interrupted)" (LR-3)', async () => {
     const controller = new AbortController();
     controller.abort();
     const { memory } = await runLesson('Teach me about linear algebra', FIRST_TURN, { signal: controller.signal });
+    expect(memory.turns).toEqual([{ learner: 'Teach me about linear algebra', teacher: INTERRUPTED }]);
+    expect(INTERRUPTED).toBe('(interrupted)');
+  });
+
+  it('a stream the consumer closes after the first sentence keeps the learner\'s words and what was said so far, marked (interrupted) (LR-3)', async () => {
+    const memory = newMemory();
+    const model = fakeModel([textReply('A vector is an arrow. It has a size. And a direction. Shall we go on?')]);
+    const events = lessonTurn({ client: model, memory, board: { page: PAGE, items: [], more: 0 }, text: 'What is a vector?', now: () => 0 })[Symbol.asyncIterator]();
+    const first = await events.next();
+    expect(first.value).toEqual({ say: 'A vector is an arrow.' });
+    await events.return?.();
+    expect(memory.turns).toEqual([{ learner: 'What is a vector?', teacher: `A vector is an arrow. ${INTERRUPTED}` }]);
+  });
+
+  it('a signal that fires in the middle is recorded at once, before the stream has seen it, so a newer turn already finds it (LR-3)', async () => {
+    const memory = newMemory();
+    const controller = new AbortController();
+    const model = fakeModel([textReply('A vector is an arrow. It has a size. Shall we go on?')]);
+    const events = lessonTurn({ client: model, memory, board: { page: PAGE, items: [], more: 0 }, text: 'What is a vector?', now: () => 0, signal: controller.signal })[Symbol.asyncIterator]();
+    await events.next();
+    controller.abort();
+    expect(memory.turns).toEqual([{ learner: 'What is a vector?', teacher: `A vector is an arrow. ${INTERRUPTED}` }]);
+    // the stream ends, and the turn is not recorded a second time
+    for (let e = await events.next(); e.done !== true; e = await events.next()) void e;
+    expect(memory.turns).toHaveLength(1);
+  });
+
+  it('the next turn is told what was asked and that the answer was cut short (LR-3)', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const first = await runLesson('What is a vector?', FIRST_TURN, { signal: controller.signal });
+    const second = await runLesson('Sorry, go on', [textReply('A vector is an arrow. Ready?')], { memory: first.memory });
+    const request = second.model.requests[0] as ChatRequest;
+    expect(request.messages.map((m) => m.content).join('\n')).toContain('What is a vector?');
+    expect(request.messages.filter((m) => m.role === 'assistant').map((m) => m.content).join(' ')).toContain(INTERRUPTED);
+  });
+
+  it('a long answer cut short keeps the mark: what was said is cut, "(interrupted)" is not', () => {
+    const memory = newMemory();
+    recordInterrupted(memory, 'question', 'word '.repeat(400));
+    const teacher = memory.turns[0]?.teacher ?? '';
+    expect(teacher.length).toBeLessThanOrEqual(800);
+    expect(teacher.endsWith(` ${INTERRUPTED}`)).toBe(true);
+  });
+
+  it('an end request is not recorded, whole or cut short: the lesson is over', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { memory } = await runLesson('stop the lesson', [textReply('Goodbye.')], { signal: controller.signal });
+    expect(memory.turns).toEqual([]);
+  });
+
+  it('a turn that ends with an error is not recorded', async () => {
+    const { memory, events } = await runLesson('Teach me about linear algebra', FIRST_TURN, { limits: { modelCalls: 1 } });
+    expect(finalOf(events)).toHaveProperty('error');
     expect(memory.turns).toEqual([]);
   });
 });

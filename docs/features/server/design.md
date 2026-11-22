@@ -9,6 +9,7 @@
 | Prompt to figure, edit a figure | `POST /v1/figure/draw` | Tiptap `httpTransport` (`packages/tiptap/src/ai.ts`) |
 | Circle to ask, talking agent | `POST /v1/board/ask` | Board `httpAgentTransport` (`packages/board/src/web/agent-http.ts`) |
 | Live voice lesson | `POST /v1/teach` | New, in the studio |
+| Conversation lesson (plan, memory, turns) | `POST /v1/lesson/start`, `/v1/lesson/turn`, `/v1/lesson/end` | Client in `apps/studio/src/lesson-client.ts`; the screen is round 2 (lesson design 7) |
 | The teacher's voice | `POST /v1/speech` | New, in the studio |
 | Check lines, no model | `POST /v1/check` | New |
 | SVG of a script, no model | `POST /v1/export/svg` | New |
@@ -25,6 +26,7 @@ packages/server/src/
   providers/     ModelClient for OpenRouter, SSE reader, fallback across models
   limits/        rate limits per client, daily budget, concurrency
   jobs/          one file per endpoint: builds the teacher turn and its target, maps events to the stream
+  lessons/       the lessons held in memory: `LessonStore`, `Lesson` and `LESSON_MACHINE` (lesson design 4, 6)
   log.ts         structured log lines with keys and bodies removed
   main.ts        start the server
   index.ts       createServer(options) for tests and hosts
@@ -94,12 +96,14 @@ Every model endpoint answers `200` with `content-type: application/x-ndjson`, on
 | `/v1/figure/draw` | `{ "lines": [...] }`, then `{ "done": true, "notices"? }` |
 | `/v1/board/ask` | `{ "say": "..." }` pieces (a talk's words as they come; a circle's in one piece before `done`, only when it drew something), `{ "actions": [...] }`, then `{ "done": true, "notices"? }` |
 | `/v1/teach` | `{ "say": "..." }`, `{ "lines": [...] }`, `{ "actions": [...] }`, `{ "control": { "op": "pause" \| "resume" \| "seek", "t"? } }`, then `{ "done": true, "notices"? }` |
+| `/v1/lesson/turn` | `{ "say": "..." }`, `{ "actions": [...] }`, `{ "lesson": { "plan", "step", "state" } }`, then `{ "done": true, "ended"?, "notices"? }` |
 | any | `{ "error": { "kind", "message", "hint"?, "detail"? } }`, which ends the stream |
 
 - When the client closes the connection, the server aborts the model call at once.
 - A request that fails a check answers with an HTTP status and one JSON error body: `400`, `413`, `403`, `429` with `retry-after`, and `503` when no key is set. The checks of a model route are the method, the origin, the size, the JSON, the fields, the rate limit, the daily budget and the key. Once they pass, the answer is `200` NDJSON, and every later error (`model_busy`, `model_timeout`, `model_bad_output`, a failed model, the turn limit) is the stream's last event. A model route never answers a model error with an HTTP status.
 - `done` carries `notices` when the teacher reported any (`retry_spent` for a line left out, `stream_cut` for a cut answer); a client that does not read them still sees `done`.
 - A request that a newer one from the same client replaced ends with `{ "error": { "kind": "superseded" } }`, not `done`, so the client does not take a half figure for a finished one.
+- `/v1/lesson/start` takes `{ topic?, mode?, board }` and answers `200` `{ lessonId }` (a random id, with no model call; `model_unavailable` when no key is set). `/v1/lesson/turn` takes `{ lessonId, text, board }`, takes the client's model slot as `/v1/teach` does, and streams the teacher's turn of the `lesson` job; the server keeps what was said before (the memory, lesson design 4), so the client sends only the learner's words and the board in view. A check that fails answers with an HTTP status (`lesson_unknown` 404, `lesson_busy` 409 for a turn from another client, `lesson_full` 503). `/v1/lesson/end` takes `{ lessonId }`, answers `200` `{ ok: true }` and stops a turn that still runs. `/start` counts as one request in the client's minute and `/end` as a tenth. The lesson's states, limits and memory are in `docs/features/lesson/design.md` 4, 6 and 7.
 - `/v1/check` answers one JSON body: the per-line results of the kernel, as `draw` gives them.
 - `/v1/export/svg` answers `image/svg+xml`, painted by the SDK export.
 - `/v1/speech` takes `{ "text": "…", "instructions"? }`, one sentence of at most 500 characters (`instructions` at most 200), and streams the audio back as it comes from OpenRouter's `POST /api/v1/audio/speech`: `audio/mpeg` from Fish (`response_format: "mp3"`), or `audio/pcm` with `x-sample-rate` from HeyGen (`response_format: "pcm"` with the voice `OPENROUTER_SPEECH_VOICE`; the rate is the provider's `x-sample-rate` header, else the `rate=` of its content type, else 24,000). A model whose id starts with `heygen/` is asked for PCM and the voice; any other is asked for MP3 and gets `instructions`. It falls back across `OPENROUTER_SPEECH_MODELS` like the chat models (429, 5xx, a network error, no first byte within 15 s; 60 s skip after a 429), counts toward the client's rate limit at one tenth of a model request, takes no model slot and no model call of the day, and answers `model_busy`, `model_timeout` or `model_unavailable` as an HTTP error (nothing is streamed before the first byte), so the studio uses the browser's voice. A closed connection aborts the provider request. The head goes out with the first byte of audio; an error after that ends the response where it is.

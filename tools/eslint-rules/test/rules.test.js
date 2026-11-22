@@ -158,6 +158,13 @@ tester.run('state-no-shadow-null', rules['state-no-shadow-null'], {
     `class A { #m = new StateMachine(A_MACHINE, 'idle'); #drawing: { page: string } | null = null;
       begin(p: string) { this.#m.send('begin'); this.#drawing = { page: p }; }
       end() { this.#m.send('end'); this.#drawing = void 0; } }`,
+    // a record that means "none" is cleared by setting it back
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = NO_RUN;
+      begin(r: Run) { this.#m.send('begin'); this.#run = r; }
+      end() { this.#m.send('end'); this.#run = NO_RUN; } }`,
+    // a field that starts as an ordinary constant is not a sentinel
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = FIRST_RUN;
+      begin(r: Run) { this.#m.send('begin'); this.#run = r; } }`,
   ],
   invalid: [
     {
@@ -184,6 +191,19 @@ tester.run('state-no-shadow-null', rules['state-no-shadow-null'], {
         begin(a: string, b: number) { this.#m.send('begin'); this.#a = a; this.#b = b; }
         end() { this.#m.send('end'); this.#a = null; } }`,
       errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // the "null" is a record named NO_*: set when the machine begins, never put back
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = NO_RUN;
+        begin(r: Run) { this.#m.send('begin'); this.#run = r; }
+        end() { this.#m.send('end'); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // NONE_, EMPTY_ and IDLE_ count the same
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); a = NONE_YET; b = EMPTY_SET; c = IDLE_JOB;
+        start(x: X) { this.m.send('start'); this.a = x; this.b = x; this.c = x; } }`,
+      errors: [{ messageId: 'shadow' }, { messageId: 'shadow' }, { messageId: 'shadow' }],
     },
   ],
 });
@@ -328,11 +348,20 @@ tester.run('state-refusal-reported', rules['state-refusal-reported'], {
     "const m = new StateMachine(A_MACHINE, 'idle', (from, event) => report(from, event));",
     "class A { #m = new StateMachine(A_MACHINE, 'idle', this.#refused); #refused = () => {}; }",
     "const m = new Other(A_MACHINE, 'idle');",
+    // a function that is always there
+    "const m = new StateMachine(A_MACHINE, 'idle', (from, event) => log(from, event));",
+    "const m = new StateMachine(A_MACHINE, 'idle', onFault ?? ((from, event) => log(from, event)));",
   ],
   invalid: [
     { code: "const m = new StateMachine(A_MACHINE, 'idle');", errors: [{ messageId: 'silent' }] },
     { code: "class A { #m = new StateMachine<S, E>(A_MACHINE, 'idle'); }", errors: [{ messageId: 'silent' }] },
     { code: 'const m = new StateMachine(A_MACHINE);', errors: [{ messageId: 'silent' }] },
+    // a third argument that can be nothing is as silent as none
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', undefined);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', null);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', void 0);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', f === undefined ? undefined : (a, b) => f(a, b));", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', ok ? (a, b) => f(a, b) : null);", errors: [{ messageId: 'maybeSilent' }] },
   ],
 });
 

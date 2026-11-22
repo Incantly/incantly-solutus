@@ -71,6 +71,20 @@ export function recordTurn(memory: LessonMemory, learner: string, teacher: strin
   while (memory.turns.length > LESSON_LIMITS.turns) memory.turns.shift();
 }
 
+/** The mark the next turn reads after what the teacher said of a turn that was cut short. */
+export const INTERRUPTED = '(interrupted)';
+
+/**
+ * Adds a turn that was stopped (the learner spoke over it, a newer turn replaced it, the connection closed): the learner's
+ * words, and what the teacher had said so far with the mark `(interrupted)` after it, so the next turn knows what was asked and
+ * that the answer was not finished. The mark is never cut off by the size limit.
+ */
+export function recordInterrupted(memory: LessonMemory, learner: string, said: string): void {
+  const room = LESSON_LIMITS.turnChars - INTERRUPTED.length - 1;
+  const so = said.trim() === '' ? '' : `${clip(said, room)} `;
+  recordTurn(memory, learner, `${so}${INTERRUPTED}`);
+}
+
 /** The kept turns as the history of the next request (the teacher's words are its own, kept on the server). */
 export function historyOf(memory: LessonMemory): HistoryItem[] {
   return memory.turns.flatMap((t): HistoryItem[] => [{ role: 'user', text: t.learner }, ...(t.teacher === '' ? [] : [{ role: 'assistant' as const, text: t.teacher }])]);

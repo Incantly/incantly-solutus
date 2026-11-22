@@ -39,7 +39,7 @@ export type { LiveTurnOptions } from './loop/live';
 export { lessonTurn, isEndRequest } from './lesson/turn';
 export type { LessonTurnOptions } from './lesson/turn';
 export { lessonTools } from './lesson/tools';
-export { LESSON_LIMITS, MEMORY_TOKENS, historyOf, lessonView, memoryBlock, newMemory, recordTurn } from './lesson/memory';
+export { INTERRUPTED, LESSON_LIMITS, MEMORY_TOKENS, historyOf, lessonView, memoryBlock, newMemory, recordInterrupted, recordTurn } from './lesson/memory';
 export type { LessonMemory, LessonTurnRecord } from './lesson/memory';
 export { RETRY_FAILURES, STREAK_LIMIT, lineKey } from './loop/book';
 

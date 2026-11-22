@@ -383,3 +383,83 @@ describe('the lesson walks the machine (design 6)', () => {
     expect(lesson.state).toBe('ended');
   });
 });
+
+describe('the running turn follows the machine and nothing else (LR-1, review-r1)', () => {
+  it('a turn that is refused sets nothing: the running turn keeps its client and its number', () => {
+    const { store } = rig({ onFault: () => undefined });
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    const first = lesson.begin('a', () => undefined, 0);
+    expect(lesson.begin('b', () => undefined, 0)).toBe(0);
+    expect(lesson.client).toBe('a');
+    expect(lesson.current(first)).toBe(true);
+    expect(lesson.turns).toBe(1);
+  });
+
+  it('the client is "" and no turn is current after each move that leaves a running state: finish, interrupt, end', () => {
+    const { store } = rig();
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    const t1 = turnOf(store.begin(lesson, 'a', () => undefined));
+    expect(lesson.client).toBe('a');
+    store.finish(lesson, t1, false);
+    expect(lesson.client).toBe('');
+    expect(lesson.current(t1)).toBe(false);
+
+    const t2 = turnOf(store.begin(lesson, 'b', () => undefined));
+    expect(lesson.client).toBe('b');
+    lesson.interrupt(0);
+    expect(lesson.state).toBe('waiting');
+    expect(lesson.client).toBe('');
+    expect(lesson.current(t2)).toBe(false);
+
+    const t3 = turnOf(store.begin(lesson, 'c', () => undefined));
+    expect(lesson.client).toBe('c');
+    lesson.end();
+    expect(lesson.state).toBe('ended');
+    expect(lesson.client).toBe('');
+    expect(lesson.current(t3)).toBe(false);
+  });
+
+  it('the older turn is stopped when a newer one of the same client begins, and only the newer is current', () => {
+    const { store } = rig();
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    let stopped = 0;
+    const t1 = turnOf(store.begin(lesson, 'a', () => (stopped += 1)));
+    const t2 = turnOf(store.begin(lesson, 'a', () => undefined));
+    expect(stopped).toBe(1);
+    expect(lesson.current(t1)).toBe(false);
+    expect(lesson.current(t2)).toBe(true);
+    expect(store.finish(lesson, t1, false).current).toBe(false);
+    expect(lesson.state).toBe('planning');
+  });
+});
+
+describe('a refused move of a lesson is never silent (LR-2, review-r1)', () => {
+  it('with no onFault given, the store still counts the refusal', () => {
+    const { store } = rig();
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    expect(store.refusals).toBe(0);
+    expect(lesson.begin('a', () => undefined, 0)).toBeGreaterThan(0);
+    expect(lesson.begin('a', () => undefined, 0)).toBe(0);
+    expect(store.refusals).toBe(1);
+    expect(lesson.state).toBe('planning');
+  });
+
+  it('with onFault given, it hears the same refusal, and the count agrees', () => {
+    const faults: string[] = [];
+    const { store } = rig({ onFault: (from, event) => faults.push(`${from}/${event}`) });
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    lesson.begin('a', () => undefined, 0);
+    lesson.begin('a', () => undefined, 0);
+    expect(faults).toHaveLength(1);
+    expect(store.refusals).toBe(1);
+  });
+
+  it('a lesson that ends and is ended again reports the second end', () => {
+    const { store } = rig();
+    const lesson = lessonOf(store.start('x', 'graphing'));
+    lesson.end();
+    expect(store.refusals).toBe(0);
+    lesson.end();
+    expect(store.refusals).toBe(1);
+  });
+});

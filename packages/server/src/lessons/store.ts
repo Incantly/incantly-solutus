@@ -43,7 +43,7 @@ export interface StoreOptions {
   readonly limits?: Partial<LessonLimits>;
   /** Makes a lesson id; default `crypto.randomUUID`. */
   readonly newId?: () => string;
-  /** Hears a refused move of a lesson's machine (a bug). */
+  /** Hears a refused move of a lesson's machine (a bug). The store counts every refusal itself (`refusals`), whether this is given or not. */
   readonly onFault?: (from: string, event: string) => void;
 }
 
@@ -54,7 +54,7 @@ interface Run {
   readonly stop: () => void;
 }
 
-/** The record of a lesson with no turn running. */
+/** The record of a lesson with no turn running. It is read only while the machine is in a running state (`planning`, `teaching`). */
 const NO_RUN: Run = { turn: 0, client: '', stop: () => undefined };
 
 /** One lesson: its machine, its memory and what the limits need. */
@@ -62,6 +62,11 @@ export class Lesson {
   /** The memory the lesson tools write into and the prompt reads. */
   readonly memory: LessonMemory;
   private readonly machine: StateMachine<LessonState, LessonMove>;
+  /**
+   * The turn that runs. The machine says whether one does (`running`); this record is its data, set by `enter` when the
+   * machine moves into a running state and put back to `NO_RUN` by `leave` when it moves out, and read only through a
+   * getter that asks the machine first, so the two cannot disagree (LR-1).
+   */
   private run: Run = NO_RUN;
   /** Turns begun; a turn's number, never reused. */
   private began = 0;
@@ -74,11 +79,12 @@ export class Lesson {
     readonly mode: string,
     topic: string,
     at: number,
-    onFault: ((from: string, event: string) => void) | undefined,
+    /** Hears a refused move of the lesson's machine (a bug): the store passes its own reporter, so a refusal is never silent. */
+    onFault: (from: string, event: string) => void,
   ) {
     this.memory = newMemory(topic);
     this.touched = at;
-    this.machine = new StateMachine(LESSON_MACHINE, 'new', onFault === undefined ? undefined : (from, event) => onFault(from, event));
+    this.machine = new StateMachine(LESSON_MACHINE, 'new', (from, event) => onFault(from, event));
   }
 
   get state(): LessonState {
@@ -92,7 +98,7 @@ export class Lesson {
 
   /** The client of the running turn; '' when none runs. */
   get client(): string {
-    return this.run.client;
+    return this.running ? this.run.client : NO_RUN.client;
   }
 
   /** Turns begun so far. */
@@ -107,24 +113,38 @@ export class Lesson {
 
   /** True when `turn` is the turn that runs now. */
   current(turn: number): boolean {
-    return turn !== 0 && this.run.turn === turn && this.running;
+    return turn !== 0 && this.running && this.run.turn === turn;
+  }
+
+  /** The one place a run is set: the machine moves into a running state with `event`. False, and nothing set, when it refuses. */
+  private enter(event: 'begin' | 'speak' | 'replan', run: Run): boolean {
+    if (!this.machine.send(event)) return false;
+    this.run = run;
+    return true;
+  }
+
+  /** The one place a run is cleared: the machine moves out of the running states with `event`. False, and nothing cleared, when it refuses. */
+  private leave(event: 'turnEnd' | 'end'): boolean {
+    if (!this.machine.send(event)) return false;
+    this.run = NO_RUN;
+    return true;
   }
 
   /** A turn begins. Returns its number, or 0 when the machine refused (a turn is running, or the lesson ended). */
   begin(client: string, stop: () => void, at: number): number {
-    const event: LessonMove = this.machine.is('new') ? 'begin' : this.memory.plan.length > 0 ? 'speak' : 'replan';
-    if (!this.machine.send(event)) return 0;
-    this.began += 1;
-    this.run = { turn: this.began, client, stop };
+    const event = this.machine.is('new') ? 'begin' : this.memory.plan.length > 0 ? 'speak' : 'replan';
+    const turn = this.began + 1;
+    if (!this.enter(event, { turn, client, stop })) return 0;
+    this.began = turn;
     this.touched = at;
-    return this.began;
+    return turn;
   }
 
   /** The turn that runs is replaced: it is stopped and counts as ended, so a new one can begin. */
   interrupt(at: number): void {
     if (!this.running) return;
     this.run.stop();
-    if (this.machine.send('turnEnd')) this.run = NO_RUN;
+    this.leave('turnEnd');
     this.touched = at;
   }
 
@@ -136,8 +156,7 @@ export class Lesson {
   /** `turn` ended. False, and nothing changes, when it is not the turn that runs (it was replaced, or the lesson ended). */
   finish(turn: number, at: number): boolean {
     if (!this.current(turn)) return false;
-    if (!this.machine.send('turnEnd')) return false;
-    this.run = NO_RUN;
+    if (!this.leave('turnEnd')) return false;
     this.touched = at;
     return true;
   }
@@ -145,7 +164,7 @@ export class Lesson {
   /** The lesson ends: its running turn is stopped. */
   end(): void {
     if (this.running) this.run.stop();
-    if (this.machine.send('end')) this.run = NO_RUN;
+    this.leave('end');
   }
 }
 
@@ -153,6 +172,8 @@ export class LessonStore {
   private readonly lessons = new Map<string, Lesson>();
   private readonly limits: LessonLimits;
   private readonly newId: () => string;
+  /** Refused moves of any lesson's machine so far (each one is also passed to `options.onFault`). */
+  private refused = 0;
 
   constructor(
     private readonly now: () => number,
@@ -161,6 +182,17 @@ export class LessonStore {
     this.limits = { ...LESSON_STORE_LIMITS, ...(options.limits ?? {}) };
     this.newId = options.newId ?? randomUUID;
   }
+
+  /** Refused moves of the lessons' machines so far: a bug each; the server logs every one as `internal`. */
+  get refusals(): number {
+    return this.refused;
+  }
+
+  /** The store's own reporter of a lesson's refused move: it counts it and tells `options.onFault`, so a refusal is never silent. */
+  private readonly report = (from: string, event: string): void => {
+    this.refused += 1;
+    this.options.onFault?.(from, event);
+  };
 
   /** Lessons held now (idle ones that ran out are counted until a call reaches them). */
   get size(): number {
@@ -200,7 +232,7 @@ export class LessonStore {
       if (oldest === undefined) return lessonFull();
       this.drop(oldest);
     }
-    const lesson = new Lesson(this.newId(), mode, topic, this.now(), this.options.onFault);
+    const lesson = new Lesson(this.newId(), mode, topic, this.now(), this.report);
     this.lessons.set(lesson.id, lesson);
     return lesson;
   }

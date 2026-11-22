@@ -233,6 +233,15 @@ const isNullish = (node) =>
   (node.type === 'Identifier' && node.name === 'undefined') ||
   (node.type === 'UnaryExpression' && node.operator === 'void');
 
+/** A module constant that stands for "nothing here": `NO_RUN`, `NONE_YET`, `EMPTY_SET`, `IDLE_JOB`. */
+const SENTINEL_NAME = /^(?:NO|NONE|EMPTY|IDLE)_[A-Z0-9_]+$/;
+
+/** True for an identifier named like a sentinel: a field set to it is cleared, as one set to `null` is. */
+const isSentinel = (node) => node?.type === 'Identifier' && SENTINEL_NAME.test(node.name);
+
+/** True when the class field starts as a sentinel (`run = NO_RUN`): it is a nullable field whose "null" is a record. */
+const startsAsSentinel = (def) => def.type === 'PropertyDefinition' && !def.static && isSentinel(def.value);
+
 /** True when the type is a union of something with `null` or `undefined`. */
 function isNullableUnion(def) {
   const t = def.typeAnnotation?.typeAnnotation;
@@ -251,7 +260,7 @@ export const noShadowNull = {
     schema: [],
     messages: {
       shadow:
-        '`{{name}}` is set when `{{machine}}` begins and never set back to null or undefined: this field holds part of the state; clear it when the machine leaves the state, or keep it in the state\'s data.',
+        '`{{name}}` is set when `{{machine}}` begins and never set back to null, undefined or its NO_*/NONE_*/EMPTY_*/IDLE_* record: this field holds part of the state; clear it when the machine leaves the state, or keep it in the state\'s data.',
     },
   },
   create(context) {
@@ -266,7 +275,7 @@ export const noShadowNull = {
           const name = keyName(def);
           if (!name) continue;
           if (isMachineField(def)) machines.add(name);
-          else if (isNullableUnion(def)) nullable.set(name, def);
+          else if (isNullableUnion(def) || startsAsSentinel(def)) nullable.set(name, def);
         }
         // a class with no machine or no nullable field has nothing to check
         classes.push(machines.size > 0 && nullable.size > 0 ? { machines, nullable, cleared: new Set(), begun: new Map() } : undefined);
@@ -301,7 +310,7 @@ export const noShadowNull = {
         const method = methods[methods.length - 1];
         const name = thisField(node.left);
         if (!info || !method || method.kind === 'constructor' || name === undefined || !info.nullable.has(name)) return;
-        if (isNullish(node.right)) info.cleared.add(name);
+        if (isNullish(node.right) || isSentinel(node.right)) info.cleared.add(name);
         else method.assigns.push(name);
       },
     };
