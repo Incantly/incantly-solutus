@@ -2252,6 +2252,17 @@ Written before the code of round 2 (branch `feat/teacher-r2`).
 
 - **Reachable invalid states or transitions:** `plan` and `script` in any state but `idle` have no row (`streamFigure` makes a new `FigureStream` each call). `repair` in `planning` has no row: the plan call never writes lines. `modelError` in `repairing` has no row: a failed repair call is `cut`, because the figure already holds good lines.
 
+### Round 3 (branch `feat/teacher-r3`): the board on the real AI, no new machine
+
+Round 3 adds no state of its own; this note says where each new part gets its states, so a reviewer does not look for a table.
+
+| Part | Where | States come from |
+|---|---|---|
+| `board_read` and `board` tools, `boardTarget` | `tools/board.ts`, `tools/board-target.ts` | The tool guard (TE2) of the target. The request's items, page and `allowEdit` are data fixed when the target is made. The one thing that changes while a call runs, how many `page` actions the answer has made, is a counter in the named record `seen` (after a page action the items no longer describe the current page, so the id checks leave the rest to the board). |
+| `boardTurn` (jobs `circle` and `talk`) | `loop/board.ts` | The turn (TE1). The count of `actions` events sent is data, read once at the end: a turn that sent none ends with `model_bad_output`. |
+| `POST /v1/board/ask` | `packages/server/src/jobs/board.ts` | The request job (SV1) and the model call (SV2), as `/v1/figure/draw`. |
+| The studio's choice of agent | `apps/studio/src/board-agent.ts`, `studio-page.ts` | One probe answer, read once when the board first opens; the board is made once. The pending probe is held as one promise (`boardStart`), not as flags. |
+
 ## server
 
 Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/src/`). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is logged as `internal` with its fingerprint (`log.ts`) and the response is ended with `internal`. The rate limiter and the daily budget are counters, not states (server design 7).
