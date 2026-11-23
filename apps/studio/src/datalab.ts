@@ -7,6 +7,7 @@
 import { Figure, valueText } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
 import { colorAt, paintScene, sceneBounds } from '@incantly/sdk/screen';
+import type { FrameStyle } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
 import { Viewport } from '@incantly/sdk/screen';
 import type { KernelSession } from './session';
@@ -229,7 +230,7 @@ export function statsTable(rows: readonly (readonly [string, unknown])[]): HTMLE
   return t;
 }
 
-export function mountDataLab(session: KernelSession, registry: CommandRegistry, say: (t: string) => void): DataLab {
+export function mountDataLab(session: KernelSession, registry: CommandRegistry, say: (t: string) => void, style?: () => FrameStyle | undefined): DataLab {
   const element = el('aside', 'datalab');
   element.setAttribute('aria-label', 'Data analysis');
   element.hidden = true;
@@ -351,7 +352,7 @@ export function mountDataLab(session: KernelSession, registry: CommandRegistry, 
       const b = sceneBounds(items);
       const square = items.some((i) => i.typeText === 'List<Polygon>');
       if (b) vp.fit({ x0: b.x0, x1: b.x1, y0: Math.min(b.y0, 0), y1: b.y1 }, 22, !square);
-      paintScene(ctx, vp, items);
+      paintScene(ctx, vp, items, style?.());
     });
     for (const e of errors) body.append(el('p', 'lab-error', e));
 

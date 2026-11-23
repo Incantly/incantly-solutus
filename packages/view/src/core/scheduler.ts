@@ -4,8 +4,25 @@
  * 8 s picture rule and the scroll-settle gate. Pure: the host passes
  * timestamps and visibility; this file never reads a clock or a timer.
  */
+import { transition } from '@incantly/kernel';
+import type { MachineTable } from '@incantly/kernel';
 
 export type FigureState = 'placeholder' | 'ready' | 'live' | 'paused' | 'saved';
+export type FigureStateEvent = 'build' | 'restore' | 'promote' | 'pause' | 'save';
+
+/** Every move a figure can make (docs/state-machines.md V1). */
+export const SCHEDULE_MACHINE: MachineTable<FigureState, FigureStateEvent> = {
+  placeholder: { build: 'ready' },
+  saved: { restore: 'ready' },
+  ready: { promote: 'live', save: 'saved' },
+  live: { pause: 'paused' },
+  paused: { promote: 'live', save: 'saved' },
+};
+
+/** Moves `f` on `event`; a move the table does not list leaves it as it is. */
+function move(f: { state: FigureState }, event: FigureStateEvent): void {
+  f.state = transition(SCHEDULE_MACHINE, f.state, event) ?? f.state;
+}
 
 export interface SchedulerConfig {
   /** At most 3 live figures at once. */
@@ -149,7 +166,7 @@ export function schedulerTick(
   // viewport or the tab is hidden.
   for (const f of state.figures.values()) {
     if (f.state === 'live' && (!f.inView || !input.tabVisible)) {
-      f.state = 'paused';
+      move(f, 'pause');
       f.pausedOffscreenSinceMs = !f.inView ? input.nowMs : null;
       actions.push({ k: 'pause', id: f.id });
     }
@@ -161,7 +178,7 @@ export function schedulerTick(
       if ((f.state === 'placeholder' || f.state === 'saved') && f.near &&
         f.nearSinceMs !== null && input.nowMs - f.nearSinceMs >= config.settleMs) {
         const wasSaved = f.state === 'saved';
-        f.state = 'ready';
+        move(f, wasSaved ? 'restore' : 'build');
         f.pausedOffscreenSinceMs = null;
         actions.push(wasSaved ? { k: 'restore', id: f.id } : { k: 'build', id: f.id });
       }
@@ -193,11 +210,11 @@ export function schedulerTick(
       // A figure the learner touched last is the last to be paused; equal
       // touch times keep the figure that is already live.
       if (victim.lastUsedMs >= f.lastUsedMs && !f.playing) break;
-      victim.state = 'paused';
+      move(victim, 'pause');
       victim.pausedOffscreenSinceMs = !victim.inView ? input.nowMs : null;
       actions.push({ k: 'pause', id: victim.id });
     }
-    f.state = 'live';
+    move(f, 'promote');
     f.pausedOffscreenSinceMs = null;
     promoted.add(f.id);
     actions.push({ k: 'goLive', id: f.id });
@@ -213,7 +230,7 @@ export function schedulerTick(
     }
     if (f.pausedOffscreenSinceMs === null) f.pausedOffscreenSinceMs = input.nowMs;
     if (input.nowMs - f.pausedOffscreenSinceMs >= config.saveMs) {
-      f.state = 'saved';
+      move(f, 'save');
       f.pausedOffscreenSinceMs = null;
       state.stats.saves++;
       actions.push({ k: 'save', id: f.id });

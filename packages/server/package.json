@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Node service: model calls (Muse Spark), keys, rate limits, headless checks and SVG export.",
+  "description": "Node service: model calls (OpenRouter, free models only), keys, rate limits, headless checks.",
   "exports": {
     ".": "./src/index.ts"
   }

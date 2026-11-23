@@ -5,7 +5,7 @@
 On the start screen a learner (outside a lesson film) chooses an app. Each is a tile with a one-line purpose:
 
 ```text
- [ Graphing ]  [ Geometry ]  [ Scientific ]  [ Probability ]  [ Notes ]  [ Classic ]
+ [ Graphing ]  [ Geometry ]  [ Scientific ]  [ Probability ]  [ Board ]  [ Classic ]
    draw         build and      calculate       explore         write      everything
    functions    measure        with keys       chance          and draw
 ```
@@ -68,9 +68,9 @@ One column of rows; each row has the typed expression on the left and the result
 
 Distribution picker (Normal, Binomial, Poisson, and others as supported), parameter fields, the graph with shaded interval, `P(a ≤ X ≤ b)` fields, and a summary table (mean, standard deviation, median) beside it.
 
-### Notes
+### Board
 
-A page board: toolbox (pen, shapes, text, image, graph), page strip, undo/redo. Graph objects open the `graphing` mode in a panel.
+The tile and the title say "Board" ("Tableau" in French); the mode's id stays `notes`. A page board: toolbox (pen, shapes, text, image, graph), page strip, undo/redo. Graph objects open the `graphing` mode in a panel.
 
 ### Classic
 

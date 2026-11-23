@@ -104,6 +104,11 @@ export interface AreaErrorKinds {
   pin_off_cloth: true;
   not_burnable: true;
   no_fire_grid: true;
+  // teacher (codes T003 to T006)
+  turn_limit: true;
+  tool_unknown: true;
+  retry_spent: true;
+  stream_cut: true;
 }
 
 export type ErrorKind = CoreErrorKind | Extract<keyof AreaErrorKinds, string>;

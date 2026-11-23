@@ -19,7 +19,7 @@ import { registerLineCheck, registerLineRewriter, registerScriptTail } from '../
 import type { CheckedLine } from '../../language/check';
 import { registerFieldNames, registerFieldTyper } from '../../language/check';
 import { registerFieldReader } from '../../language/compile';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import type { PropSpec } from '../../language/props';
 import { registerValueText } from '../../language/runtime';
 import type { CallCheck, CommandSpec, FormCheck, ParamSpec, Refusal } from '../../language/table';
@@ -1115,7 +1115,7 @@ export function registerPhysics(registry: CommandRegistry): void {
     burns: { kind: 'boolnum', min: 0, allowed: 'true, false or a number of seconds above 0', expr: true },
     ignite: { kind: 'number', min: 150, max: 1000, allowed: 'a number from 150 to 1,000', expr: true },
   };
-  for (const [k, spec] of Object.entries(PROPS)) if (!Object.hasOwn(PROPERTIES, k)) PROPERTIES[k] = spec;
+  for (const [k, spec] of Object.entries(PROPS)) if (!Object.hasOwn(PROPERTIES, k)) registerProperty(k, spec);
   const SOLID_TYPES = ['Polygon', 'Circle', 'Conic', 'Segment', 'Line', 'Ray', 'Arc', 'Sector', 'Polyline', 'Curve', 'Function'];
   registerPropertyTypes('solid', SOLID_TYPES);
   const SOLID3 = ['Polyhedron', 'Sphere', 'Cylinder', 'Cone', 'Plane'];

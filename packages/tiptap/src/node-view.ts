@@ -81,7 +81,9 @@ export class FigureNodeView implements NodeView, SchedulerView {
   readonly resizeEl: HTMLElement;
   node: PmNode;
   /** The figure's lifecycle; every change goes through `FIGURE_MACHINE`. */
-  readonly life = new StateMachine(FIGURE_MACHINE, 'idle');
+  readonly life = new StateMachine(FIGURE_MACHINE, 'idle', (from, event) =>
+    reportError(this.editor, this.options, tiptapError('internal', `The figure machine refused "${event}" in the state "${from}".`, { node: this.figureId, detail: { machine: 'figure', state: from, event } })),
+  );
 
   /** True while the view holds, or is about to hold, a mounted app. */
   get wantsMount(): boolean {

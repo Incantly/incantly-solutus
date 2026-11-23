@@ -7,7 +7,8 @@ import type { App } from './app';
 import { createHeadlessApp } from './app';
 import type { ApiError } from './errors';
 import { apiError } from './errors';
-import { frameStyle, paintScene, sceneBounds } from './screen/paint';
+import { paintScene, sceneBounds } from './screen/paint';
+import type { FrameStyle } from './screen/paint';
 import type { SceneItem } from './screen/paint';
 import { sceneOf } from './screen/scene';
 import type { SceneOptions } from './screen/scene';
@@ -99,18 +100,15 @@ function viewportOf(box: Box, w: number, h: number): Viewport {
   return vp;
 }
 
-/** Paints with the figure's own axes and grid settings, and puts the screen's back after. */
-function paintWith(app: App, ctx: unknown, vp: Viewport, items: readonly SceneItem[], background: string | undefined): void {
-  const was = { ...frameStyle };
+/** The frame style a figure's own axes and grid settings make: a card live on the screen and its picture draw the same. */
+export function frameStyleOf(app: App, background?: string | null): FrameStyle {
   const s = app.settings;
-  frameStyle.axes = s.axes.x || s.axes.y;
-  frameStyle.grid = s.grid;
-  frameStyle.background = background ?? null;
-  try {
-    paintScene(ctx as CanvasRenderingContext2D, vp, items);
-  } finally {
-    Object.assign(frameStyle, was);
-  }
+  return { axes: s.axes.x || s.axes.y, grid: s.grid, highContrast: false, background: background === undefined ? '#ffffff' : background };
+}
+
+/** Paints with the figure's own axes and grid settings. */
+function paintWith(app: App, ctx: unknown, vp: Viewport, items: readonly SceneItem[], background: string | undefined): void {
+  paintScene(ctx as CanvasRenderingContext2D, vp, items, frameStyleOf(app, background ?? null));
 }
 
 /** The figure to draw: this one now, or a copy at film time `t`. */

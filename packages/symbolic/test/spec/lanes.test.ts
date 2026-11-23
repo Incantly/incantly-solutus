@@ -6,8 +6,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { CommandRegistry, Figure, registerCas, registerNumbers, setCasEngine, valueText } from '@incantly/kernel';
 import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';
-import { WorkerQueue, acceptWorkerResult, casEngine, clearCache, handleWorkerRequest, run, setCasLanes } from '@incantly/symbolic';
-import type { LaneJob, WorkerRequest } from '@incantly/symbolic';
+import { WorkerQueue, acceptWorkerResult, casEngine, clearCache, handleWorkerRequest, run, setCasLanes } from '@incantly/symbolic/engine';
+import type { LaneJob, WorkerRequest } from '@incantly/symbolic/engine';
 
 const registry = new CommandRegistry();
 registerNumbers(registry);

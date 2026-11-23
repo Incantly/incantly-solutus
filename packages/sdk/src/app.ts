@@ -2,7 +2,7 @@
  * The app core (embed-files-export design 3; .kiro/specs/sdk R1): one figure behind a small typed API. Writing goes
  * through lines; reads return data; errors are data. No DOM: the screen (`createApp`) and the frame host sit on top.
  */
-import { Figure, initPhysicsKernels, numberSource, physics, playerOf, setSheetLocks } from '@incantly/kernel';
+import { Figure, initPhysicsKernels, numberSource, physics, playerOf, setSheetLocks, targetNamesOf } from '@incantly/kernel';
 import type { CommandRegistry, ErrorObject, LineOrigin, ObjectView, TxResult } from '@incantly/kernel';
 import { MODES, catalogueOf, compilePolicy, makeGate, switchMode } from '@incantly/modes';
 import type { AppModeId, ModeChangeResult, ModeConfig } from '@incantly/modes';
@@ -46,6 +46,14 @@ export interface SdkBatchResult {
   readonly ok: boolean;
   readonly results: readonly LineResult[];
   readonly applied: number;
+}
+
+export interface RunOptions {
+  /**
+   * Every line applies or fails on its own, as before, and a line that reads a name a failed line of this call was to make
+   * gets `blockedBy` and `recovery: 'fix_earlier'` (errors design 6, rule 2).
+   */
+  readonly independent?: boolean;
 }
 
 export interface ObjectSummary {
@@ -204,7 +212,7 @@ export interface App {
   /** The kernel figure, for hosts in the same page (the screen, the studio). */
   readonly figure: Figure;
 
-  run(lines: string | readonly string[]): readonly LineResult[];
+  run(lines: string | readonly string[], options?: RunOptions): readonly LineResult[];
   runBatch(lines: readonly string[]): SdkBatchResult;
 
   list(filter?: ObjectFilter): readonly ObjectSummary[] & { readonly truncated?: boolean };
@@ -503,10 +511,10 @@ class AppCore implements App {
     };
   }
 
-  private apply(line: string, n: number): LineResult {
+  private apply(line: string, n: number, failed?: ReadonlyMap<string, { line: number; kind: ErrorObject['kind'] }>): LineResult {
     this.seen = new Set();
     try {
-      const r = this.figure.apply(line, { line: n, origin: this.origin() });
+      const r = this.figure.apply(line, { line: n, origin: this.origin(), ...(failed !== undefined ? { failed } : {}) });
       if (r.ok && r.op === 'redefine' && r.name !== undefined) this.emit({ type: 'redefined', name: r.name, definition: this.figure.get(r.name)?.definition ?? line });
       if (!r.ok) this.emit({ type: 'error', error: r });
       return this.result(r, this.seen);
@@ -525,17 +533,22 @@ class AppCore implements App {
 
   /* ------------------------------ run ------------------------------ */
 
-  run(lines: string | readonly string[]): readonly LineResult[] {
+  run(lines: string | readonly string[], options?: RunOptions): readonly LineResult[] {
     need(typeof lines === 'string' || (Array.isArray(lines) && lines.every((l) => typeof l === 'string')), 'run', 'lines must be a string or an array of strings');
+    need(options === undefined || (typeof options === 'object' && options !== null), 'run', 'options must be an object');
     const bad = this.refuse();
     if (bad) return [bad];
     const list = typeof lines === 'string' ? lines.split('\n') : [...lines];
     if (list.reduce((n, l) => n + l.length + 1, 0) > RUN_LIMIT) return [apiError('api', 'limit', 'That is more than 2 MB of lines in one call.', { detail: { limit: { name: 'run_bytes', max: RUN_LIMIT } } })];
     const out: LineResult[] = [];
+    // `independent`: a line that reads a name a failed line of this call was to make gets `blockedBy` (errors design 6, rule 2)
+    const failed = options?.independent === true ? new Map<string, { line: number; kind: ErrorObject['kind'] }>() : undefined;
     this.as(this.source === 'script' ? 'api' : this.source, () => {
       list.forEach((l, i) => {
         if (l.trim() === '') return;
-        out.push(this.apply(l, i + 1));
+        const r = this.apply(l, i + 1, failed);
+        out.push(r);
+        if (failed !== undefined && !r.ok && 'kind' in r) for (const n of targetNamesOf(l)) failed.set(n, { line: i + 1, kind: r.kind as ErrorObject['kind'] });
       });
     });
     return out;

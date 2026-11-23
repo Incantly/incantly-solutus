@@ -22,6 +22,8 @@
  */
 import type { DropsView, FireParams } from './fire2';
 import { advectFire, burnFuel, confine, coolFire, fireLift, fireSource, quench } from './fire2';
+import { StateMachine } from '../contracts/state-machine';
+import { GRID_MACHINE, restoreLife } from './grid-life';
 import type { World2 } from './world2';
 import { BodyType, FK } from './world2';
 
@@ -127,8 +129,14 @@ export class Smoke2 {
   heat = 0;
   /** The source makes smoke this step. */
   making = true;
-  /** The walls moved: mark them again before the next step. */
-  staticDirty = true;
+  /** The walls moved: they are marked again before the next step while `wallsMarkedAt` is behind `wallsMoved`. */
+  private wallsMoved = 0;
+  private wallsMarkedAt = -1;
+
+  /** The walls moved (a body was added, removed or changed type): they are marked again before the next step. */
+  markWallsAgain(): void {
+    this.wallsMoved++;
+  }
   /**
    * The air's drag on each body (N), found by the last smoke step and applied over the bodies' steps that follow it, so
    * bodies feel the air one step late, in a fixed order (design 9.6). Counted as `drag`.
@@ -140,8 +148,11 @@ export class Smoke2 {
   private cnt = new Int32Array(0);
   /** The mass correction of the last step's smoke advection (1 is none). */
   lastScale = 1;
-  /** True once a speed went over 1e6 or stopped being a number. */
-  unstable = false;
+  /** Running, or `unstable` once a speed went over 1e6 or stopped being a number. */
+  readonly life = new StateMachine(GRID_MACHINE, 'running');
+  get unstable(): boolean {
+    return this.life.is('unstable');
+  }
   /** Scratch corners of one polygon in world space. */
   private cxs = new Float64Array(16);
   private cys = new Float64Array(16);
@@ -202,7 +213,7 @@ export class Smoke2 {
     this.v.fill(windY);
     this.s.fill(0);
     this.p.fill(0);
-    this.unstable = false;
+    this.life.send('reset');
     if (this.fire) this.seedFire();
     else this.makeSmoke();
   }
@@ -255,8 +266,8 @@ export class Smoke2 {
       this.sumY = new Float64Array(w.n);
       this.cnt = new Int32Array(w.n);
     }
-    if (this.staticDirty) {
-      this.staticDirty = false;
+    if (this.wallsMarkedAt !== this.wallsMoved) {
+      this.wallsMarkedAt = this.wallsMoved;
       this.own0.fill(-1);
       for (let b = 0; b < w.n; b++) if (w.type[b] !== BodyType.Dynamic && !w.gone.has(b)) this.markBody(w, b, this.own0);
     }
@@ -1003,7 +1014,7 @@ export class Smoke2 {
       if (!(x > -BLOW_UP && x < BLOW_UP)) bad = true;
     }
     if (!bad) return;
-    this.unstable = true;
+    this.life.send('blowUp');
     this.u.fill(0);
     this.v.fill(0);
     this.s.fill(0);
@@ -1087,9 +1098,9 @@ export class Smoke2 {
     const nu = this.u.length;
     const nv = this.v.length;
     const ns = this.s.length;
-    this.unstable = src[1] === 1;
+    restoreLife(this.life, src[1] === 1);
     // the walls are marked again from where they are in the world loaded with this checkpoint
-    this.staticDirty = true;
+    this.wallsMoved++;
     const nb = src[2] as number;
     let k = 3;
     this.u.set(src.subarray(k, k + nu));

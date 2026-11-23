@@ -181,6 +181,198 @@ export const tableRequired = {
   },
 };
 
+/** The table's object literal, through `as`, `satisfies` and `Object.freeze(...)`, or undefined. */
+function tableObject(init) {
+  let node = init;
+  for (;;) {
+    if (!node) return undefined;
+    if (node.type === 'TSAsExpression' || node.type === 'TSSatisfiesExpression' || node.type === 'TSNonNullExpression') node = node.expression;
+    else if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && memberName(node.callee) === 'freeze' && node.arguments.length === 1) node = node.arguments[0];
+    else break;
+  }
+  return node.type === 'ObjectExpression' ? node : undefined;
+}
+
+export const tableRefuses = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A *_MACHINE table must refuse some move: its rows may not all be the same.' },
+    schema: [],
+    messages: {
+      same: '`{{name}}` has the same row in every state, so it refuses nothing. A table that refuses nothing is a value: derive it, or write only the moves that may happen.',
+    },
+  },
+  create(context) {
+    const text = (node) => context.sourceCode.getText(node);
+    /** The row as sorted `event: target` texts, or undefined when it is not an object literal. */
+    const shapeOf = (value) => (value.type === 'ObjectExpression' ? value.properties.map(text).sort().join(',') : undefined);
+    return {
+      VariableDeclarator(node) {
+        if (node.id.type !== 'Identifier' || !/_MACHINE$/.test(node.id.name)) return;
+        const table = tableObject(node.init);
+        if (!table) return;
+        const rows = table.properties.filter((p) => p.type === 'Property');
+        if (rows.length < 2 || rows.length !== table.properties.length) return;
+        const values = rows.map((p) => p.value);
+        const same =
+          values.every((v) => v.type === 'Identifier') ? values.every((v) => v.name === values[0].name)
+            : values.every((v) => v.type === 'ObjectExpression') ? values.every((v) => shapeOf(v) === shapeOf(values[0]))
+              : false;
+        if (same) context.report({ node: node.id, messageId: 'same', data: { name: node.id.name } });
+      },
+    };
+  },
+};
+
+/** An event name that starts something: the machine leaves its resting state for a state that holds data. */
+const BEGIN_LIKE = /^(begin|start|down|open|enter|press|grab|arm|activate|engage)/i;
+
+/** True for `null`, `undefined` and `void 0`: the value that clears a field. */
+const isNullish = (node) =>
+  (node.type === 'Literal' && node.value === null && node.raw === 'null') ||
+  (node.type === 'Identifier' && node.name === 'undefined') ||
+  (node.type === 'UnaryExpression' && node.operator === 'void');
+
+/** A module constant that stands for "nothing here": `NO_RUN`, `NONE_YET`, `EMPTY_SET`, `IDLE_JOB`. */
+const SENTINEL_NAME = /^(?:NO|NONE|EMPTY|IDLE)_[A-Z0-9_]+$/;
+
+/** True for an identifier named like a sentinel: a field set to it is cleared, as one set to `null` is. */
+const isSentinel = (node) => node?.type === 'Identifier' && SENTINEL_NAME.test(node.name);
+
+/** True when the class field starts as a sentinel (`run = NO_RUN`): it is a nullable field whose "null" is a record. */
+const startsAsSentinel = (def) => def.type === 'PropertyDefinition' && !def.static && isSentinel(def.value);
+
+/** True when the type is a union of something with `null` or `undefined`. */
+function isNullableUnion(def) {
+  const t = def.typeAnnotation?.typeAnnotation;
+  if (t?.type !== 'TSUnionType') return false;
+  const isNil = (u) => u.type === 'TSNullKeyword' || u.type === 'TSUndefinedKeyword';
+  return t.types.some(isNil) && t.types.some((u) => !isNil(u));
+}
+
+const isMachineField = (def) =>
+  def.type === 'PropertyDefinition' && !def.static && def.value?.type === 'NewExpression' && def.value.callee.type === 'Identifier' && def.value.callee.name === 'StateMachine';
+
+export const noShadowNull = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A nullable field that is set when a machine begins must be cleared when the machine leaves the state, or live in the state data.' },
+    schema: [],
+    messages: {
+      shadow:
+        '`{{name}}` is set when `{{machine}}` begins and never set back to null, undefined or its NO_*/NONE_*/EMPTY_*/IDLE_* record: this field holds part of the state; clear it when the machine leaves the state, or keep it in the state\'s data.',
+    },
+  },
+  create(context) {
+    const classes = [];
+    const methods = [];
+    return {
+      ClassBody(node) {
+        const machines = new Set();
+        const nullable = new Map();
+        for (const def of node.body) {
+          if (def.type !== 'PropertyDefinition' || def.static) continue;
+          const name = keyName(def);
+          if (!name) continue;
+          if (isMachineField(def)) machines.add(name);
+          else if (isNullableUnion(def) || startsAsSentinel(def)) nullable.set(name, def);
+        }
+        // a class with no machine or no nullable field has nothing to check
+        classes.push(machines.size > 0 && nullable.size > 0 ? { machines, nullable, cleared: new Set(), begun: new Map() } : undefined);
+      },
+      'ClassBody:exit'() {
+        const info = classes.pop();
+        if (!info) return;
+        for (const [name, machine] of info.begun) {
+          if (info.cleared.has(name)) continue;
+          context.report({ node: info.nullable.get(name), messageId: 'shadow', data: { name: name.replace(/^#/, ''), machine: machine.replace(/^#/, '') } });
+        }
+      },
+      MethodDefinition(node) {
+        methods.push({ kind: node.kind, machine: undefined, assigns: [] });
+      },
+      'MethodDefinition:exit'() {
+        const method = methods.pop();
+        const info = classes[classes.length - 1];
+        if (!method || !info || method.kind === 'constructor' || method.machine === undefined) return;
+        for (const name of method.assigns) if (!info.begun.has(name)) info.begun.set(name, method.machine);
+      },
+      CallExpression(node) {
+        const info = classes[classes.length - 1];
+        const method = methods[methods.length - 1];
+        if (!info || !method || node.callee.type !== 'MemberExpression' || memberName(node.callee) !== 'send') return;
+        const machine = thisField(node.callee.object);
+        const event = node.arguments[0];
+        if (machine !== undefined && info.machines.has(machine) && event?.type === 'Literal' && typeof event.value === 'string' && BEGIN_LIKE.test(event.value)) method.machine = machine;
+      },
+      AssignmentExpression(node) {
+        const info = classes[classes.length - 1];
+        const method = methods[methods.length - 1];
+        const name = thisField(node.left);
+        if (!info || !method || method.kind === 'constructor' || name === undefined || !info.nullable.has(name)) return;
+        if (isNullish(node.right) || isSentinel(node.right)) info.cleared.add(name);
+        else method.assigns.push(name);
+      },
+    };
+  },
+};
+
+/** Flags an I/O object keeps about itself: an answer's head sent, a stream ended, a connection closed. */
+const IO_FLAGS = new Set(['headersSent', 'writableEnded', 'writableFinished', 'destroyed', 'readyState']);
+/** `destroyed` is the flag of a Node stream, socket or response; in a file that imports no `node:` module it is a part's own state (an app handle, a view). */
+const NODE_ONLY_FLAGS = new Set(['destroyed']);
+
+/** The name a function is known by: its declaration, its method or property key, or the variable it is assigned to. */
+function functionName(fn) {
+  if (fn.type === 'FunctionDeclaration') return fn.id?.name;
+  const p = fn.parent;
+  if (p?.type === 'MethodDefinition' || p?.type === 'Property' || p?.type === 'PropertyDefinition') return keyName(p);
+  if (p?.type === 'VariableDeclarator' && p.id.type === 'Identifier') return p.id.name;
+  return undefined;
+}
+
+export const noIoFlags = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'A file that makes a state machine does not read the flags of an I/O object outside its low-level writers.' },
+    schema: [],
+    messages: {
+      io: '`{{name}}` is a second record of whether an answer or a stream is over, next to this file\'s state machine, and the two can disagree. Ask the machine; only a function whose name starts with `write` may read it, as a last guard before a write.',
+    },
+  },
+  create(context) {
+    let makesMachine = false;
+    let importsNode = false;
+    const reads = [];
+    return {
+      ImportDeclaration(node) {
+        if (typeof node.source.value === 'string' && node.source.value.startsWith('node:')) importsNode = true;
+      },
+      NewExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === 'StateMachine') makesMachine = true;
+      },
+      MemberExpression(node) {
+        const name = memberName(node) ?? (node.computed && node.property.type === 'Literal' && typeof node.property.value === 'string' ? node.property.value : undefined);
+        if (name === undefined || !IO_FLAGS.has(name)) return;
+        // a getter of the class itself (`this.destroyed`) is derived from the machine, not a second record
+        if (node.object.type === 'ThisExpression') return;
+        // `x.destroyed = true` is a write, not a read of the flag
+        const parent = node.parent;
+        if (parent.type === 'AssignmentExpression' && parent.left === node) return;
+        const allowed = context.sourceCode.getAncestors(node).some((a) => FUNCTIONS.has(a.type) && /^write/.test(functionName(a) ?? ''));
+        if (!allowed) reads.push({ node, name });
+      },
+      'Program:exit'() {
+        if (!makesMachine) return;
+        for (const { node, name } of reads) {
+          if (NODE_ONLY_FLAGS.has(name) && !importsNode) continue;
+          context.report({ node, messageId: 'io', data: { name } });
+        }
+      },
+    };
+  },
+};
+
 export const noStaleAfterAwait = {
   meta: {
     type: 'problem',

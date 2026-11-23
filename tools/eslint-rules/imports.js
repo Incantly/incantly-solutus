@@ -58,6 +58,24 @@ function allowedFrom(cwd, dev) {
   return set;
 }
 
+const internalCache = new Map();
+
+/** The internal entries (`incantly.internal` in package.json) of `packages/<name>`. */
+function internalOf(cwd, name) {
+  const key = `${cwd}|${name}`;
+  let set = internalCache.get(key);
+  if (set) return set;
+  set = new Set();
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, 'packages', name, 'package.json'), 'utf8'));
+    for (const e of pkg.incantly?.internal ?? []) set.add(e);
+  } catch {
+    // no such package: nothing is internal
+  }
+  internalCache.set(key, set);
+  return set;
+}
+
 /** The npm package of an import source: `@scope/name` or `name`. */
 export function packageOf(source) {
   const parts = source.split('/');
@@ -84,6 +102,7 @@ export const allowedImports = {
     messages: {
       library: '`{{pkg}}` is not in docs/design/libraries.md{{where}}. Stop and ask the product owner before adding a library.',
       node: '`{{source}}` is a Node built-in; this code must also run in a browser and on mobile.',
+      internal: '`{{source}}` is an internal entry of its package, for that package\'s tests only; use the package\'s main entry.',
     },
   },
   create(context) {
@@ -92,7 +111,14 @@ export const allowedImports = {
     const extra = new Set(opt.extra ?? []);
     const check = (node, source) => {
       if (typeof source !== 'string' || source.startsWith('.') || source.startsWith('/')) return;
-      if (source.startsWith('@incantly/')) return;
+      if (source.startsWith('@incantly/')) {
+        // a package's internal entry (`incantly.internal`) is for its own tests and benches
+        const [, name, ...rest] = source.split('/');
+        if (rest.length > 0 && opt.dev !== true && internalOf(context.cwd, name).has(`./${rest.join('/')}`)) {
+          context.report({ node, messageId: 'internal', data: { source } });
+        }
+        return;
+      }
       if (source.startsWith('node:')) {
         if (opt.nodeBuiltins !== true) context.report({ node, messageId: 'node', data: { source } });
         return;

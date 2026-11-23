@@ -139,8 +139,17 @@ export const ERROR_KINDS: Readonly<Record<string, KindSpec>> = {
   version: { code: 'K042', phase: 'load', recovery: 'report' },
   tool_input: { code: 'T001', phase: 'tool', recovery: 'fix_line' },
   tool_busy: { code: 'T002', phase: 'tool', recovery: 'skip' },
+  turn_limit: { code: 'T003', phase: 'tool', recovery: 'report' },
+  tool_unknown: { code: 'T004', phase: 'tool', recovery: 'fix_line' },
+  retry_spent: { code: 'T005', phase: 'tool', recovery: 'skip' },
+  stream_cut: { code: 'T006', phase: 'tool', recovery: 'report' },
   internal: { code: 'K999', phase: 'commit', recovery: 'skip' },
 };
+
+/** An area adds the English template of a key it owns. */
+export function registerMessageTemplate(key: string, template: string): void {
+  MESSAGE_TEMPLATES[key] = template;
+}
 
 /** English templates; `{name}` is replaced from `params`. The key, not the sentence, is the identity. */
 export const MESSAGE_TEMPLATES: Record<string, string> = {
@@ -247,6 +256,10 @@ export const MESSAGE_TEMPLATES: Record<string, string> = {
   'kernel.version': 'This file is version {v}; supported: {list}.',
   'tool.input': '{tool} needs {expected}.',
   'tool.busy': 'The figure is busy; try again.',
+  'tool.turn_limit': 'This answer stopped after {what}.',
+  'tool.tool_unknown': 'There is no tool {name}; the tools are {list}.',
+  'tool.retry_spent': '{name} was left out after two tries.',
+  'tool.stream_cut': 'The answer stopped partway; {n} line(s) were drawn.',
   'kernel.unknown_property': '{type} has no property {key}.',
   'kernel.bad_property_value': '{key} must be {allowed}; got {token}.',
   'kernel.state_owned': '{name} is a state; the solver owns its value.',

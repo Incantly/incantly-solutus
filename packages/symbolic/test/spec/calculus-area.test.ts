@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { CommandRegistry, Figure, geometry, registerCas, registerFunctions, registerNumbers, setCasEngine } from '@incantly/kernel';
 import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';
-import { casEngine, run } from '@incantly/symbolic';
+import { casEngine, run } from '@incantly/symbolic/engine';
 import { ex, nm, sy } from './helpers';
 
 const registry = new CommandRegistry();

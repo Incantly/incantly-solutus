@@ -12,7 +12,7 @@ import { valueText } from '../../language/runtime';
 import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
 import { registerNotice } from '../../errors/notices';
 import { registerPropertyTypes } from '../../graph/props';
-import { PROPERTIES } from '../../language/props';
+import { PROPERTIES, registerProperty } from '../../language/props';
 import { registerStyleLift } from '../../language/lines';
 import { lineLatex, numberLatex, valueLatex } from './latex';
 import { isSymValue } from '../cas/index';
@@ -573,11 +573,11 @@ export function registerText(registry: CommandRegistry): void {
   registerStyleLift('RotateText', { args: 2, type: 'Text', props: [{ key: 'rotate', arg: 1 }] });
   for (const [key, spec] of Object.entries(props)) {
     const old = PROPERTIES[key];
-    if (!old) PROPERTIES[key] = spec as (typeof PROPERTIES)[string];
+    if (!old) registerProperty(key, spec as (typeof PROPERTIES)[string]);
     else if (old.kind === 'enum' && spec.kind === 'enum') {
       // another area owns the key (controls use tl, tr, bl, br): the compass words are added beside its words
       const values = [...new Set([...(old.values ?? []), ...spec.values])];
-      PROPERTIES[key] = { ...old, values, allowed: values.join(', ') };
+      registerProperty(key, { ...old, values, allowed: values.join(', ') });
     }
     registerPropertyTypes(key, ['Text']);
   }

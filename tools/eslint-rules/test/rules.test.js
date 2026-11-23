@@ -1,5 +1,6 @@
 /** RuleTester cases for every rule of the `incantly` plugin: code it accepts and code it refuses. */
 import { RuleTester } from 'eslint';
+import { fileURLToPath } from 'node:url';
 import tseslint from 'typescript-eslint';
 import { describe, it } from 'vitest';
 import { rules } from '../index.js';
@@ -69,6 +70,49 @@ tester.run('state-union-type', rules['state-union-type'], {
   ],
 });
 
+tester.run('state-table-refuses', rules['state-table-refuses'], {
+  valid: [
+    // rows differ
+    "const A_MACHINE: MachineTable<S, E> = { idle: { go: 'live' }, live: { stop: 'idle' } };",
+    // same events, different targets
+    "const A_MACHINE = { a: { go: 'x' }, b: { go: 'y' } };",
+    // same targets, different events
+    "const A_MACHINE = { a: { go: 'x' }, b: { run: 'x' } };",
+    // a row that refuses everything next to one that does not
+    "const A_MACHINE = { live: { close: 'closed' }, closed: {} };",
+    // one row cannot be compared with another
+    "const A_MACHINE = { only: { go: 'only' } };",
+    // not a *_MACHINE
+    "const TABLE = { a: { go: 'x' }, b: { go: 'x' } };",
+    // rows that are different names
+    'const A_MACHINE = { a: ROW_A, b: ROW_B };',
+    // a table that is not an object literal is out of reach of this rule
+    'const A_MACHINE = makeTable();',
+  ],
+  invalid: [
+    {
+      code: "const PAGES_MACHINE: MachineTable<S, E> = { a: ANY, b: ANY, c: ANY };",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = { a: { go: 'x', stop: 'y' }, b: { stop: 'y', go: 'x' } };",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = { a: { go: 'x' }, b: { go: 'x' } } as const;",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: "const A_MACHINE = Object.freeze({ a: { go: 'x' }, b: { go: 'x' } });",
+      errors: [{ messageId: 'same' }],
+    },
+    {
+      code: 'const A_MACHINE = { a: {}, b: {} };',
+      errors: [{ messageId: 'same' }],
+    },
+  ],
+});
+
 tester.run('state-table-required', rules['state-table-required'], {
   valid: ['transition(FIGURE_MACHINE, s, "go");', 'new StateMachine(machines.JOB_MACHINE, "idle");', 'canTransition(T_MACHINE, s, e);', 'other({}, s);'],
   invalid: [
@@ -88,6 +132,115 @@ tester.run('state-no-stale-after-await', rules['state-no-stale-after-await'], {
   invalid: [
     { code: 'async function f() { const s = this.state; await x(); use(s); }', errors: [{ messageId: 'stale' }] },
     { code: 'const f = async () => { const p = job.phase; await x(); if (p === "a") go(); };', errors: [{ messageId: 'stale' }] },
+  ],
+});
+
+tester.run('state-no-shadow-null', rules['state-no-shadow-null'], {
+  valid: [
+    // cleared when the machine leaves the state
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null = null;
+      begin(p: string) { if (!this.#m.send('begin')) return; this.#page = p; }
+      end() { this.#m.send('end'); this.#page = null; } }`,
+    // cleared with undefined, in another method
+    `class A { m = new StateMachine(A_MACHINE, 'idle'); page: string | undefined;
+      begin(p: string) { this.m.send('begin'); this.page = p; }
+      reset() { this.page = undefined; } }`,
+    // a nullable field set in a method that makes no begin-like move
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #label: string | null = null;
+      end() { this.#m.send('end'); this.#label = 'done'; } }`,
+    // no machine in the class
+    `class A { #page: string | null = null; begin(p: string) { this.#page = p; } }`,
+    // a field that is not nullable
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page = ''; begin(p: string) { this.#m.send('begin'); this.#page = p; } }`,
+    // the constructor only starts the field
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null; constructor() { this.#page = 'x'; this.#m.send('begin'); } }`,
+    // the data lives with the state
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #drawing: { page: string } | null = null;
+      begin(p: string) { this.#m.send('begin'); this.#drawing = { page: p }; }
+      end() { this.#m.send('end'); this.#drawing = void 0; } }`,
+    // a record that means "none" is cleared by setting it back
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = NO_RUN;
+      begin(r: Run) { this.#m.send('begin'); this.#run = r; }
+      end() { this.#m.send('end'); this.#run = NO_RUN; } }`,
+    // a field that starts as an ordinary constant is not a sentinel
+    `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = FIRST_RUN;
+      begin(r: Run) { this.#m.send('begin'); this.#run = r; } }`,
+  ],
+  invalid: [
+    {
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #page: string | null = null;
+        begin(p: string) { this.#m.send('begin'); this.#page = p; }
+        end() { this.#m.send('end'); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); target: Node | undefined;
+        start(n: Node) { if (this.m.send('start')) this.target = n; } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // set inside a callback of the beginning method, cleared only in the constructor
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); id: number | null = null;
+        constructor() { this.id = null; }
+        down(x: number) { this.m.send('down'); items.forEach(() => { this.id = x; }); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // two fields, only one cleared
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #a: string | null = null; #b: number | null = null;
+        begin(a: string, b: number) { this.#m.send('begin'); this.#a = a; this.#b = b; }
+        end() { this.#m.send('end'); this.#a = null; } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // the "null" is a record named NO_*: set when the machine begins, never put back
+      code: `class A { #m = new StateMachine(A_MACHINE, 'idle'); #run: Run = NO_RUN;
+        begin(r: Run) { this.#m.send('begin'); this.#run = r; }
+        end() { this.#m.send('end'); } }`,
+      errors: [{ messageId: 'shadow' }],
+    },
+    {
+      // NONE_, EMPTY_ and IDLE_ count the same
+      code: `class A { m = new StateMachine(A_MACHINE, 'idle'); a = NONE_YET; b = EMPTY_SET; c = IDLE_JOB;
+        start(x: X) { this.m.send('start'); this.a = x; this.b = x; this.c = x; } }`,
+      errors: [{ messageId: 'shadow' }, { messageId: 'shadow' }, { messageId: 'shadow' }],
+    },
+  ],
+});
+
+tester.run('state-no-io-flags', rules['state-no-io-flags'], {
+  valid: [
+    // a low-level writer may read the flags, as a last guard
+    `const M = new StateMachine(A_MACHINE, 'a');
+      function writeJson(res) { if (res.writableEnded) return; res.end(); }`,
+    `class Job { m = new StateMachine(A_MACHINE, 'a'); private writeError(): void { const res = this.res; if (res.writableEnded || res.headersSent) return; } }`,
+    // inside a callback of a writer
+    `class Job { m = new StateMachine(A_MACHINE, 'a'); writeAll() { items.forEach((r) => { if (r.destroyed) return; }); } }`,
+    // a writer held in a variable
+    `const m = new StateMachine(A_MACHINE, 'a'); const writeLine = (res) => res.destroyed;`,
+    // a file with no machine owns no second record
+    `function onClose(res) { return res.writableFinished || res.destroyed; }`,
+    // other names
+    `const m = new StateMachine(A_MACHINE, 'a'); function f(res) { return res.statusCode; }`,
+    // setting a flag is not reading one
+    `const m = new StateMachine(A_MACHINE, 'a'); function f(res) { res.destroyed = true; }`,
+    // a part's own getter, derived from its machine
+    `import { x } from 'node:fs'; class V { m = new StateMachine(A_MACHINE, 'a'); get destroyed() { return this.m.is('gone'); } f() { return this.destroyed; } }`,
+    // \`destroyed\` in a file with no Node module is a part's own state (an app handle)
+    `import { createApp } from '@incantly/sdk'; const m = new StateMachine(A_MACHINE, 'a'); function f(app) { return app.destroyed; }`,
+  ],
+  invalid: [
+    {
+      code: `class Job { m = new StateMachine(A_MACHINE, 'a'); ensureEnded() { if (this.res.writableEnded) return; if (!this.res.headersSent) this.x(); } }`,
+      errors: [{ messageId: 'io' }, { messageId: 'io' }],
+    },
+    { code: `const m = new StateMachine(A_MACHINE, 'a'); function empty(res) { if (res.writableEnded) return; }`, errors: [{ messageId: 'io' }] },
+    { code: `const m = new StateMachine(A_MACHINE, 'a'); const done = (s) => s.readyState === 1;`, errors: [{ messageId: 'io' }] },
+    { code: `import { createServer } from 'node:http'; const m = new StateMachine(A_MACHINE, 'a'); const f = (s) => s['destroyed'];`, errors: [{ messageId: 'io' }] },
+    // the machine is made after the read: the file still counts
+    { code: `function f(res) { return res.writableFinished; } const m = new StateMachine(A_MACHINE, 'a');`, errors: [{ messageId: 'io' }] },
+    // a callback in a function that is not a writer
+    { code: `import { Socket } from 'node:net'; const m = new StateMachine(A_MACHINE, 'a'); function send() { items.forEach((r) => r.destroyed); }`, errors: [{ messageId: 'io' }] },
   ],
 });
 
@@ -128,7 +281,31 @@ tester.run('no-throw-export', rules['no-throw-export'], {
     { code: 'export class A { f() { throw new Error("x"); } }', errors: [{ messageId: 'thrown' }] },
     { code: 'export default function () { throw new Error("x"); }', errors: [{ messageId: 'thrown' }] },
     { code: 'export function f() { try { g(); } catch { throw new Error("x"); } }', errors: [{ messageId: 'thrown' }] },
+    { code: 'export function f(x) { if (typeof x !== "string") throw new RangeError("x"); }', errors: [{ messageId: 'thrown' }] },
+    { code: 'export function f(x) { if (typeof x !== "string") throw new TypeError("x"); }', options: [{ allow: [] }], errors: [{ messageId: 'thrown' }] },
   ],
+});
+
+// inside packages/<name>/src only what the package's entry points reach is a boundary
+const demo = fileURLToPath(new URL('./fixtures/packages/demo/src/', import.meta.url));
+tester.run('no-throw-export at the package boundary', rules['no-throw-export'], {
+  valid: [
+    // a wrong argument type is a programming error (embed-files-export design)
+    'export function f(x) { if (typeof x !== "string") throw new TypeError("f: x must be text"); }',
+    { code: 'export function inner() { throw new Error("x"); }', filename: `${demo}inner.ts` },
+    { code: 'export function hidden() { throw new Error("x"); }', filename: `${demo}named.ts` },
+    { code: 'export function anything() { throw new Error("x"); }', filename: `${demo}engine.ts` },
+  ],
+  invalid: [
+    { code: 'export function pub() { throw new Error("x"); }', filename: `${demo}pub.ts`, errors: [{ messageId: 'thrown' }] },
+    { code: 'export function shown() { throw new Error("x"); }', filename: `${demo}named.ts`, errors: [{ messageId: 'thrown' }] },
+    { code: 'export class Pub { go() { throw new Error("x"); } }', filename: `${demo}pub.ts`, errors: [{ messageId: 'thrown' }] },
+  ],
+});
+
+tester.run('allowed-imports of an internal entry', rules['allowed-imports'], {
+  valid: [{ code: "import { simplifyNode } from '@incantly/symbolic/engine';", options: [{ dev: true }] }, "import { run } from '@incantly/symbolic';", "import { SYMBOLIC_COMMANDS } from '@incantly/symbolic/catalogue';"],
+  invalid: [{ code: "import { simplifyNode } from '@incantly/symbolic/engine';", errors: [{ messageId: 'internal' }] }],
 });
 
 tester.run('no-ai-credit', rules['no-ai-credit'], {
@@ -139,6 +316,90 @@ tester.run('no-ai-credit', rules['no-ai-credit'], {
     { code: 'const s = "Generated with AI";', errors: [{ messageId: 'credit' }] },
     { code: 'const s = `built by ChatGPT`;', errors: [{ messageId: 'credit' }] },
     { code: '// made with Kiro', errors: [{ messageId: 'credit' }] },
+  ],
+});
+
+tester.run('no-imported-mutation', rules['no-imported-mutation'], {
+  valid: [
+    "import { style } from './style'; const s = { ...style }; s.axes = true;",
+    "import { style } from './style'; function f(o) { o.axes = true; } f({});",
+    "import { style } from './style'; function f(style) { style.axes = true; }",
+    "import { style } from './style'; const read = style.axes; use(style.grid);",
+    "import { style } from './style'; Object.assign({}, style);",
+    "import { make } from './make'; make().axes = true;",
+    "import { style } from './style'; class A { style = {}; f() { this.style.axes = true; } }",
+    "import { style } from './style'; { const style = {}; style.axes = true; }",
+  ],
+  invalid: [
+    { code: "import { style } from './style'; style.axes = true;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; function f() { style.grid.on = false; }", errors: [{ messageId: 'mutated' }] },
+    { code: "import * as ns from './style'; ns.count += 1;", errors: [{ messageId: 'mutated' }] },
+    { code: "import style from './style'; style['axes'] = true;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { n } from './n'; n.count++;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { n } from './n'; --n.count;", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; Object.assign(style, { axes: true });", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; Object.assign(style.grid, { on: true });", errors: [{ messageId: 'mutated' }] },
+    { code: "import { style } from './style'; style!.axes = true;", errors: [{ messageId: 'mutated' }] },
+  ],
+});
+
+tester.run('state-refusal-reported', rules['state-refusal-reported'], {
+  valid: [
+    "const m = new StateMachine(A_MACHINE, 'idle', (from, event) => report(from, event));",
+    "class A { #m = new StateMachine(A_MACHINE, 'idle', this.#refused); #refused = () => {}; }",
+    "const m = new Other(A_MACHINE, 'idle');",
+    // a function that is always there
+    "const m = new StateMachine(A_MACHINE, 'idle', (from, event) => log(from, event));",
+    "const m = new StateMachine(A_MACHINE, 'idle', onFault ?? ((from, event) => log(from, event)));",
+  ],
+  invalid: [
+    { code: "const m = new StateMachine(A_MACHINE, 'idle');", errors: [{ messageId: 'silent' }] },
+    { code: "class A { #m = new StateMachine<S, E>(A_MACHINE, 'idle'); }", errors: [{ messageId: 'silent' }] },
+    { code: 'const m = new StateMachine(A_MACHINE);', errors: [{ messageId: 'silent' }] },
+    // a third argument that can be nothing is as silent as none
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', undefined);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', null);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', void 0);", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', f === undefined ? undefined : (a, b) => f(a, b));", errors: [{ messageId: 'maybeSilent' }] },
+    { code: "const m = new StateMachine(A_MACHINE, 'idle', ok ? (a, b) => f(a, b) : null);", errors: [{ messageId: 'maybeSilent' }] },
+  ],
+});
+
+tester.run('gl-clear-masks', rules['gl-clear-masks'], {
+  valid: [
+    'function f(gl) { gl.depthMask(true); gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }',
+    'function f(gl) { gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT); }',
+    'function f(gl) { gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT); }',
+    // a clear of something else, and calls named clear that are not a GL clear
+    'function f(gl, list) { gl.clear(gl.STENCIL_BUFFER_BIT); list.clear(); cache.clear(); }',
+  ],
+  invalid: [
+    { code: 'function f(gl) { gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }, { messageId: 'color' }] },
+    { code: 'function f(gl) { gl.colorMask(true, true, true, true); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+    // set after the clear, or turned off, does not count
+    { code: 'function f(gl) { gl.clear(gl.DEPTH_BUFFER_BIT); gl.depthMask(true); }', errors: [{ messageId: 'depth' }] },
+    { code: 'function f(gl) { gl.depthMask(false); gl.clear(gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+    { code: 'function f(gl) { gl.colorMask(true, true, true, false); gl.clear(gl.COLOR_BUFFER_BIT); }', errors: [{ messageId: 'color' }] },
+    // in another function, it is not known to run first
+    { code: 'function g(gl) { gl.depthMask(true); } function f(gl) { gl.clear(gl.DEPTH_BUFFER_BIT); }', errors: [{ messageId: 'depth' }] },
+  ],
+});
+
+tester.run('no-length-reset', rules['no-length-reset'], {
+  valid: [
+    // written by index and cut to the count
+    'function f(out, xs) { let n = 0; for (const x of xs) out[n++] = x; out.length = n; }',
+    // emptied and never filled again here
+    'class H { #undo = []; clear() { this.#undo.length = 0; } }',
+    // pushed in another function: a local list of its own
+    'function a(list) { list.length = 0; } function b(list) { list.push(1); }',
+    // a number field called length
+    'function f(s) { s.length = 0; s.points++; }',
+  ],
+  invalid: [
+    { code: 'function f(out, xs) { out.length = 0; for (const x of xs) out.push(x); }', errors: [{ messageId: 'reset' }] },
+    { code: 'class P { #shown = []; begin() { this.#shown.length = 0; } draw(t) { this.#shown.push(t); } }', errors: [{ messageId: 'reset' }] },
+    { code: 'class P { items = []; begin() { this.items.length = 0; } add(t) { this.items.push(t); } }', errors: [{ messageId: 'reset' }] },
   ],
 });
 

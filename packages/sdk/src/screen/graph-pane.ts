@@ -4,6 +4,7 @@
  * and slices. Keyboard: arrows pan, + and - zoom, 0 goes home.
  */
 import { paintScene } from './paint';
+import type { FrameStyle } from './paint';
 import { mountLatexOverlay } from './latex-overlay';
 import type { Hit, SceneItem } from './paint';
 import { Viewport } from './viewport';
@@ -34,6 +35,8 @@ export interface GraphPaneOptions {
   readonly panAndZoom?: boolean;
   /** The window changed by a pan or a zoom on the screen. */
   readonly viewMoved?: (vp: Viewport) => void;
+  /** How this pane draws its axes and grid, read on every paint: each pane has its own, so two apps on a page do not share one. */
+  readonly style?: () => FrameStyle | undefined;
 }
 
 export interface GraphTool {
@@ -143,7 +146,7 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
     if (!ctx || typeof ctx.setTransform !== 'function') return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const scene = opts.items();
-    hits = paintScene(ctx, vp, scene);
+    hits = paintScene(ctx, vp, scene, opts.style?.());
     latex.sync(vp, scene);
     opts.tool?.()?.overlay(ctx, vp);
   };

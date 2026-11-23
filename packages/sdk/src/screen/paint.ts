@@ -85,10 +85,18 @@ const MONO = '13px "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospac
 
 /* ------------------------------ grid ------------------------------ */
 
-/** How the frame looks (app-modes settings `axes`, `grid`, `highContrast`): set by the app mode, read on every paint. */
-export const frameStyle: { axes: boolean; grid: 'none' | 'major' | 'minor'; highContrast: boolean; background: string | null } = { axes: true, grid: 'minor', highContrast: false, background: '#ffffff' };
+/** How the frame looks (app-modes settings `axes`, `grid`, `highContrast`). Each app owns its own; a paint takes it as an argument. */
+export interface FrameStyle {
+  readonly axes: boolean;
+  readonly grid: 'none' | 'major' | 'minor';
+  readonly highContrast: boolean;
+  readonly background: string | null;
+}
 
-export function paintGrid(ctx: Ctx, vp: Viewport): void {
+/** The style of a paint that is given none: axes, a minor grid and a white page. Frozen, so no importer can change it. */
+export const DEFAULT_FRAME_STYLE: FrameStyle = Object.freeze({ axes: true, grid: 'minor', highContrast: false, background: '#ffffff' });
+
+export function paintGrid(ctx: Ctx, vp: Viewport, frameStyle: FrameStyle = DEFAULT_FRAME_STYLE): void {
   const { w, h } = vp;
   if (frameStyle.background) {
     ctx.fillStyle = frameStyle.background;
@@ -1093,10 +1101,10 @@ function paintText(ctx: Ctx, vp: Viewport, s: string, t: NonNullable<SceneItem['
 /* ------------------------------ the scene ------------------------------ */
 
 /** Paints the grid and every item, and returns the hit areas, topmost last. */
-export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[]): Hit[] {
+export function paintScene(ctx: Ctx, vp: Viewport, items: readonly SceneItem[], frameStyle: FrameStyle = DEFAULT_FRAME_STYLE): Hit[] {
   const hits: Hit[] = [];
   stemOffset = 0;
-  paintGrid(ctx, vp);
+  paintGrid(ctx, vp, frameStyle);
   // areas and charts first, then curves, then points on top
   // smoke is a shaded image under everything (ui.md 7)
   const rank = (t: string): number => (t === 'Smoke' || t === 'Fire' ? -1 : t === 'Point' ? 3 : t === 'Water' || t === 'Waves' || t === 'Chart' || t === 'Region' || t === 'Polygon' || t.endsWith('Distribution') ? 0 : t === 'List' ? 2 : 1);

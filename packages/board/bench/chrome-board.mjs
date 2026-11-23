@@ -1,0 +1,827 @@
+/**
+ * The board in real Chrome with the CPU slowed 4 times (board design 13): the studio's Board mode driven with real
+ * input through the DevTools protocol (a pen's pointer events, wheel events), the numbers read from the page.
+ *
+ * Run from the repository root:
+ *   PLAYWRIGHT_DIR=/path/with/node_modules/playwright-core node packages/board/bench/chrome-board.mjs
+ *     [--rate 4] [--rows pen,gc,pan,fit,zoom,cards,lasso,switch,open] [--stroke 10] [--warm 2] [--md handoff/board/bench.md] [--headed]
+ *     [--gcpage studio|bare] [--gcdetail] [--alloc] [--profile]
+ *
+ * Playwright is not a dependency of the repository (docs/design/libraries.md): point PLAYWRIGHT_DIR at a folder where
+ * it is installed. Chrome itself is the installed one (`channel: 'chrome'`). The studio is served by Vite on a free
+ * port of 127.0.0.1. The boards (10,000 shapes, 2,000 strokes) are made by `chrome/data.ts` with the board's own core
+ * and pasted in as a board copy; the "open a board" row uses the page `chrome/index.html`.
+ *
+ * What is measured, and how:
+ * - A frame's script time is the time spent in the page's animation-frame callbacks plus the input handlers (pointer,
+ *   wheel, paste) that ran since the previous frame, as a patched `requestAnimationFrame` and `addEventListener` see it.
+ *   Browser work after the script (raster, compositing) is not in it.
+ * - Pen sample to pixel is the time from a pen sample's own timestamp (every coalesced sample of a pointermove) to the
+ *   end of the animation frame that draws it on the live canvas; the next frame's start is given too, as the bound by
+ *   which it has been on screen.
+ * - Collections are counted from a protocol trace (`v8` and `devtools.timeline`: MinorGC and MajorGC) over a stroke of
+ *   `--stroke` seconds. The row is the board's page minus a blank page's: the same stroke on a page of its own (a secure
+ *   context, as `getCoalescedEvents` needs) whose one listener only calls `getCoalescedEvents()`, which is what the browser
+ *   makes for the pen. Both counts are printed, with an idle page's.
+ * - The lasso row is the slowest of four runs (a fifth, first, run warms the code).
+ * The script exits 1 when a row is over its goal.
+ */
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+import { createServer } from 'vite';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, '../../..');
+const arg = (name, d) => {
+  const i = process.argv.indexOf(`--${name}`);
+  return i > 0 ? process.argv[i + 1] : d;
+};
+const flag = (name) => process.argv.includes(`--${name}`);
+const rate = Number(arg('rate', '4'));
+const strokeSeconds = Number(arg('stroke', '10'));
+const ALL = ['pen', 'gc', 'pan', 'fit', 'zoom', 'cards', 'lasso', 'switch', 'open'];
+const rows = arg('rows', ALL.join(',')).split(',');
+const out = (s) => process.stdout.write(`${s}\n`);
+
+const require = createRequire(process.env.PLAYWRIGHT_DIR ? path.join(process.env.PLAYWRIGHT_DIR, 'index.js') : import.meta.url);
+let chromium;
+try {
+  ({ chromium } = require('playwright-core'));
+} catch {
+  ({ chromium } = require('playwright'));
+}
+
+const freePort = () =>
+  new Promise((resolve) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const p = s.address().port;
+      s.close(() => resolve(p));
+    });
+  });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const sorted = (a) => Float64Array.from(a).sort();
+const pct = (a, q) => {
+  if (a.length === 0) return Number.NaN;
+  const s = sorted(a);
+  return s[Math.min(s.length - 1, Math.floor(s.length * q))];
+};
+const mean = (a) => (a.length === 0 ? Number.NaN : Array.from(a).reduce((x, y) => x + y, 0) / a.length);
+const fmt = (n, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : 'n/a');
+
+/** The goals of design 13 that a screen decides (the others are Node rows). `by` is the number the goal is compared with. */
+const GOALS = {
+  pen: { what: 'Pen sample to pixel (sample to end of its frame), 60 Hz', goal: 16, unit: 'ms', by: 'mean' },
+  penframe: { what: 'One frame while drawing a stroke (script)', goal: 2, unit: 'ms', by: 'mean' },
+  gc: { what: 'Collections over a 10 s stroke (the board\'s page minus a blank page\'s)', goal: 0, unit: '', by: 'count' },
+  pan: { what: 'Pan, 10,000 shapes, 1:1 (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
+  fit: { what: 'Pan, 10,000 shapes, all in view (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
+  zoom: { what: 'Zoom, 10,000 shapes (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
+  cards: { what: 'Pan, 2,000 strokes + 3 live cards (script, 95th percentile)', goal: 8, unit: 'ms', by: 'p95' },
+  lasso: { what: 'Lasso of 2,000 strokes (pointer-up handler)', goal: 4, unit: 'ms', by: 'slowest of 4' },
+  switch: { what: 'Switch to a page of 2,000 shapes (click to all tiles drawn)', goal: 100, unit: 'ms', by: 'value' },
+  open: { what: 'Open a 1,000-shape board (call to first picture)', goal: 200, unit: 'ms', by: 'value' },
+};
+const results = [];
+const record = (key, value, detail, extra) => {
+  const g = GOALS[key];
+  const ok = value <= g.goal;
+  results.push({ key, what: g.what, goal: g.goal, unit: g.unit, by: g.by, value, ok, detail, extra });
+  out(`${ok ? 'ok  ' : 'MISS'}  ${g.what.padEnd(62)} ${fmt(value)} ${g.unit}  (goal ${g.goal} ${g.unit}, ${g.by})  ${detail}`);
+};
+
+// ---------------------------------------------------------------------------------------------------------------
+// what the page reports
+
+/** Runs in every page before its own scripts: the frame, handler and sample recorder. */
+function instrument() {
+  // the garbage row reads pages with none of this script's own recorders in them
+  if (location.hash.startsWith('#plain')) return;
+  const B = {
+    on: false,
+    // one entry per animation-frame callback: the frame's time, its length, the handlers' time since the last callback
+    cbT: [],
+    cbStart: [],
+    cbEnd: [],
+    cbHandlers: [],
+    bucket: 0,
+    samples: [],
+    handler: {},
+    marks: [],
+  };
+  window.__b = B;
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (cb) =>
+    raf((t) => {
+      const s = performance.now();
+      try {
+        cb(t);
+      } finally {
+        if (B.on) {
+          B.cbT.push(t);
+          B.cbStart.push(s);
+          B.cbEnd.push(performance.now());
+          B.cbHandlers.push(B.bucket);
+          B.bucket = 0;
+        }
+      }
+    });
+  const HOT = new Set(['pointerdown', 'pointermove', 'pointerup', 'wheel', 'paste', 'click', 'keydown']);
+  const add = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function (type, fn, opts) {
+    if (!HOT.has(type) || typeof fn !== 'function') return add.call(this, type, fn, opts);
+    const timed = function (e) {
+      const s = performance.now();
+      try {
+        return fn.call(this, e);
+      } finally {
+        const d = performance.now() - s;
+        if (B.on) {
+          B.bucket += d;
+          const h = (B.handler[type] ??= { n: 0, total: 0, max: 0, last: 0 });
+          h.n++;
+          h.total += d;
+          h.last = d;
+          if (d > h.max) h.max = d;
+        }
+      }
+    };
+    return add.call(this, type, timed, opts);
+  };
+  window.addEventListener(
+    'pointermove',
+    (e) => {
+      if (!B.on) return;
+      const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      if (list.length === 0) B.samples.push(e.timeStamp);
+      else for (const c of list) B.samples.push(c.timeStamp);
+    },
+    true,
+  );
+  B.reset = () => {
+    B.cbT.length = B.cbStart.length = B.cbEnd.length = B.cbHandlers.length = B.samples.length = 0;
+    B.bucket = 0;
+    B.handler = {};
+  };
+  B.take = () => ({ cbT: B.cbT.slice(), cbStart: B.cbStart.slice(), cbEnd: B.cbEnd.slice(), cbHandlers: B.cbHandlers.slice(), samples: B.samples.slice(), handler: B.handler });
+}
+
+/** The frames of a take: callbacks with one animation-frame time are one frame. */
+function framesOf(t) {
+  const frames = [];
+  for (let i = 0; i < t.cbT.length; i++) {
+    const last = frames[frames.length - 1];
+    const cb = t.cbEnd[i] - t.cbStart[i];
+    if (last !== undefined && last.t === t.cbT[i]) {
+      last.script += cb + t.cbHandlers[i];
+      last.end = t.cbEnd[i];
+    } else {
+      frames.push({ t: t.cbT[i], start: t.cbStart[i], end: t.cbEnd[i], script: cb + t.cbHandlers[i] });
+    }
+  }
+  return frames;
+}
+
+/** For each sample, the time to the end of the first frame that starts after it, and to the start of the frame after that. */
+function latencies(t, frames) {
+  const toEnd = [];
+  const toNext = [];
+  let f = 0;
+  for (const ts of t.samples) {
+    while (f < frames.length && frames[f].start < ts) f++;
+    if (f >= frames.length) break;
+    toEnd.push(frames[f].end - ts);
+    if (f + 1 < frames.length) toNext.push(frames[f + 1].start - ts);
+  }
+  return { toEnd, toNext };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// servers and the browser
+
+const dataServer = await createServer({
+  root: path.join(here, 'chrome'),
+  configFile: false,
+  logLevel: 'error',
+  server: { host: '127.0.0.1', port: await freePort(), strictPort: true, fs: { allow: [root] } },
+});
+await dataServer.listen();
+const dataUrl = dataServer.resolvedUrls?.local?.[0] ?? `http://127.0.0.1:${dataServer.config.server.port}/`;
+const data = await dataServer.ssrLoadModule(path.join(here, 'chrome', 'data.ts'));
+const studioPort = await freePort();
+const studio = await createServer({ root: path.join(root, 'apps/studio'), logLevel: 'error', server: { host: '127.0.0.1', port: studioPort, strictPort: true } });
+await studio.listen();
+const studioUrl = `http://127.0.0.1:${studioPort}/?mode=notes`;
+
+const browser = await chromium.launch({
+  channel: 'chrome',
+  headless: !flag('headed'),
+  args: [
+    ...(flag('swiftshader') ? ['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] : []),
+    ...(flag('alloc') ? ['--enable-precise-memory-info'] : []),
+    // V8's own line for each collection, with its reason, on the browser's output (run with DEBUG=pw:browser)
+    ...(flag('tracegc') ? ['--js-flags=--trace-gc --trace-gc-verbose', '--single-process'] : []),
+  ],
+});
+const logs = [];
+const version = browser.version();
+try {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+  await context.addInitScript(instrument);
+  const page = await context.newPage();
+  page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
+  page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`));
+  page.on('response', (r) => {
+    if (r.status() >= 400) logs.push(`error: ${r.status()} ${r.url()}`);
+  });
+  let cdp = await context.newCDPSession(page);
+  const throttle = (r) => cdp.send('Emulation.setCPUThrottlingRate', { rate: r });
+
+  const openStudio = async (plain = false) => {
+    await page.goto(plain ? `${studioUrl}#${plain === true ? 'plain' : plain}` : studioUrl);
+    await page.waitForSelector('.ib-view');
+    await sleep(500);
+  };
+  const info = () => page.evaluate(() => ({ ...document.querySelector('.ib-view').dataset }));
+  const waitFor = async (pred, what, ms = 60_000) => {
+    try {
+      await page.waitForFunction(pred, null, { timeout: ms, polling: 100 });
+    } catch {
+      throw new Error(`timed out waiting for ${what}; the board says ${JSON.stringify(await info())}; ${logs.slice(-5).join(' | ')}`);
+    }
+  };
+  const surface = async () => {
+    const box = await page.locator('.ib-surface').boundingBox();
+    return box;
+  };
+  const paste = async (text, x = 600, y = 400) => {
+    const box = await surface();
+    await page.mouse.move(box.x + x, box.y + y);
+    await page.evaluate((t) => {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', t);
+      document.querySelector('.ib-view').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, text);
+  };
+  const tool = (id) => page.evaluate((i) => document.querySelector(`.ib-tools [data-tool=${i}]`).click(), id);
+  /** Pastes a copy, lets the board settle, puts the selection down and takes the hand. */
+  const load = async (text, shapes) => {
+    await paste(text);
+    await waitFor(`() => Number(document.querySelector('.ib-view').dataset.shapes) >= ${shapes}`, `${shapes} shapes`);
+    await sleep(500);
+    await page.focus('.ib-surface');
+    await page.keyboard.press('Escape');
+    await tool('hand');
+    await sleep(300);
+  };
+  /** One CDP mouse event as a pen. */
+  const pen = (type, x, y, pressure) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' && pressure === 0 ? 'none' : 'left', buttons: type === 'mouseReleased' || pressure === 0 ? 0 : 1, clickCount: type === 'mouseMoved' ? 0 : 1, pointerType: 'pen', force: pressure });
+  const mouse = (type, x, y, down) => cdp.send('Input.dispatchMouseEvent', { type, x, y, button: type === 'mouseMoved' && !down ? 'none' : 'left', buttons: type === 'mouseReleased' || !down ? 0 : 1, clickCount: type === 'mouseMoved' ? 0 : 1 });
+  const wheel = (x, y, dx, dy, ctrl) => cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: dx, deltaY: dy, modifiers: ctrl ? 2 : 0 });
+  /**
+   * Calls `step(i)` every `ms` for `seconds`, on a fixed schedule (a slow call does not move the next). The calls are not
+   * waited for one by one: the browser answers an input event when its frame has run, so waiting would tie the input to
+   * the frames; they are all waited for at the end.
+   */
+  const every = async (ms, seconds, step) => {
+    const t0 = performance.now();
+    const n = Math.floor((seconds * 1000) / ms);
+    const sent = [];
+    for (let i = 0; i < n; i++) {
+      const due = t0 + i * ms;
+      const wait = due - performance.now();
+      if (wait > 0) await sleep(wait);
+      sent.push(step(i));
+    }
+    await Promise.all(sent);
+  };
+  /** The functions the page spent its time in, from a CPU profile of the protocol (with `--cpu`). */
+  const topFunctions = (profile, n = 12) => {
+    const self = new Map();
+    const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+    const dt = profile.timeDeltas;
+    for (let i = 0; i < profile.samples.length; i++) {
+      const node = byId.get(profile.samples[i]);
+      const f = node.callFrame;
+      const key = `${f.functionName || '(anonymous)'} ${f.url.split('/').slice(-2).join('/')}:${f.lineNumber + 1}`;
+      self.set(key, (self.get(key) ?? 0) + (dt[i] ?? 0));
+    }
+    const total = [...self.values()].reduce((a, b) => a + b, 0);
+    // functions V8 gave up optimising, and why: a function that deoptimises every frame boxes its numbers each time
+    const deopts = new Map();
+    for (const node of profile.nodes) if (node.deoptReason) deopts.set(`${node.callFrame.functionName || '(anonymous)'} ${node.callFrame.url.split('/').slice(-2).join('/')}:${node.callFrame.lineNumber + 1}`, node.deoptReason);
+    for (const [k, v] of deopts) out(`  deopt: ${k}: ${v}`);
+    return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${(v / 1000).toFixed(0).padStart(7)} ms ${((100 * v) / total).toFixed(0).padStart(3)}%  ${k}`);
+  };
+  const recorded = async (fn) => {
+    await page.evaluate(() => {
+      window.__b.reset();
+      window.__b.on = true;
+    });
+    if (flag('cpu')) {
+      await cdp.send('Profiler.enable');
+      await cdp.send('Profiler.start');
+    }
+    await fn();
+    await sleep(120);
+    if (flag('cpu')) {
+      const { profile } = await cdp.send('Profiler.stop');
+      out(topFunctions(profile).join('\n'));
+      out('');
+    }
+    const t = await page.evaluate(() => {
+      window.__b.on = false;
+      return window.__b.take();
+    });
+    return t;
+  };
+  const stroke = async (seconds, x0, y0) => {
+    // 120 pen samples a second along a wave, the pressure rising and falling
+    const hz = 120;
+    await pen('mouseMoved', x0, y0, 0);
+    await pen('mousePressed', x0, y0, 0.5);
+    await every(1000 / hz, seconds, (i) => pen('mouseMoved', x0 + ((i * 0.6) % 900), y0 + 120 * Math.sin(i / 45) + 30 * Math.sin(i / 7), 0.3 + 0.5 * Math.abs(Math.sin(i / 60))));
+    await pen('mouseReleased', x0, y0, 0.5);
+  };
+
+  out(`Chrome ${version}, CPU ×${rate}, 1280 × 800 at 1:1, stroke ${strokeSeconds} s`);
+  await openStudio();
+  out(`backend ${(await info()).backend}`);
+  await throttle(rate);
+
+  // ---- the pen: sample to pixel, frame script time while drawing
+  if (rows.includes('pen')) {
+    await tool('pen');
+    const box = await surface();
+    // a stroke to warm the paths, then the one that is timed
+    await stroke(2, box.x + 120, box.y + 300);
+    await page.evaluate(() => window.__b.reset());
+    const t = await recorded(() => stroke(strokeSeconds, box.x + 120, box.y + 400));
+    const frames = framesOf(t);
+    const lat = latencies(t, frames);
+    if (flag('debug')) {
+      const t0 = frames[100].start;
+      out(frames.slice(100, 112).map((f) => `frame ${fmt(f.start - t0)}..${fmt(f.end - t0)} t=${fmt(f.t - t0)}`).join('\n'));
+      out(`samples ${t.samples.slice(100, 124).map((x) => fmt(x - t0)).join(' ')}`);
+    }
+    const script = frames.map((f) => f.script);
+    record('pen', mean(lat.toEnd), `mean ${fmt(mean(lat.toEnd))}, 95% ${fmt(pct(lat.toEnd, 0.95))}, worst ${fmt(Math.max(...lat.toEnd))}; to the next frame's start mean ${fmt(mean(lat.toNext))}, 95% ${fmt(pct(lat.toNext, 0.95))}; ${lat.toEnd.length} samples in ${frames.length} frames`, { mean: mean(lat.toEnd), p95: pct(lat.toEnd, 0.95), worst: Math.max(...lat.toEnd), nextMean: mean(lat.toNext), nextP95: pct(lat.toNext, 0.95) });
+    record('penframe', mean(script), `mean ${fmt(mean(script))}, 95% ${fmt(pct(script, 0.95))}, worst ${fmt(Math.max(...script))}; ${frames.length} frames; handlers: ${Object.entries(t.handler).map(([k, h]) => `${k} ${fmt(h.total / h.n, 3)} ms ×${h.n}`).join(', ')}`, { mean: mean(script), p95: pct(script, 0.95), worst: Math.max(...script) });
+  }
+
+  // ---- garbage: collections over a stroke, and over an idle page
+  if (rows.includes('gc')) {
+    if (arg('gcpage', 'studio') === 'bare') {
+      // the board alone on a page of its own, without the studio round it
+      await page.goto(`${dataUrl}#plain`);
+      await page.waitForFunction(() => typeof window.boardMount === 'function');
+      const mounted = await page.evaluate(() => window.boardMount());
+      if (mounted !== 'ok') throw new Error(mounted);
+      await page.waitForSelector('.ib-view');
+      await sleep(500);
+    } else await openStudio(true);
+    await throttle(rate);
+    await tool('pen');
+    const box = await surface();
+    await stroke(Number(arg('warm', '2')), box.x + 120, box.y + 300);
+    const trace = async (fn) => {
+      const events = [];
+      cdp.on('Tracing.dataCollected', (e) => events.push(...e.value));
+      const done = new Promise((resolve) => cdp.once('Tracing.tracingComplete', resolve));
+      // start from an empty young generation, so what is counted is what the stroke makes
+      await cdp.send('HeapProfiler.enable');
+      await cdp.send('HeapProfiler.collectGarbage');
+      // a collection that was asked for finishes in the background; the trace starts after it has
+      await sleep(400);
+      await cdp.send('Tracing.start', { categories: 'v8,devtools.timeline,disabled-by-default-v8.gc', transferMode: 'ReportEvents' });
+      await fn();
+      await cdp.send('Tracing.end');
+      await done;
+      cdp.removeAllListeners('Tracing.dataCollected');
+      return events;
+    };
+    const gcs = (events) => {
+      const by = {};
+      if (flag('gcdetail')) {
+        // when each collection came, from the first event of the trace, and the heap before and after it
+        const t0 = Math.min(...events.filter((e) => e.ts > 0).map((e) => e.ts));
+        for (const e of events) {
+          if (e.name !== 'MinorGC' && e.name !== 'MajorGC') continue;
+          const a = e.args?.data ?? e.args ?? {};
+          out(`  ${e.name} at ${((e.ts - t0) / 1000).toFixed(0)} ms, heap ${((a.usedHeapSizeBefore ?? 0) / 1024).toFixed(0)} KB -> ${((a.usedHeapSizeAfter ?? 0) / 1024).toFixed(0)} KB`);
+        }
+        // what V8 says of each collection (its reason and the young space), from its own events
+        for (const e of events) if (/^V8\.GC(Scavenger|_SCAVENGER|Heap)|GCEpoch|V8\.GC_HEAP_EXTERNAL|GCCollectGarbage/.test(e.name) && e.args !== undefined && Object.keys(e.args).length > 0) out(`    ${e.name} ${JSON.stringify(e.args).slice(0, 300)}`);
+      }
+      for (const e of events) {
+        if (e.ph === 'X' || e.ph === 'B' || e.ph === 'I') {
+          if (e.name === 'MinorGC' || e.name === 'MajorGC' || e.name === 'V8.GCScavenger' || e.name === 'V8.GCCompactor') by[e.name] = (by[e.name] ?? 0) + 1;
+        }
+      }
+      return by;
+    };
+    const idle = gcs(await trace(() => sleep(strokeSeconds * 1000)));
+    const drawn = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    if (flag('alloc')) {
+      // the bytes the page's heap grew by over a stroke, summed frame by frame (a fall is a collection, and is skipped); the
+      // sampler's own reads are a fixed cost, the same with nothing drawn
+      const sampled = async (fn) => {
+        await page.evaluate(() => {
+          const A = (window.__alloc = { on: true, last: performance.memory.usedJSHeapSize, grew: 0, frames: 0 });
+          const step = () => {
+            const now = performance.memory.usedJSHeapSize;
+            if (now > A.last) A.grew += now - A.last;
+            A.last = now;
+            A.frames++;
+            if (A.on) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        });
+        await fn();
+        return page.evaluate(() => {
+          window.__alloc.on = false;
+          return { grew: window.__alloc.grew, frames: window.__alloc.frames };
+        });
+      };
+      const still = await sampled(() => sleep(strokeSeconds * 1000));
+      const inked = await sampled(() => stroke(strokeSeconds, box.x + 120, box.y + 400));
+      out(`heap growth over ${strokeSeconds} s: still ${(still.grew / 1024).toFixed(0)} KB in ${still.frames} frames; drawing ${(inked.grew / 1024).toFixed(0)} KB in ${inked.frames} frames (${(inked.grew / Math.max(1, inked.frames)).toFixed(0)} bytes a frame)`);
+    }
+    /** The heap as the protocol reports it, every 50 ms while `fn` runs: the script's objects, Blink's and the array buffers', each summed where it grows. */
+    const usageOf = async (session, fn) => {
+      const grew = { used: 0, embedder: 0, backing: 0 };
+      let last = await session.send('Runtime.getHeapUsage');
+      let going = true;
+      const poll = (async () => {
+        while (going) {
+          await sleep(50);
+          const now = await session.send('Runtime.getHeapUsage');
+          if (now.usedSize > last.usedSize) grew.used += now.usedSize - last.usedSize;
+          if ((now.embedderHeapUsedSize ?? 0) > (last.embedderHeapUsedSize ?? 0)) grew.embedder += now.embedderHeapUsedSize - last.embedderHeapUsedSize;
+          if ((now.backingStorageSize ?? 0) > (last.backingStorageSize ?? 0)) grew.backing += now.backingStorageSize - last.backingStorageSize;
+          last = now;
+        }
+      })();
+      await fn();
+      going = false;
+      await poll;
+      return `script ${(grew.used / 1024).toFixed(0)} KB, Blink ${(grew.embedder / 1024).toFixed(0)} KB, array buffers ${(grew.backing / 1024).toFixed(0)} KB`;
+    };
+    if (flag('usage')) out(`heap growth over a ${strokeSeconds} s stroke, the board's page: ${await usageOf(cdp, () => stroke(strokeSeconds, box.x + 120, box.y + 400))}`);
+    if (flag('track')) {
+      // every allocation of a stroke with its stack (the allocation tracker of the protocol): the trace tree of the heap snapshot
+      // counts what was made, collected or not
+      await cdp.send('HeapProfiler.enable');
+      await cdp.send('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
+      await stroke(strokeSeconds, box.x + 120, box.y + 400);
+      const chunks = [];
+      const onChunk = (e) => chunks.push(e.chunk);
+      cdp.on('HeapProfiler.addHeapSnapshotChunk', onChunk);
+      await cdp.send('HeapProfiler.stopTrackingHeapObjects', { reportProgress: false });
+      cdp.off('HeapProfiler.addHeapSnapshotChunk', onChunk);
+      const snap = JSON.parse(chunks.join(''));
+      const meta = snap.snapshot.meta;
+      const infoFields = meta.trace_function_info_fields;
+      const nodeFields = meta.trace_node_fields;
+      const fi = snap.trace_function_infos;
+      const strings = snap.strings;
+      const fnName = (id) => {
+        const at = id * infoFields.length;
+        const name = strings[fi[at + infoFields.indexOf('name')]];
+        const script = strings[fi[at + infoFields.indexOf('script_name')]] ?? '';
+        const line = fi[at + infoFields.indexOf('line')];
+        return `${name || '(anonymous)'} ${script.split('/').slice(-2).join('/')}:${line + 1}`;
+      };
+      const by = new Map();
+      let total = 0;
+      const walk = (node, trail) => {
+        // a node is [id, function info index, count, size, children]
+        const fIndex = node[nodeFields.indexOf('function_info_index')];
+        const size = node[nodeFields.indexOf('size')];
+        const kids = node[nodeFields.indexOf('children')];
+        const here = [...trail, fnName(fIndex)];
+        if (size > 0) {
+          const key = here.slice(-3).reverse().join(' < ');
+          by.set(key, (by.get(key) ?? 0) + size);
+          total += size;
+        }
+        for (let i = 0; i < kids.length; i += nodeFields.length) walk(kids.slice(i, i + nodeFields.length), here);
+      };
+      const tree = snap.trace_tree;
+      for (let i = 0; i < tree.length; i += nodeFields.length) walk(tree.slice(i, i + nodeFields.length), []);
+      out(`allocated while drawing ${strokeSeconds} s (tracker): ${(total / 1024).toFixed(0)} KB`);
+      for (const [k, v] of [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30)) out(`  ${(v / 1024).toFixed(1).padStart(8)} KB  ${k}`);
+    }
+    if (flag('profile')) {
+      // where the page's script allocates while drawing, garbage included: the sampling heap profiler of the protocol
+      await cdp.send('HeapProfiler.enable');
+      await cdp.send('HeapProfiler.startSampling', { samplingInterval: 128, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+      await stroke(strokeSeconds, box.x + 120, box.y + 400);
+      const { profile } = await cdp.send('HeapProfiler.stopSampling');
+      const by = new Map();
+      const walk = (n, trail) => {
+        const f = n.callFrame;
+        const here = [...trail, `${f.functionName || '(anonymous)'} ${f.url.split('/').slice(-2).join('/')}:${f.lineNumber + 1}`];
+        if (n.selfSize > 0) {
+          const key = here.slice(-4).reverse().join(' < ');
+          by.set(key, (by.get(key) ?? 0) + n.selfSize);
+        }
+        for (const c of n.children) walk(c, here);
+      };
+      walk(profile.head, []);
+      const top = [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+      const total = [...by.values()].reduce((a, b) => a + b, 0);
+      out(`allocation while drawing ${strokeSeconds} s: ${(total / 1024).toFixed(0)} KB`);
+      for (const [k, v] of top) out(`  ${(v / 1024).toFixed(1).padStart(8)} KB  ${k}`);
+    }
+    const count = (o) => (o.MinorGC ?? 0) + (o.MajorGC ?? 0);
+    // the browser makes garbage of its own for each coalesced event it hands over (`getCoalescedEvents()`), so the same
+    // stroke is made on a blank page of its own (a context of its own, so a process of its own) whose one listener only calls it;
+    // what the board makes is the difference
+    const studioCdp = cdp;
+    const blankContext = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+    const blankPage = await blankContext.newPage();
+    cdp = await blankContext.newCDPSession(blankPage);
+    // `getCoalescedEvents` exists only in a secure context (a page that is not one throws on the call, and the errors are garbage of
+    // their own), so the blank page is served from the loopback address, as the studio is
+    await blankPage.route('http://127.0.0.1:1/blank', (r) => r.fulfill({ contentType: 'text/html', body: '<!doctype html><body></body>' }));
+    await blankPage.goto('http://127.0.0.1:1/blank#plain');
+    await blankPage.evaluate(() => {
+      document.body.style.cssText = 'margin:0;width:100vw;height:100vh';
+      window.addEventListener(
+        'pointermove',
+        (e) => {
+          if (typeof e.getCoalescedEvents !== 'function') return;
+          const list = e.getCoalescedEvents();
+          for (let i = 0; i < list.length; i++) {
+            const c = list[i];
+            if (c.clientX < -1e9 || c.pressure < -1 || c.timeStamp < -1) return;
+          }
+        },
+        true,
+      );
+    });
+    await sleep(300);
+    await throttle(rate);
+    await stroke(2, box.x + 120, box.y + 300);
+    // a process that has just started collects on its own while its heap settles; the stroke that is counted comes after that
+    await trace(() => sleep(3000));
+    const blank = gcs(await trace(() => stroke(strokeSeconds, box.x + 120, box.y + 400)));
+    if (flag('usage')) out(`heap growth over a ${strokeSeconds} s stroke, the blank page: ${await usageOf(cdp, () => stroke(strokeSeconds, box.x + 120, box.y + 400))}`);
+    await cdp.detach();
+    await blankContext.close();
+    cdp = studioCdp;
+    const ours = Math.max(0, count(drawn) - count(blank));
+    record('gc', ours, `the board's page ${count(drawn)} (${JSON.stringify(drawn)}) minus a blank page with the same listener and getCoalescedEvents() ${count(blank)} (${JSON.stringify(blank)}); idle page for the same time: ${JSON.stringify(idle)}`, { drawn, blank, idle, ours });
+  }
+
+  // ---- 10,000 shapes: pan at 1:1, pan with everything in view, zoom
+  if (rows.some((r) => ['pan', 'fit', 'zoom'].includes(r))) {
+    await openStudio();
+    await throttle(1);
+    const text = data.copyOf(10_000, arg('mix', 'mixed'));
+    await load(text, 10_000);
+    const i0 = await info();
+    out(`10,000 shapes pasted: ${i0.shapes} shapes, ${i0.tiles} tiles`);
+    await throttle(rate);
+    const box = await surface();
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const panRun = async (seconds) => {
+      // a trackpad's pan: a wheel step of 14 by 6 pixels each frame, back and forth so the board stays in reach
+      await every(1000 / 60, seconds, (i) => wheel(cx, cy, Math.floor(i / 120) % 2 === 0 ? 14 : -14, Math.floor(i / 120) % 2 === 0 ? 6 : -6, false));
+    };
+    const report = (key, t, label) => {
+      const frames = framesOf(t);
+      const script = frames.map((f) => f.script);
+      const gaps = [];
+      for (let i = 1; i < frames.length; i++) gaps.push(frames[i].start - frames[i - 1].start);
+      const fps = frames.length / ((frames[frames.length - 1].start - frames[0].start) / 1000);
+      record(key, pct(script, 0.95), `${label}: mean ${fmt(mean(script))}, 95% ${fmt(pct(script, 0.95))}, worst ${fmt(Math.max(...script))}; ${frames.length} frames, ${fmt(fps, 1)} frames/s, 95% of frame gaps ${fmt(pct(gaps, 0.95))} ms`, { mean: mean(script), p95: pct(script, 0.95), worst: Math.max(...script), fps });
+    };
+    if (rows.includes('pan')) {
+      // zoom 1:1 first (the paste sits where the pointer was; go to the middle of the strokes)
+      await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+      await sleep(300);
+      await page.evaluate(() => [...document.querySelectorAll('.ib-view button')].find((b) => b.textContent === '1:1').click());
+      await sleep(1500);
+      await panRun(1);
+      const t = await recorded(() => panRun(6));
+      report('pan', t, `zoom ${(await page.evaluate(() => document.querySelector('.ib-view output')?.value))}, tiles ${(await info()).tiles}`);
+    }
+    if (rows.includes('fit')) {
+      await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+      await sleep(1500);
+      await panRun(1);
+      const t = await recorded(() => panRun(6));
+      report('fit', t, `zoom ${(await page.evaluate(() => document.querySelector('.ib-view output')?.value))}, tiles ${(await info()).tiles}`);
+    }
+    if (rows.includes('zoom')) {
+      // a pinch: 2.4 s in 40 frames of 3.5% (a factor of 4), a pause for the tiles of the new step, then out again; three times
+      await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+      await sleep(1500);
+      const gesture = [];
+      const settle = [];
+      for (let cycle = 0; cycle < 3; cycle++) {
+        for (const dir of [-1, 1]) {
+          const t = await recorded(() => every(1000 / 60, 40 / 60, () => wheel(cx, cy, 0, 2 * dir, true)));
+          gesture.push(...framesOf(t).map((f) => f.script));
+          if (flag('debug')) out(`gesture ${dir}: ${framesOf(t).map((f) => fmt(f.script, 1)).join(' ')}`);
+          const u = await recorded(() => sleep(900));
+          settle.push(...framesOf(u).map((f) => f.script));
+        }
+      }
+      const all = [...gesture, ...settle];
+      record('zoom', pct(all, 0.95), `moving: ${gesture.length} frames, mean ${fmt(mean(gesture))}, 95% ${fmt(pct(gesture, 0.95))}, worst ${fmt(Math.max(...gesture))}; the tiles of the new step after it: ${settle.length} frames, mean ${fmt(mean(settle))}, 95% ${fmt(pct(settle, 0.95))}, worst ${fmt(Math.max(...settle))}`, { gesture: { mean: mean(gesture), p95: pct(gesture, 0.95), worst: Math.max(...gesture) }, settle: { mean: mean(settle), p95: pct(settle, 0.95), worst: Math.max(...settle) } });
+    }
+  }
+
+  // ---- 2,000 strokes and 3 live graph cards, panning
+  if (rows.includes('cards')) {
+    await openStudio();
+    await throttle(1);
+    await load(data.copyOf(2_000, 'strokes'), 2_000);
+    const scripts = ['# incantly 1\n@axes on\n@grid major\nf(x) = x^2 - 2\nA = (1, 1)\n', '# incantly 1\n@axes on\n@grid major\nf(x) = sin(x)\n', '# incantly 1\n@axes on\n@grid major\ng(x) = cos(x)\nh(x) = x/2\n'];
+    const at = [[300, 250], [640, 250], [980, 250]];
+    for (let i = 0; i < 3; i++) {
+      await paste(scripts[i], at[i][0], at[i][1]);
+      await sleep(800);
+      await page.focus('.ib-surface');
+      await page.keyboard.press('Escape');
+    }
+    await tool('hand');
+    await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+    await sleep(2500);
+    out(`cards: ${JSON.stringify(await info())}`);
+    await throttle(rate);
+    const box = await surface();
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const run = (seconds) => every(1000 / 60, seconds, (i) => wheel(cx, cy, Math.floor(i / 60) % 2 === 0 ? 10 : -10, Math.floor(i / 60) % 2 === 0 ? 4 : -4, false));
+    await run(1);
+    const t = await recorded(() => run(6));
+    const frames = framesOf(t);
+    const script = frames.map((f) => f.script);
+    const end = await info();
+    record('cards', pct(script, 0.95), `mean ${fmt(mean(script))}, 95% ${fmt(pct(script, 0.95))}, worst ${fmt(Math.max(...script))}; ${frames.length} frames; cards ${end.cards}, live ${end.live}`, { mean: mean(script), p95: pct(script, 0.95), worst: Math.max(...script) });
+  }
+
+  // ---- a lasso round 2,000 strokes
+  if (rows.includes('lasso')) {
+    await openStudio();
+    await throttle(1);
+    await load(data.copyOf(2_000, 'strokes'), 2_000);
+    await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+    await sleep(2000);
+    await throttle(rate);
+    await tool('lasso');
+    const box = await surface();
+    const loop = [];
+    // a loop round the strokes, which the fit puts in the middle of the view (clear of the page bar and the toolbar)
+    const L = box.x + 40;
+    const R = box.x + box.width - 40;
+    const T = box.y + box.height / 2 - 140;
+    const Bt = box.y + box.height / 2 + 140;
+    for (let k = 0; k < 12; k++) loop.push([L + ((R - L) * k) / 12, T]);
+    for (let k = 0; k < 12; k++) loop.push([R, T + ((Bt - T) * k) / 12]);
+    for (let k = 0; k < 12; k++) loop.push([R - ((R - L) * k) / 12, Bt]);
+    for (let k = 0; k < 12; k++) loop.push([L, Bt - ((Bt - T) * k) / 12]);
+    const lasso = async () => {
+      await page.evaluate(() => {
+        window.__b.handler = {};
+      });
+      await mouse('mouseMoved', loop[0][0], loop[0][1], false);
+      await mouse('mousePressed', loop[0][0], loop[0][1], true);
+      for (const [x, y] of loop.slice(1)) {
+        await mouse('mouseMoved', x, y, true);
+        await sleep(8);
+      }
+      await mouse('mouseMoved', loop[0][0], loop[0][1] + 3, true);
+      await mouse('mouseReleased', loop[0][0], loop[0][1] + 3, true);
+      await sleep(700);
+    };
+    if (flag('debug')) {
+      await lasso();
+      out(`after one lasso: ${JSON.stringify(await info())}`);
+      await page.screenshot({ path: path.join(process.env.KIROCREW_SCRATCH ?? '.', 'lasso-debug.png') });
+    }
+    const runs = [];
+    let frameAfter = 0;
+    for (let run = 0; run < 5; run++) {
+      const t = await recorded(lasso);
+      const up = t.handler.pointerup;
+      const selected = Number((await info()).selected);
+      const frames = framesOf(t);
+      const after = Math.max(...frames.map((f) => f.script));
+      runs.push({ up: up?.max ?? Number.NaN, selected, after });
+      frameAfter = after;
+      await page.focus('.ib-surface');
+      await page.keyboard.press('Escape');
+      await sleep(200);
+    }
+    // every run counts: the row is the slowest of them
+    const worst = Math.max(...runs.slice(1).map((r) => r.up));
+    record('lasso', worst, `slowest of ${runs.length - 1} (first is warm-up): ${runs.map((r) => `${fmt(r.up)} ms/${r.selected} selected`).join(', ')}; slowest frame after ${fmt(frameAfter)} ms`, { runs });
+  }
+
+  // ---- switch to a page of 2,000 shapes
+  if (rows.includes('switch')) {
+    await openStudio();
+    await throttle(1);
+    await page.evaluate(() => document.querySelector('button[title="Add a page"]').click());
+    await sleep(300);
+    await load(data.copyOf(2_000, 'mixed'), 2_000);
+    await page.evaluate(() => document.querySelector('[data-action=zoom-fit]').click());
+    await sleep(1500);
+    await throttle(rate);
+    const goto = async (n) => {
+      // opens the page list and clicks page `n` (1 or 2) inside the page, timing from the click
+      await page.evaluate(() => {
+        const b = document.querySelector('.ib-pages > button[aria-haspopup=listbox]');
+        if (document.querySelector('.ib-pages .ib-list').hidden) b.click();
+      });
+      await sleep(100);
+      await page.evaluate(() => {
+        window.__b.reset();
+        window.__b.on = true;
+      });
+      const t0 = await page.evaluate((i) => {
+        const btn = document.querySelectorAll('.ib-pages .ib-list button')[i - 1];
+        const t = performance.now();
+        btn.click();
+        return t;
+      }, n);
+      await sleep(1200);
+      if (flag('debug')) out(`after the click: ${JSON.stringify(await page.evaluate(() => ({ on: window.__b.on, n: window.__b.cbT.length, hidden: document.hidden, vis: document.visibilityState })))}`);
+      const t = await page.evaluate(() => {
+        window.__b.on = false;
+        return window.__b.take();
+      });
+      const frames = framesOf(t).filter((f) => f.end >= t0);
+      if (frames.length === 0) throw new Error(`the page switch drew no frame (${t.cbT.length} callbacks, t0 ${t0}, ends ${t.cbEnd.slice(0, 3)}; ${JSON.stringify(await info())})`);
+      const quiet = [];
+      return { first: frames[0].end - t0, firstScript: frames[0].script, last: frames[frames.length - 1].end - t0, frames: frames.length, quiet, info: await info() };
+    };
+    await goto(1);
+    const runs = [];
+    for (let i = 0; i < 5; i++) {
+      runs.push(await goto(2));
+      await goto(1);
+    }
+    runs.shift();
+    const best = runs.reduce((a, b) => (b.last < a.last ? b : a));
+    record('switch', best.last, `best of ${runs.length}: ${runs.map((r) => `${fmt(r.first)} ms first frame (${fmt(r.firstScript)} script), ${fmt(r.last)} ms to the last of ${r.frames} frames`).join('; ')}; ${best.info.shapes} shapes, ${best.info.tiles} tiles`, { runs });
+  }
+
+  // ---- open a board
+  if (rows.includes('open')) {
+    await throttle(1);
+    await page.goto(dataUrl);
+    await page.waitForFunction(() => 'boardOpen' in window, null, { timeout: 60_000 });
+    await throttle(rate);
+    const runs = [];
+    for (let i = 0; i < 5; i++) runs.push(await page.evaluate(() => window.boardOpen(1000)));
+    const best = runs.slice(1).reduce((a, b) => (b.firstFrame < a.firstFrame ? b : a));
+    record('open', best.firstFrame, `best of ${runs.length - 1} after a warm-up: ${runs.map((r) => `${fmt(r.created)} ms to created, ${fmt(r.firstFrame)} first frame, ${fmt(r.onScreen)} next frame`).join('; ')}; ${best.shapes} shapes, ${best.tiles} tiles, ${best.backend}`, { runs });
+  }
+
+  await throttle(1);
+  await cdp.detach();
+  const bad = logs.filter((l) => /error/i.test(l));
+  if (bad.length > 0) out(`page errors:\n${bad.slice(-10).join('\n')}`);
+} finally {
+  await browser.close();
+  await studio.close();
+  await dataServer.close();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// the table
+
+const over = results.filter((r) => !r.ok);
+const table = [
+  '| What | Goal | Measured | Compared as | Result |',
+  '|---|---|---|---|---|',
+  ...results.map((r) => `| ${r.what} | ${r.goal} ${r.unit} | ${fmt(r.value)} ${r.unit} | ${r.by} | ${r.ok ? 'ok' : 'over'} |`),
+].join('\n');
+out(`\n${table}\n`);
+const mdPath = arg('md', '');
+if (mdPath) {
+  const body = [
+    `Chrome ${version}, CPU ×${rate}, 1280 × 800 at 1:1.`,
+    '',
+    table,
+    '',
+    ...results.map((r) => `- **${r.what}:** ${r.detail}`),
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.resolve(root, mdPath), body);
+}
+if (over.length > 0) {
+  out(`over goal: ${over.map((r) => r.key).join(', ')}`);
+  process.exitCode = 1;
+}

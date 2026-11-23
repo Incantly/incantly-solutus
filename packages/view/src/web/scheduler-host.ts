@@ -9,6 +9,20 @@ import {
   type FigureRecord, type SchedulerAction, type SchedulerConfig, type SchedulerStats,
 } from '../core/scheduler';
 import { SchedulerState } from '../core/scheduler';
+import { StateMachine } from '@incantly/kernel';
+import type { MachineTable } from '@incantly/kernel';
+
+/**
+ * A tick asked for from inside an action callback does not run nested: `again` marks that the running tick must go
+ * round once more (V1, actions match the state they came from).
+ */
+type TickState = 'idle' | 'ticking' | 'again';
+type TickEvent = 'begin' | 'round' | 'request' | 'end';
+const TICK_MACHINE: MachineTable<TickState, TickEvent> = {
+  idle: { begin: 'ticking' },
+  ticking: { round: 'ticking', request: 'again', end: 'idle' },
+  again: { round: 'ticking', request: 'again', end: 'idle' },
+};
 
 export interface SchedulerCallbacks {
   readonly onAction: (action: SchedulerAction, record: FigureRecord) => void;
@@ -23,8 +37,7 @@ export class SchedulerHost {
   private timer: ReturnType<typeof setInterval> | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
   private buildTimer: ReturnType<typeof setTimeout> | null = null;
-  private ticking = false;
-  private again = false;
+  private ticks = new StateMachine(TICK_MACHINE, 'idle');
   private viewObserver: IntersectionObserver | null = null;
   private nearObserver: IntersectionObserver | null = null;
 
@@ -91,16 +104,16 @@ export class SchedulerHost {
     // A tick requested from inside an action callback (a touch, a play toggle)
     // does not run nested: the outer tick finishes dispatching the actions it
     // produced, then runs once more (V1, actions match the state they came from).
-    if (this.ticking) {
-      this.again = true;
+    if (!this.ticks.is('idle')) {
+      this.ticks.send('request');
       return [];
     }
-    this.ticking = true;
+    this.ticks.send('begin');
     const all: SchedulerAction[] = [];
     try {
       let rounds = 0;
       do {
-        this.again = false;
+        this.ticks.send('round');
         const actions = schedulerTick(this.state, {
           nowMs: Date.now(),
           visible: this.visible,
@@ -114,10 +127,9 @@ export class SchedulerHost {
         }
         all.push(...actions);
         rounds++;
-      } while (this.again && rounds < 4);
+      } while (this.ticks.is('again') && rounds < 4);
     } finally {
-      this.ticking = false;
-      this.again = false;
+      this.ticks.send('end');
     }
     this.armBuildTimer();
     return all;

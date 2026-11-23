@@ -15,7 +15,7 @@ import {
   toLatex,
   toSpeech,
   toText,
-} from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
 import { cond, prng, tree } from './helpers';
 
 // Ruling: products print with `*` so the text re-enters.

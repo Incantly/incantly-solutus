@@ -18,8 +18,8 @@ import {
   symN,
   toLatex,
   toText,
-} from '@incantly/symbolic';
-import type { OpName, Result, RunOptions, RunSuccess, SymArg } from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
+import type { OpName, Result, RunOptions, RunSuccess, SymArg } from '@incantly/symbolic/engine';
 import { bi, cd, ex, nm, showArg, tx } from './helpers';
 
 /** What a run came to: a defined value's text, an undefined reason, or an error kind. */

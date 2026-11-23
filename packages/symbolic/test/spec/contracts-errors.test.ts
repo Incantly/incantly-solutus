@@ -19,8 +19,8 @@ import {
   run,
   stepsToText,
   toText,
-} from '@incantly/symbolic';
-import type { OpName, Result, RunSuccess, Step, SymArg } from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
+import type { OpName, Result, RunSuccess, Step, SymArg } from '@incantly/symbolic/engine';
 import {
   asExpr,
   agree,

@@ -17,21 +17,21 @@ const domFree = [
 
 // Product code: what ships. Tests, benches and configs are not product code.
 const product = ['packages/*/src/**/*.{ts,js}', 'apps/*/src/**/*.{ts,js}'];
-const devCode = ['packages/*/test/**', 'packages/*/bench/**', 'packages/*/wasm/**', 'apps/*/test/**', 'tools/**', '**/*.config.{js,ts,mjs}'];
-
-// New and rebuilt code gets every rule as an error; older code gets the state rules as warnings until it is fixed.
-const strict = ['packages/board/**/*.ts', 'packages/tiptap/src/**/*.ts', 'tools/**/*.js'];
+const devCode = ['packages/*/test/**', 'packages/*/bench/**', 'packages/*/wasm/**', 'apps/*/test/**', 'apps/*/bench/**', 'tools/**', '**/*.config.{js,ts,mjs}'];
 
 const stateRules = (level) => ({
   'incantly/state-no-flag-soup': level,
   'incantly/state-transition-only': level,
   'incantly/state-union-type': level,
   'incantly/state-table-required': level,
+  'incantly/state-table-refuses': level,
   'incantly/state-no-stale-after-await': level,
+  'incantly/state-no-shadow-null': level,
+  'incantly/state-no-io-flags': level,
 });
 
 export default defineConfig([
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'coverage/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/generated/**', 'coverage/**', 'tools/eslint-rules/test/fixtures/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -49,19 +49,55 @@ export default defineConfig([
       'no-new-func': 'error',
       'no-implied-eval': 'error',
       'incantly/no-ai-credit': 'error',
-      ...stateRules('warn'),
+      ...stateRules('error'),
     },
   },
   {
     files: product,
     rules: {
       'incantly/allowed-imports': 'error',
-      'incantly/no-throw-export': 'warn',
+      'incantly/no-throw-export': 'error',
+      'incantly/no-imported-mutation': 'error',
+      // a WebGL clear sets the masks it needs: the last draw may have left them off (BR-83)
+      'incantly/gl-clear-masks': 'error',
     },
   },
   {
+    // a refused move is reported, never silent
+    files: ['packages/board/**/*.ts', 'packages/tiptap/**/*.ts', 'packages/teacher/**/*.ts', 'packages/server/**/*.ts', 'tools/**/*.js'],
+    rules: { 'incantly/state-refusal-reported': 'error' },
+  },
+  {
+    // a list filled again every frame keeps its storage (BR-77); the other areas' lists are on the fix-later list (BR-84)
+    files: ['packages/board/src/**/*.ts'],
+    rules: { 'incantly/no-length-reset': 'error' },
+  },
+  {
     files: ['packages/server/src/**/*.ts'],
-    rules: { 'incantly/allowed-imports': ['error', { nodeBuiltins: true }] },
+    rules: {
+      'incantly/allowed-imports': ['error', { nodeBuiltins: true }],
+      // the server is Node only: no page globals
+      'no-restricted-globals': ['error', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    },
+  },
+  {
+    // the teacher runs in Node and in the browser and reaches a model only through the `ModelClient` the caller passes:
+    // no DOM, timers, network, clock or unseeded randomness (teacher design 3)
+    files: ['packages/teacher/src/**/*.ts'],
+    rules: {
+      'no-restricted-globals': ['error', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'requestAnimationFrame', 'cancelAnimationFrame', 'setTimeout', 'setInterval', 'fetch', 'Date'],
+      'no-restricted-properties': ['error', { object: 'Math', property: 'random', message: 'Recordings must replay the same; the teacher has no unseeded randomness.' }],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: ['@incantly/ui', '@incantly/tiptap', '@incantly/audio', '@incantly/board', '@incantly/studio', '@incantly/view', '@incantly/sdk/screen'].map((name) => ({
+            name,
+            message: 'The teacher imports no package with a screen; use the SDK headless app and @incantly/board/core.',
+          })),
+          patterns: [{ group: ['**/web', '**/web/**', '**/gl', '**/gl/**'], message: 'The teacher may not import a web or GPU layer.' }],
+        },
+      ],
+    },
   },
   {
     files: ['apps/*/vite.config.ts'],
@@ -89,8 +125,12 @@ export default defineConfig([
     },
   },
   {
-    files: strict,
-    rules: { ...stateRules('error'), 'incantly/no-throw-export': 'error' },
+    // a tool writes only through a gesture (`beginGesture` in `core/edit.ts`), which keeps what every write changed,
+    // so a cancel puts back everything; a direct `.change(` call would leave part of a drag behind
+    files: ['packages/board/src/core/tools/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', { selector: "CallExpression[callee.property.name='change']", message: 'tools write through a gesture, so a cancel puts back everything' }],
+    },
   },
   {
     // the helper that the state rules point to
@@ -103,7 +143,7 @@ export default defineConfig([
     rules: { 'incantly/no-ai-credit': 'off' },
   },
   {
-    files: ['packages/*/test/**/*.ts', 'packages/*/bench/**/*.ts', 'tools/**/*.js', '**/*.config.{js,ts}'],
+    files: ['packages/*/test/**/*.ts', 'packages/*/bench/**/*.ts', 'apps/*/bench/**/*.ts', 'tools/**/*.js', '**/*.config.{js,ts}'],
     rules: { 'no-console': 'off', 'incantly/no-throw-export': 'off' },
   },
 ]);

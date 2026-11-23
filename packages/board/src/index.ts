@@ -1,0 +1,27 @@
+/** @incantly/board: the endless, paged board. The core is DOM-free (`@incantly/board/core`); `web/` holds input, painter and the view. */
+export * from './core/index';
+export { WebInput } from './web/input';
+export type { WebInputOptions } from './web/input';
+export { BACKEND_MACHINE, FRAME_MACHINE, LIVELAYER_MACHINE, LIVE_LAG, WebPainter } from './web/painter';
+export type { OverCardItem, PainterStats, WebPainterOptions } from './web/painter';
+export { LOOP_MACHINE, PAGEBAR_MACHINE, mountBoardView } from './web/board-view';
+export type { BoardView, BoardViewOptions } from './web/board-view';
+export { IMAGE_MACHINE } from './web/images';
+export { createBoard } from './web/create-board';
+export { createAgentKit, pictureOf } from './web/agent';
+export type { AgentKit, AgentOption, KitEnv } from './web/agent';
+export { httpAgentTransport, parseAgentEvent } from './web/agent-http';
+export { sdkFigureHost } from './web/agent-lines';
+export { WebHand } from './web/agent-hand';
+export { AgentPanel, PANEL_MACHINE } from './web/ui/agent-panel';
+export { CircleMenu } from './web/ui/circle-menu';
+export type { Board, BoardOptions } from './web/create-board';
+export { CARD_MACHINE, FigureCard, FigureLayer, INPUT_MACHINE, LIVE_CARDS, MOTION_MACHINE, overCardItems } from './web/figures';
+export type { FigureLayerOptions } from './web/figures';
+export { MENU_MACHINE, MenuHost } from './web/ui/menus';
+export type { MenuFn, MenuFns, MenuItem, MenuTarget } from './web/ui/menus';
+export { MORE_SHAPES, READ_ONLY_TOOLS, TOOLBAR_ACTIONS, defaultGroups, resolveShell, toolsFor } from './web/ui/shell';
+export type { IconFactory, Shell, ShellOptions, ToolbarPosition, UiParts } from './web/ui/shell';
+export { THEMES, themeVars } from './web/ui/theme';
+export type { ThemeName, ThemeOption } from './web/ui/theme';
+export { ICON_IDS, defaultIcon } from './web/ui/icons';

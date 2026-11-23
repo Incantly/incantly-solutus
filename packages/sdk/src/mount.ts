@@ -9,6 +9,7 @@ import { createHeadlessApp } from './app';
 import type { App, HeadlessOptions } from './app';
 import { apiError, need } from './errors';
 import type { ApiError } from './errors';
+import { frameStyleOf } from './export';
 import type { ExportEnv, ExportOptions, ExportResult } from './export';
 import type { IncantlyFile, LoadResult } from './file';
 import { mountGraph } from './screen/graph-pane';
@@ -159,6 +160,10 @@ export function hasClock(figure: Figure): boolean {
 
 const READS_CLOCK = /(?<![\w.'])(?:t|bt|beat)(?![\w(])/;
 
+/** The names the screen puts on the core app. Only `export` and `destroy` replace members of the core (they wrap them). */
+export const SCREEN_MEMBERS = ['element', 'ui', 'screen', 'saveFile', 'saveScript', 'openFile', 'shareLink', 'exportPicture', 'export', 'destroy'] as const;
+type ScreenMember = (typeof SCREEN_MEMBERS)[number];
+
 /** Mounts an app in a container (design 3.2). */
 export async function createApp(opts: AppOptions): Promise<MountedApp> {
   need(typeof opts === 'object' && opts !== null, 'createApp', 'options must be an object');
@@ -221,6 +226,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     },
     zoomButtons: ui.zoomButtons,
     panAndZoom: ui.panAndZoom,
+    // this app's own axes and grid (its mode and its `@axes`/`@grid` lines), the same as its picture's
+    style: () => frameStyleOf(core),
     drag: (name, x, y, done) => {
       if (!ui.dragPoints) return;
       const r = core.dragPoint(name, x, y, done);
@@ -521,8 +528,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     },
   };
   // the screen's names sit on the core object: none may hide a member of the core other than the two it wraps
-  for (const k of Object.keys(extra)) if (k !== 'export' && k !== 'destroy' && k in core) throw new Error(`createApp: ${k} is already a member of the app`);
-  const mounted = Object.assign(core, extra) as unknown as MountedApp;
+  // (`SCREEN_MEMBERS`; the spec test "screen members" checks every name against a core app, private members included)
+  const mounted = Object.assign(core, extra satisfies Record<ScreenMember, unknown>) as unknown as MountedApp;
 
   graph.paint();
   space3?.paint();

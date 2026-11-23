@@ -7,4 +7,5 @@
 - [x] 5. Strength per folder in `eslint.config.js` (R4)
 - [x] 6. Tiptap passes every rule as errors; TT-R9 checked (not a bug; a test holds it) (R5)
 - [x] 7. `AGENTS.md`: a rule is not done until it is a lint rule or a check
-- [ ] 8. Later batch: fix the 94 warnings in older code (state rules 24, `no-throw-export` 70), then make them errors everywhere
+- [x] 8. Later batch: the 94 warnings in older code are fixed (state rules 24, `no-throw-export` 70) and every rule is an error everywhere (branch `fix/lint-warnings`)
+- [x] 9. `state-no-io-flags` (R1.10): found by the teacher and server review (TR-5), where a job's machine and the response's `writableEnded` and `headersSent` disagreed

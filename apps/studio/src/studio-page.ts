@@ -3,12 +3,20 @@
  * is open. Every area built so far is registered, so its commands can be typed and seen.
  */
 import type { AppModeId, StorageLike } from '@incantly/modes';
+import { createBoard } from '@incantly/board';
+import type { BoardView } from '@incantly/board';
 import { mountAppModes } from './modes/app';
 import { mountSoundUi } from './sound-ui';
 import type { SoundUi } from './sound-ui';
 import type { SoundEngine } from '@incantly/audio';
 import { mountScientific } from './modes/scientific';
 import { mountKeyboard } from './modes/keyboard';
+import { customBoardOptions, studioBoardOptions } from './board-options';
+import { boardAgentOption, connectBoardAgent } from './board-agent';
+import { probeServer } from './server';
+import { mountVoice } from './voice-ui';
+import type { VoiceUi } from './voice-ui';
+import { boardConversation, figureLesson } from './voice-targets';
 import { mountExamScreens } from './modes/exam-ui';
 import type { ScientificView } from './modes/scientific';
 import type { MathKeyboard } from './modes/keyboard';
@@ -63,6 +71,8 @@ export interface StudioOptions {
   readonly soundEngine?: () => Promise<SoundEngine>;
   /** Asks for full screen at the exam start; a test passes its own. */
   readonly requestFullscreen?: () => Promise<boolean>;
+  /** Show the Board app as the customised demo (renamed tool, another icon, toolbar on the left, a key removed). */
+  readonly boardDemo?: boolean;
 }
 
 export interface Mounted {
@@ -94,6 +104,10 @@ export interface Mounted {
   readonly files: FileMenu;
   /** The Space view of the 3D app (.kiro/specs/space-3d R4.5). */
   readonly space: SpacePane;
+  /** The board of the Board (notes) app: the view is made when the app first shows it. */
+  readonly board: { readonly element: HTMLElement; view(): BoardView | undefined };
+  /** The Talk button and panel: the voice lesson (graph and board views). */
+  readonly voice: VoiceUi;
   loadExample(id: string): void;
   undo(): void;
   redo(): void;
@@ -187,8 +201,10 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     if (contacts) out.push(contacts);
     return out;
   };
+  const modeRef: { current?: AppModes } = {};
   const graph = mountGraph({
     items,
+    style: () => modeRef.current?.frameStyle,
     bounds: () => {
       // the figure's own `@view x0 x1 y0 y1` wins over zoom to fit (it is how a film frames itself)
       const v = /^@view\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/m.exec(session.save());
@@ -231,7 +247,6 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     hoverAt: (px, py, vp) => fromCanvas.setHover(hitTest(items(), vp, px, py, 8)[0]?.name),
   });
-  const modeRef: { current?: AppModes } = {};
   const exprs = mountExpressions({ session, changed: () => graph.redraw(), say, view: () => graph.viewport.box(), selection, autoSliders: () => modeRef.current?.mode.defaults.autoSliders ?? true });
   holder.expressions = exprs;
   const tools = mountToolStrip({
@@ -246,8 +261,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   });
   holder.tools = tools;
   graph.element.append(tools.element, tools.hint);
-  const lab = mountDataLab(session, registry, say);
-  const calc = mountProbCalc(session, registry, say);
+  const lab = mountDataLab(session, registry, say, () => modeRef.current?.frameStyle);
+  const calc = mountProbCalc(session, registry, say, () => modeRef.current?.frameStyle);
   const cas = mountCasPanel(session, say);
   const sheet = mountSheet({ session, say, pick: (n) => selection.set(n) });
   const sim = mountSimStrip({ session, registry, say, selected: () => selection.names(), ...(opts.every ? { every: opts.every } : {}) });
@@ -526,7 +541,38 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   });
   space3.element.hidden = true;
   space3Ref.current = space3;
-  const main = el('div', { class: 'workspace' }, panel, split, graph.element, space3.element, sheet.element, lab.element, calc.element, cas.element);
+  // the board of the Board app (design of the board, round 2): made on first show, so other apps never open a GPU context for it
+  const boardHost = el('section', { class: 'board-host', 'aria-label': 'Board' });
+  boardHost.hidden = true;
+  const boardRef: { current?: BoardView } = {};
+  const boardPane = {
+    open: (): void => {
+      boardHost.hidden = false;
+      if (boardRef.current === undefined) {
+        const made = createBoard({
+          container: boardHost,
+          onError: (e) => say(e.message),
+          // the scripted stand-in, labelled "no AI"; where the server answers, `connectBoardAgent` swaps it for the server's
+          agent: boardAgentOption(),
+          ...studioBoardOptions(() => modeRef.current?.i18n),
+          // `?board=custom`: the customised board of the demo
+          ...(opts.boardDemo === true ? customBoardOptions : {}),
+        });
+        if (made.ok && made.value.view !== undefined) {
+          const view = made.value.view;
+          boardRef.current = view;
+          void probeServer().then((health) => connectBoardAgent(view, health));
+        } else say(made.ok ? 'The board could not be shown.' : made.message);
+      } else {
+        boardRef.current.resize();
+      }
+    },
+    close: (): void => {
+      boardHost.hidden = true;
+    },
+    isOpen: (): boolean => !boardHost.hidden,
+  };
+  const main = el('div', { class: 'workspace' }, panel, split, graph.element, space3.element, sheet.element, lab.element, calc.element, cas.element, boardHost);
   const appEl = el('div', { class: 'app' }, top, main);
   root.replaceChildren(appEl, dialog, help, ...files.dialogs);
 
@@ -608,6 +654,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
 
   const onKey = (e: KeyboardEvent): void => {
     const target = e.target as HTMLElement | null;
+    // the board answers its own keys (tools, undo, Space for the hand)
+    if (target !== null && boardHost.contains(target)) return;
     const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT';
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(typing && (target as HTMLInputElement).value !== '')) {
       e.preventDefault();
@@ -677,6 +725,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       }, close: () => cas.close(), isOpen: () => cas.isOpen(), button: casBtn },
       sheet: { open: () => openSheet(), close: () => sheet.close(), isOpen: () => sheet.isOpen(), button: sheetBtn },
       results: { open: () => sciHolder.current?.open(), close: () => sciHolder.current?.close(), isOpen: () => sciHolder.current?.isOpen() ?? false },
+      board: boardPane,
     },
     canSwitch: () => {
       const st = examHolder.current?.controller()?.state;
@@ -691,6 +740,16 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     storage,
   }, opts.mode ?? 'classic');
   modeRef.current = modes;
+  // the voice lesson (teacher design 8): the Talk button in the views that hold a figure or the board
+  const voice = mountVoice({
+    target: () => figureLesson(session, () => modes.mode.id),
+    // on the board the Talk panel holds a lesson (lesson design 6); in a graph or geometry view it is the single-turn voice
+    conversation: () => (boardPane.isOpen() && boardRef.current !== undefined ? boardConversation(boardRef.current) : undefined),
+  });
+  const talkable = (m: { readonly views: { readonly available: readonly string[] } }): boolean => m.views.available.includes('graphics') || m.views.available.includes('board');
+  voice.setAvailable(talkable(modes.mode));
+  topRight.prepend(voice.button);
+  appEl.append(voice.panel);
   const scientific = mountScientific(session, modes.settings, modes.i18n, say);
   sciHolder.current = scientific;
   main.append(scientific.element);
@@ -744,6 +803,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const titleOf = (id: AppModeId): string => modes.i18n.t(`mode.${id}.title`);
   fillExamples(modes.mode.id, titleOf);
   modes.onChange((m) => {
+    voice.setAvailable(talkable(m));
     fillExamples(m.id, titleOf);
     keyboard.setMode(m);
     exam.setMode(m);
@@ -768,6 +828,8 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
   const api: Mounted = {
     files,
     space: space3,
+    board: { element: boardHost, view: () => boardRef.current },
+    voice,
     modes,
     scientific,
     keyboard,
@@ -805,6 +867,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
     },
     dispose() {
       sound.dispose();
+      voice.dispose();
       document.removeEventListener('pointerdown', firstGesture, true);
       exam.dispose();
       keyboard.dispose();
@@ -814,6 +877,7 @@ export function mountStudio(root: HTMLElement, opts: StudioOptions = {}): Mounte
       tools.dispose();
       sim.dispose();
       graph.dispose();
+      boardRef.current?.dispose();
       if (running) caf(running);
     },
   };

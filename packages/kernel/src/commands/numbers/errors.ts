@@ -13,7 +13,7 @@ import type { ErrorKind, ErrorObject, Params, Phase, Recovery, Span } from '../.
 import { err } from '../../errors/table';
 import { makeNotice, registerNotice } from '../../errors/notices';
 import type { Notice } from '../../contracts/errors';
-import { MESSAGE_TEMPLATES } from '../../language/errors';
+import { MESSAGE_TEMPLATES, registerMessageTemplate } from '../../language/errors';
 import { registerReasonPhrase } from '../../errors/phrases';
 
 /* ------------------------------ kinds and codes ------------------------------ */
@@ -149,7 +149,7 @@ export function registerNumbersErrors(): void {
   if (registered) return;
   registered = true;
   for (const [key, template] of Object.entries(TEMPLATES)) {
-    if (!Object.hasOwn(MESSAGE_TEMPLATES, key)) MESSAGE_TEMPLATES[key] = template;
+    if (!Object.hasOwn(MESSAGE_TEMPLATES, key)) registerMessageTemplate(key, template);
   }
   for (const [kind, spec] of Object.entries(NOTICE_SPECS)) registerNotice(kind, spec);
   registerReasonPhrase('range_undefined', {

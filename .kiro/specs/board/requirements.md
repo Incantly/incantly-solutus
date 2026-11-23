@@ -48,7 +48,7 @@ Area: `docs/features/board/` (`design.md`, `ui.md`, `errors.md`, `agent.md`). Pa
 ### R7. Customisation (design 10)
 
 1. Tools, toolbar groups and position, icons, keys, menus, strings, theme and UI parts SHALL all be options of `createBoard`.
-2. Built-in tools and kinds SHALL use the same `ToolDef` and `KindDef` a host uses; `defaultTools` SHALL be a list a host filters.
+2. Built-in tools and kinds SHALL use the same `ToolDef` and `KindDef` a host uses; `defaultTools` SHALL be every built-in tool, a list a host filters; `inkTools` SHALL be the ink tools and the hand.
 3. Custom SVG icons SHALL be checked (`icon_invalid`); unknown tools (`tool_unknown`) and duplicate keys (`shortcut_conflict`) SHALL be reported, not thrown.
 4. Without `container`, `createBoard` SHALL return the headless core.
 

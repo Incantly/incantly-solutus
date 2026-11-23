@@ -11,7 +11,7 @@ import {
   symN,
   toText,
   upolyToTree,
-} from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
 import {
   asBool,
   asCond,

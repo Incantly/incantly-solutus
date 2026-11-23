@@ -2,7 +2,7 @@
 export { API_VERSION, HEADER, LIST_LIMIT, RUN_LIMIT, createHeadlessApp, defaultTicker, isKernelError } from './app';
 export type {
   App, ClockControl, DeleteResult, FigureSummary, HeadlessOptions, KernelError, LineOk, LineResult, ObjectDetail, ObjectFilter, ObjectSummary,
-  SdkBatchResult, StylePatch, Ticker, ViewControl, ViewState, AppModeId, ModeChangeResult,
+  SdkBatchResult, RunOptions, StylePatch, Ticker, ViewControl, ViewState, AppModeId, ModeChangeResult,
 } from './app';
 export { EventHub, defaultScheduler } from './events';
 export type { AppEvent, ChangedObject, EventOf, EventSource, EventType, ListenOpts, Scheduler, Unsubscribe } from './events';
@@ -21,5 +21,5 @@ export type { AsyncApp, ConnectOptions, Envelope, MessageHost, MessageLike, Mess
 export { EXPORT_FORMATS, EXPORT_LIMITS, exportFigure } from './export';
 export type { CanvasFactory, ExportEnv, ExportOptions, ExportRegion, ExportResult, ExportWarning } from './export';
 export { SvgContext } from './svg-context';
-export { createApp, hasClock } from './mount';
+export { SCREEN_MEMBERS, createApp, hasClock } from './mount';
 export type { AppOptions, MountedApp, UiOptions } from './mount';

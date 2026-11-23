@@ -1498,3 +1498,997 @@ Checked at commit `20d5770` on `feat/tiptap` (the one review round of PR #126). 
 - **Invariants:** an order goes only to a registered view; one view's failed order never stops the others; `mountedCount() <= liveLimit`.
 - **Transitions:** as in V1, routed one to one (`build`, `goLive`, `pause`, `save`, `restore`). Without `IntersectionObserver`, `measure` sets visible and near from the boxes on scroll (50 ms later) and resize.
 - **Reachable invalid states or transitions:** the cap is only kept by the views themselves; T1's remount paths pass it (TT-R5).
+
+## board
+
+Written before the code of round 1 (branch `feat/board`, `packages/board/src/core/`). Round 2 appends B5 to B18 (below), round 3 B19 to B24 (select tool, shape tools, text editor, snap, recognise hold, image decode) and B25 (gesture, added by the round 3 fixes); round 4 appends B26 to B30 (figure card, card input, camera motion for cards, menus, key map), round 5 appends B31 to B35 (agent runner, agent job, circle to ask, hand animation, agent panel). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`; the lint rules `incantly/state-*` are errors in `packages/board`. A machine is made with its third argument, `onRefused` (`incantly/state-refusal-reported`): a move the table refuses is reported to the board's `onError` as `internal`, with `detail.machine`, `detail.state` and `detail.event` (`refusedMove` in `core/errors.ts`); a call that may come in any state asks first (`sendIfAble` in `core/machine.ts`), so a report always means a bug. Data that is not a state (a counter, a timestamp, a stack) sits next to the machine and is named in the invariants.
+
+Three machines and one derived state in round 1: the store transaction (B1), the history (B2), the page count (B3, derived: it has no table) and the steady zoom (B4). B1 has a second small table for the handle a transaction hands to its callback. A table whose rows are all the same refuses nothing and is not a machine; `incantly/state-table-refuses` makes it an error, so a state that any count or event may reach is derived from the data each time it is read.
+
+### B1. Store transaction
+
+- **Where:** `core/store.ts` `Store.change`, `TX_MACHINE`, `HANDLE_MACHINE` (the `Tx` handle).
+- **States:** the store is `idle` (nothing running), `open` (the callback of `change` is writing; writes are staged, not applied), `notifying` (a committed diff is being delivered to listeners) or `nested` (a listener called `change` while notifying, and its callback is running). A `Tx` handle is `live` (its callback is running) or `closed` (the callback returned; any later call returns `bad_argument`).
+
+| State | Holds |
+|---|---|
+| `idle` | the committed records only; no staged writes |
+| `open` | the staged writes of one transaction (a map of id to record or removal); the records are unchanged |
+| `notifying` | a queue of committed diffs; the owner (the `change` that began from `idle`) delivers them in order |
+| `nested` | the staged writes of a listener's transaction; the owner's queue waits |
+
+- **Invariants:** the records change only in `commit`, in one step, after every check passed; a transaction that fails any check or limit applies nothing and sends no diff; one commit sends one diff, with its origin, and listeners see the records already in their new state; no two transactions are `open` or `nested` together (a `change` inside a callback is refused with `bad_argument`); diffs reach every listener in commit order; a throwing callback or listener is caught (a callback aborts its transaction; a listener's error goes to `onError`); a diff has each id once, with its net effect (add then remove of one id is nothing, two updates are one).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | origin is one of `user`, `model`, `host`, `remote` | `open` | handle `live`, empty staging |
+| `open` | `commit` | every record checks, integrity and limits hold | `notifying` | records applied, diff queued, handle `closed` |
+| `open` | `abort` | a check, integrity or limit failed, or the callback threw | `idle` | staging dropped, handle `closed`, the error is the result |
+| `notifying` | `drained` | queue empty | `idle` | |
+| `notifying` | `begin` | | `nested` | handle `live`; the owner keeps delivering after it |
+| `nested` | `commit` | as for `open` | `notifying` | records applied, diff queued |
+| `nested` | `abort` | | `notifying` | staging dropped |
+| `live` (handle) | `close` | | `closed` | |
+
+- **Reachable invalid states or transitions:** none known. `begin` in `open` or `nested` has no row, so a nested `change` is refused. A listener that writes on every diff without end would never reach `idle`; the host's listener must stop (no guard in the store).
+
+### B2. History
+
+- **Where:** `core/history.ts` `History`, `HISTORY_MACHINE`.
+- **States:** `recording` (the history listens to the store and records steps), `undoing` and `redoing` (the history is writing a step back through the store).
+- **Invariants:** a transaction with `history: false` is not a step; a replayed step is not recorded again; any recorded step empties the redo stack; a step with the `mergeKey` of the step on top of the undo stack joins it (the stroke's samples, a drag's moves) and keeps its first `before` and its last `after` per record, and a record that ends a merged step with the same values it began with (a cancelled gesture put it back) is no part of the step, so a step with no record left is dropped; `seal()`, `undo` and `redo` end merging; one `undo` or `redo` is one store transaction, so listeners see one diff; a refused replay leaves both stacks as they were; the undo stack holds at most `maxSteps` steps.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `recording` | `undo` | undo stack not empty | `undoing` | the top step's `before` values are written in one transaction, `history: false` |
+| `recording` | `redo` | redo stack not empty | `redoing` | the step's `after` values are written in one transaction, `history: false` |
+| `undoing` | `done` | the write succeeded | `recording` | the step moves to the redo stack |
+| `undoing` | `done` | the write was refused | `recording` | stacks unchanged, the error is returned |
+| `redoing` | `done` | as for `undoing` | `recording` | the step moves to the undo stack |
+
+- **Reachable invalid states or transitions:** `undo` or `redo` called from a listener while a replay runs has no row and is refused with `bad_argument`. An empty stack is `nothing_to_undo`, returned before the machine moves. A change made with `history: false` to a record that a step holds is not part of that step, so undo writes the older value back (the camera, selection and pictures are not in steps, so this does not happen for them).
+
+### B3. Page count (derived, no table)
+
+- **Where:** `core/pages.ts` `Pages.state`.
+- **States:** `empty` (no page), `single` (one page), `several` (2 up to the limit minus one), `full` (the page limit, 100 by default). The state is **not stored**: `Pages.state` reads the number of page records and the limit each time, so the state and the count cannot disagree.
+- **Why no table:** the first version had a table in which every state accepted every count (`to_empty`, `to_single`, `to_several`, `to_full` from every state). A table that refuses nothing guards nothing, and the field was a copy of the count. Any count can follow any count (an undo, a redo, a load or a command changes it by any step), so there is no move to refuse.
+- **Derivation:** 0 pages is `empty`; 1 is `single`; a count at or above the limit (and above 1) is `full`; any other count is `several`.
+- **Invariants:** the state always matches the number of page records; `removePage` is refused with `last_page` in `single`; `addPage` and `duplicatePage` are refused with `limit` in `full`; the current page is always a page that exists (or none in `empty`); every command except `goToPage` is one store transaction, so one undo step; a command that fails changes nothing; removing a page removes its shapes, its camera and the bindings of its shapes in the same transaction. A command reads the state before it writes (`last_page`, `limit`).
+- **Reachable invalid states or transitions:** none known. A host that lowers `limits.pages` below the count of a loaded board gets `full`, and the load opens the board (a load does not test limits); the next add is refused.
+
+### B4. Camera steady zoom
+
+- **Where:** `core/camera.ts` `Camera`, `CAMERA_MACHINE`. One `Camera` per page.
+- **States:** `steady` (the steady zoom equals the zoom) and `zooming` (the zoom changed less than 150 ms ago). Pan alone does not change the state.
+- **Invariants:** `zoom` is always inside 0.05 to 20; `steadyZoom` changes only when `tick` settles; the camera never reads a clock: the time of the last zoom change and the time `tick` is given come from the input layer; a non-finite number is ignored and changes nothing.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `steady` | `zoom` | the clamped zoom differs from the zoom | `zooming` | the time of the change is kept |
+| `zooming` | `zoom` | | `zooming` | the time of the change is kept |
+| `zooming` | `settle` | `now - changedAt >= 150`, or `now` is before `changedAt` (the clock went back) | `steady` | `steadyZoom = zoom`; `tick` returns true |
+
+- **Reachable invalid states or transitions:** none known. A zoom that is clamped to the same value is not a change, so the camera does not leave `steady` at the zoom limits.
+
+### Round 2 (branch `feat/board-2`: ink, tools, painter)
+
+Written before the code of round 2 (`core/input.ts`, `core/ink/`, `core/tools/`, `core/draw.ts`, `web/input.ts`, `web/painter.ts`, `web/board-view.ts`). Data that is not a state is named in each invariants line: counts, the last kept sample, the clock the input layer hands in, byte totals. Marks that do not depend on each other go in one named `readonly` record (`layers`, `frame`), never in loose booleans. Every table below refuses at least one move (`incantly/state-table-refuses`).
+
+### B5. Pointer gate and palm rule
+
+- **Where:** `core/input.ts` `PointerGate`, `GATE_MACHINE` and, for `touchDraws: 'always'`, `GATE_ALWAYS_MACHINE`; used by `web/input.ts`. The gate takes one of the two tables when it is made, from the option (BR-13); they differ in one row, `penNear` `touchDown`.
+- **States:** `idle` (nothing happening), `penNear` (a pen hovers), `penDown` (a pen is writing), `mouseDown` (a mouse button is down), `touchDown` (one finger is drawing), `gesture` (two or more fingers pan and zoom).
+- **Invariants:** a touch never draws while the state is `penNear` or `penDown`, nor within 600 ms (the grace, from the input clock) of the last pen sample, unless the host sets `touchDraws: 'always'`; then a touch draws in `penNear` and within the grace (the `penNear` `touchDown` row of `GATE_ALWAYS_MACHINE`), and while the pen is down (`penDown`, which has no `touchDown` row in either table) the touch stays a second pointer that is only counted; `touchDraws: 'never'` ignores every single touch; two touches always give `gesture` except while a pen is writing; a pen that goes down while a finger draws cancels that finger's stroke (`cancelThenDraw`) and wins; the number of touches down (`touches`) and the pointer that draws (`drawing`) are data next to the machine, and `touches` never goes below 0; a sample the machine refuses is `ignore`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `penHover` | | `penNear` | the pen time is kept |
+| `idle` | `penDown` | | `penDown` | `draw` |
+| `idle` | `mouseDown` | | `mouseDown` | `draw` |
+| `idle` | `touchDown` | one touch, drawing allowed | `touchDown` | `draw` |
+| `idle` | `secondTouch` | touches reach 2 | `gesture` | `gesture` |
+| `penNear` | `penHover` | | `penNear` | |
+| `penNear` | `penDown` | | `penDown` | `draw` |
+| `penNear` | `penAway` | the pen left | `idle` | |
+| `penNear` | `mouseDown` | | `mouseDown` | `draw` |
+| `penNear` | `secondTouch` | touches reach 2 | `gesture` | `gesture` |
+| `penNear` | `touchDown` | `touchDraws: 'always'` only (`GATE_ALWAYS_MACHINE`) | `touchDown` | `draw` |
+| `penDown` | `penUp` | | `penNear` | `draw` (the `up` sample) |
+| `penDown` | `penCancel` | | `idle` | `draw` (the `cancel` sample) |
+| `mouseDown` | `mouseUp` | | `idle` | `draw` |
+| `touchDown` | `touchUp` | | `idle` | `draw` |
+| `touchDown` | `secondTouch` | touches reach 2 | `gesture` | the finger's stroke is cancelled |
+| `touchDown` | `penHover`, `penDown` | | `penNear`, `penDown` | `cancelThenDraw` |
+| `gesture` | `secondTouch` | a third finger | `gesture` | |
+| `gesture` | `gestureEnd` | touches fall below 2 | `idle` | |
+
+- **Reachable invalid states or transitions:** a touch in `penDown` has no row (in both tables), so it is ignored and only counted. In `penNear` a touch has no row unless `touchDraws` is `'always'`, and the default gate ignores it through the same refusal. `penAway` is the pen's `pointerleave`; a browser that never sends it leaves `penNear` until the next pen or mouse event, and the grace then runs from the last pen sample.
+
+### B6. Pen pressure probe
+
+- **Where:** `core/input.ts` `PressureProbe`, `PROBE_MACHINE`; one probe per pen.
+- **States:** `unknown` (not enough samples), `flat` (every sample so far was exactly 0.5, so the pen has no sensor), `real` (a sample other than 0.5 was seen).
+- **Invariants:** in `unknown` and `flat` a 0.5 is reported as `NaN`, so the sampler simulates pressure from speed; in `real` every value is reported as it is; `flat` is decided after 8 samples that are all 0.5 (`flatSeen`, data); a value other than 0.5 moves `unknown` and `flat` to `real`; `real` is final, as a sensor does not go away.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `unknown` | `varied` | pressure is above 0 and not 0.5 | `real` | |
+| `unknown` | `flat` | the 8th sample of exactly 0.5 | `flat` | |
+| `flat` | `varied` | | `real` | |
+
+- **Reachable invalid states or transitions:** none known. `real` has no move; a probe never goes back.
+
+### B7. Live stroke (pen and highlighter tools)
+
+- **Where:** `core/ink/live.ts` `LiveStroke`, `LIVE_MACHINE`. The pen and the highlighter are one tool over two presets, so their tool state is the live stroke's state.
+- **States:** `idle` (no stroke), `drawing` (samples are being added to the stroke's own buffer, outside the store).
+- **Invariants:** the page the stroke is drawn on (`page`, a nullable field) is data of the `drawing` state: it is set by `begin` and cleared by `end` (also when the store refuses the write) and by `cancel`, so `page` is `null` whenever the state is `idle` (BR-17, checked by `incantly/state-no-shadow-null`); the outline is extended each frame from the last settled point and equals a full build of the points (BR-16); BR-10: the buffer is never a stored record's array; the store gets a fresh record at `end` (`board.change('user', put)`, one undo step, merge key none) and the live buffer is cleared at once; nothing is written to the store while `drawing`; a sample closer than 0.5 screen pixels to the last kept one is dropped unless pressure changed by more than 0.05; a stroke with no kept sample is not stored; a refused commit (`limit`) keeps the board as it was and leaves the machine `idle`; predicted samples are never added.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | a pen, mouse or drawing touch went down | `drawing` | buffer cleared, first sample added |
+| `drawing` | `sample` | | `drawing` | filter, simulated pressure, push |
+| `drawing` | `end` | the up sample | `idle` | one `ink` record put, buffer cleared |
+| `drawing` | `cancel` | cancel, or a second finger, or the page changed | `idle` | buffer cleared, nothing stored |
+
+- **Reachable invalid states or transitions:** `sample` and `end` in `idle` have no row (a stray `move` is ignored); `begin` in `drawing` has no row (a second pointer is ignored by the gate and the tool).
+
+### B8. Eraser tool
+
+- **Where:** `core/tools/eraser.ts` `EraserTool`, `ERASER_MACHINE`.
+- **States:** `idle`, `erasing` (the pointer is down; every move erases along the segment from the last point).
+- **Invariants:** a drag is one undo step (the writes go through one gesture, B25, and `seal()` ends them); a cancel puts back every stroke the drag erased or cut, and leaves no undo step; the whole mode removes every stroke whose outline meets the eraser's circle; the partial mode cuts a stroke at each of its segments that meets the circle and keeps the runs of 2 or more points as new strokes; locked shapes are never erased; the pen's eraser end picks this tool through B12 for as long as it is used.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `erasing` | erase at the point |
+| `erasing` | `move` | | `erasing` | erase along the segment |
+| `erasing` | `up` | | `idle` | history sealed |
+| `erasing` | `cancel` | | `idle` | the gesture is cancelled (what was erased comes back), history sealed |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row. A refused write (a `limit` on the pieces of a cut stroke) leaves the stroke as it was.
+
+### B9. Laser tool
+
+- **Where:** `core/tools/laser.ts` `LaserTool`, `LASER_MACHINE`.
+- **States:** `idle`, `pointing` (the pointer is down and the trail grows), `fading` (the pointer is up and the trail dies out).
+- **Invariants:** nothing is stored; the trail holds at most 256 points and a point older than 1,200 ms is dropped; the trail has no clock of its own, `now` comes from the samples and from `tick(now)`; `tick` ends `fading` when the trail is empty; a new `down` in `fading` keeps the old points while they fade.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `pointing` | first point |
+| `pointing` | `move` | | `pointing` | point added |
+| `pointing` | `up` | | `fading` | |
+| `pointing` | `cancel` | | `fading` | |
+| `fading` | `down` | | `pointing` | first point |
+| `fading` | `faded` | the trail is empty | `idle` | |
+
+- **Reachable invalid states or transitions:** `up` and `faded` in `idle` have no row; `faded` in `pointing` has no row, so a held pointer keeps its trail.
+
+### B10. Lasso tool
+
+- **Where:** `core/tools/lasso.ts` `LassoTool`, `LASSO_MACHINE`.
+- **States:** `idle`, `drawing` (the loop is open).
+- **Invariants:** the loop is a polygon of page points, closed on `up`; selected are the strokes with more than half of their points inside, and later shapes whose centre is inside; locked shapes are not selected; the selection is not in the store and is not an undo step; a loop of fewer than 3 points selects nothing and clears the selection; the loop is drawn on the overlay only.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `drawing` | loop starts |
+| `drawing` | `move` | | `drawing` | point added (0.5 px filter) |
+| `drawing` | `up` | | `idle` | selection set from the loop |
+| `drawing` | `cancel` | | `idle` | loop dropped, selection kept |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B11. Hand tool (pan)
+
+- **Where:** `core/tools/hand.ts` `HandTool`, `HAND_MACHINE`.
+- **States:** `idle`, `panning`.
+- **Invariants:** a drag moves the camera by the pointer's screen delta (`Camera.panBy`); the camera never leaves finite numbers; the wheel, the pinch and the two-finger pan move the camera without this machine (they are single events, with no state between them).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `panning` | last point kept |
+| `panning` | `move` | | `panning` | `panBy` |
+| `panning` | `up` | | `idle` | |
+| `panning` | `cancel` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B12. Tool host (which tool is in force)
+
+- **Where:** `core/tools/host.ts` `ToolHost`, `TOOLS_MACHINE`. The chosen tool (`current`) is data; the machine says whether it is the chosen tool or a temporary one that answers input.
+- **States:** `chosen` (the chosen tool answers), `eraserEnd` (a pen's eraser end is down: the eraser answers), `handHeld` (Space is held, or the middle button is down: the hand answers), `askHeld` (the pen's barrel button is down: the Ask tool answers, round 5).
+- **Invariants:** a tool is switched only while no pointer is down (`setTool` while a stroke is in progress cancels it first); the pen's eraser end (button bit 32) enters `eraserEnd` on its `down` and leaves on `up`, then the chosen tool answers again; a held Space or a middle button gives the hand; one temporary tool at a time (`eraserEnd` and `handHeld` do not nest); an unknown tool id is refused with `tool_unknown`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `chosen` | `eraserDown` | the sample has the eraser bit | `eraserEnd` | the chosen tool is cancelled |
+| `chosen` | `handDown` | Space is held, or the middle button is down | `handHeld` | the chosen tool is cancelled |
+| `eraserEnd` | `eraserUp` | | `chosen` | |
+| `handHeld` | `handUp` | | `chosen` | |
+| `chosen` | `askDown` | the sample has the barrel bit and the Ask tool is in the list | `askHeld` | the chosen tool is cancelled |
+| `askHeld` | `askUp` | | `chosen` | |
+
+- **Reachable invalid states or transitions:** `handDown` in `eraserEnd` and `eraserDown` in `handHeld` have no row, so a second temporary tool does not start while one is in force; the same for `askDown` in `eraserEnd` and `handHeld`.
+
+### B13. Page bar
+
+- **Where:** `web/board-view.ts` `PageBar`, `PAGEBAR_MACHINE`.
+- **States:** `closed` (only the current page's name shows), `open` (the list of pages shows).
+- **Invariants:** a page is chosen by a click on its entry (`goToPage`, not an undo step); the add button is `addPage` (one undo step) and is refused with `limit` at 100 pages; the list closes when a page is chosen or on `Escape`; the bar reads the page list from `Pages` each time it opens, and never keeps its own copy of the page count.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | | `open` | list built |
+| `open` | `close` | choice, `Escape` or outside click | `closed` | list removed |
+
+- **Reachable invalid states or transitions:** `open` in `open` and `close` in `closed` have no row.
+
+### B14. Tile and tile cache
+
+- **Where:** `core/draw.ts` `Tile`, `TILE_MACHINE`, `TileCache`. The tile's GPU or canvas handle is held by `web/painter.ts`; the cache only keeps the key, the byte size and the order of use.
+- **States of one tile:** `blank` (made, nothing drawn), `fresh` (drawn and up to date), `stale` (drawn, but a shape that touches it changed), `gone` (evicted; the object is dropped from the cache).
+- **Invariants:** a tile's key is its zoom step `k` (the tile is drawn at 2^k device pixels per page unit), its column `tx` and its row `ty`; it covers 512 device pixels; a changed shape marks every tile of every step whose box meets the shape's old or new bounds `stale`, and no other; `blank` is never marked; the least recently used tiles are evicted when the bytes held pass the cap (64 MB; 24 MB on a device with 4 GB or less), never one the current frame uses; a lost GPU context sends every tile to `blank` (its handle is dead); `gone` takes no event.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `blank` | `draw` | the painter drew it | `fresh` | bytes counted |
+| `fresh` | `dirty` | a shape that touches it changed | `stale` | |
+| `stale` | `dirty` | | `stale` | |
+| `stale` | `draw` | the painter drew it again | `fresh` | |
+| `fresh`, `stale` | `lose` | the context was lost | `blank` | bytes released |
+| `blank`, `fresh`, `stale` | `evict` | over the cap, least recently used | `gone` | handle released |
+
+- **Reachable invalid states or transitions:** `dirty` in `blank` and `draw` in `fresh` have no row (a fresh tile is not drawn again); every event in `gone` has no row.
+
+### B15. Painter back-end
+
+- **Where:** `web/painter.ts` `WebPainter`, `BACKEND_MACHINE`.
+- **States:** `gl` (the view package's WebGL 2 back-end draws the tiles), `lost` (the context was lost; the last picture stays and nothing is drawn), `canvas2d` (the Canvas 2D backup draws them).
+- **Invariants:** WebGL 2 is tried first; if it is not offered, or a shader or a target fails to build, the painter goes to `canvas2d` and returns the `render_failed` notice once (`errors.md`); `canvas2d` is final for this painter, as a second back-end switch would flicker; a lost context goes to `lost` and `webglcontextrestored` back to `gl` with every tile `blank`; the board's data is never touched by a back-end change.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `gl` | `contextLost` | | `lost` | tiles sent `lose` |
+| `lost` | `contextRestored` | | `gl` | programs and targets built again |
+| `gl`, `lost` | `fail` | a build failed, or the context cannot come back | `canvas2d` | `render_failed` returned; tiles sent `lose` |
+
+- **Reachable invalid states or transitions:** `contextLost` and `contextRestored` in `canvas2d` have no row; `contextRestored` in `gl` has no row.
+
+### B16. Painter frame
+
+- **Where:** `web/painter.ts` `WebPainter`, `FRAME_MACHINE`.
+- **States:** `between` (no frame open), `drawing` (`beginFrame` was called, `endFrame` was not).
+- **Invariants:** `drawTile`, `drawItems`, `drawLiveStroke` and `drawOverlay` outside a frame return `bad_argument` and draw nothing; a second `beginFrame` before `endFrame` is refused; `endFrame` ends the frame even when a draw call failed.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `between` | `begin` | | `drawing` | size and camera kept |
+| `drawing` | `end` | | `between` | the frame is shown |
+
+- **Reachable invalid states or transitions:** `begin` in `drawing` and `end` in `between` have no row.
+
+### B17. Live layer
+
+- **Where:** `web/painter.ts` `LiveLayer`, `LIVELAYER_MACHINE`. Independent marks of the layer (how many points are already drawn, the stroke's colour and opacity) are one named record, `ink`.
+- **States:** `clear` (nothing on the live canvas), `inking` (a stroke grows on it), `holding` (the stroke ended; the canvas still shows it until the tile that now holds the stroke is drawn).
+- **Invariants:** the canvas asks for `desynchronized`; each frame draws only the segments added since the last frame, with one segment of overlap so no seam shows; the tail not yet final (the last 3 points) and the predicted samples go to the overlay and are cleared each frame; the stroke's opacity is the canvas's CSS opacity, so overlapping segments of one stroke do not darken; `holding` ends in the frame that draws the tile (`settle`), so the stroke is never missing for a frame and never drawn twice. The live canvas sits above the figure cards (BR-55), so a stroke drawn over a card shows while it grows. The top layer that holds the shapes above a card is not a state: it is cleared and drawn again every frame from the shapes (`drawOverCards`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `clear` | `ink` | a stroke began | `inking` | colour and opacity set |
+| `inking` | `ink` | | `inking` | new segments drawn |
+| `inking` | `release` | the stroke ended and was stored | `holding` | |
+| `inking` | `abort` | the stroke was cancelled | `clear` | canvas cleared |
+| `holding` | `settle` | the frame drew the tile | `clear` | canvas cleared |
+
+- **Reachable invalid states or transitions:** `release` in `clear` and `ink` in `holding` have no row; `ink` in `holding` is held back until `settle`, so a fast second stroke starts on the next frame.
+
+### B18. Frame loop
+
+- **Where:** `web/board-view.ts` `FrameLoop`, `LOOP_MACHINE`.
+- **States:** `idle` (no frame asked for), `queued` (a frame is on the animation frame queue), `running` (the frame body runs), `again` (a frame was asked for while one ran).
+- **Invariants:** at most one animation frame is queued; a request made during a frame runs one more frame after it, never nested; a body that returns true (a fading laser trail, a zoom not yet steady, tiles still waiting for their turn) asks for the next frame itself; a body that throws is dropped and the loop goes back to `idle`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `request` | | `queued` | frame scheduled |
+| `queued` | `request` | | `queued` | |
+| `queued` | `run` | the frame came | `running` | |
+| `running` | `request` | | `again` | |
+| `running` | `done` | | `idle` | |
+| `again` | `request` | | `again` | |
+| `again` | `done` | | `queued` | next frame scheduled |
+
+- **Reachable invalid states or transitions:** `run` and `done` in `idle`, and `run` in `running`, have no row.
+
+### Round 3 (branch `feat/board-3`: shapes and editing)
+
+Written before the code of round 3 (`core/tools/select.ts`, `core/tools/shape.ts`, `core/text-editor.ts`, `core/snap.ts`, `core/ink/hold.ts`, `web/images.ts`). Round 3 has no new store or history state: every change a tool makes is a transaction (B1) and an undo step (B2), and a gesture that makes many writes (a drag, a resize, typing in a shape) shares one merge key, so it is one step, sealed when the gesture ends. Data that is not a state sits next to its machine and is named in the invariants: the gesture record of a tool (`gesture`: what was hit, where the pointer went down, the records as they were at the start), the guides of the snapper, the text and the selection range of the editor. Every table refuses at least one move.
+
+### B19. Select tool
+
+- **Where:** `core/tools/select.ts` `SelectTool`, `SELECT_MACHINE`.
+- **States:** `idle`; `pointing` (the pointer is down on a shape or on empty page and has not moved past the slop of 4 screen pixels); `dragging` (the selection moves); `resizing` (one of the 8 resize handles is held); `rotating` (the rotate handle is held); `handling` (a handle of the kind, such as an arrow's end or bend or a line's point, is held); `brushing` (a box is dragged on empty page to select what it meets); `editing` (the text editor of B21 is open on a shape of this board).
+- **Invariants:** what the pointer went down on is in `gesture` (`hit`, `handle`, `start`, `originals`), reset by every `down` and never read in `idle`; a drag, a resize, a rotation and a handle drag write one transaction for each move through one gesture (B25, begun with the first write), and the gesture is committed on `up`, so each press is one undo step; the shapes moved are the selection and everything inside a selected frame or group; a locked shape is selected but never changed; the arrows bound to a changed shape follow it in the same transaction (`core/bindings.ts`), also the arrow whose binding the transaction has just put, and a bound end stops `ARROW_GAP` (8 units) short of its target's outline, so the head shows beside the target (BR-55); a shape dropped inside a frame is parented to it, one dragged out of its frame is not; the selection is not in the store and is not an undo step; a click on a shape of a group selects the whole group; Shift toggles the shape in the selection; `editing` starts when the text editor opens (a double click on a shape with text, Enter, or a new text shape) and ends when it closes (a click outside, Esc); a `down` while `editing` closes the editor first; the snap guides (B22) are shown only in `dragging` and `resizing`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | the point is not on a handle | `pointing` | the hit shape is selected (Shift toggles) |
+| `idle` | `grabResize` | the point is on a resize handle of the selection | `resizing` | originals kept |
+| `idle` | `grabRotate` | the point is on the rotate handle | `rotating` | originals and start angle kept |
+| `idle` | `grabHandle` | the point is on a handle of the kind | `handling` | original kept |
+| `idle` | `edit` | the text editor opened | `editing` | |
+| `pointing` | `dragShape` | moved past the slop on a shape | `dragging` | snapper begins (B22) |
+| `pointing` | `brush` | moved past the slop on empty page | `brushing` | box starts |
+| `pointing` | `up` | | `idle` | a click on empty page clears the selection; a double click opens the editor |
+| `pointing` | `cancel` | | `idle` | |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `move` | | same | one merged transaction (a box: the selection is set) |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `up` | | `idle` | history sealed; a dragged shape may change its parent; the snapper ends |
+| `dragging` `resizing` `rotating` `handling` `brushing` | `cancel` | | `idle` | the gesture is cancelled: every record any write changed is put back from the store's diffs (the arrow, the binding an end drag dropped, the arrows that followed, a group's members), and no undo step is left |
+| `editing` | `close` | the editor closed | `idle` | |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle`, `edit` in any state but `idle`, and `dragShape` or `brush` anywhere but `pointing` have no row. A refused write (a limit, a locked shape) leaves the shapes as they were; the next move tries again.
+
+### B20. Shape tools (rect, ellipse, triangle, diamond, star, line, arrow, text, sticky, frame)
+
+- **Where:** `core/tools/shape.ts` `ShapeTool`, `SHAPE_TOOL_MACHINE`. One table; each tool is one instance of the class for its kind (`rect`, `ellipse`, `triangle`, `diamond`, `star`, `line`, `arrow`, `text`, `sticky`, `frame`) and keeps its own state.
+- **States:** `idle`; `making` (the pointer is down: the shape follows it).
+- **Invariants:** a drag makes the shape from the down point to the pointer; a `up` before the pointer moved past the slop makes the kind's default size centred on the point; Shift makes the box square (a circle for an ellipse) and snaps a line or arrow to steps of 15 degrees; Alt makes the box from its centre; the shape is written on the first move past the slop and updated on every move, all through one gesture (B25), so it is one undo step; when the shape is made the selection is the new shape and the tool host chooses the select tool again; `text` and `sticky` open the text editor on the new shape when the pointer comes up (an empty text shape is removed when the editor closes); a cancel removes the shape that was started and the frame it joined, and leaves no undo step; a click makes the kind's own default size (`KindDef.defaults`); new shapes take the styles of the style bar (`ToolStyles.shape`); locked or missing pages refuse the tool (the `down` is ignored).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | a page exists | `making` | start point kept |
+| `making` | `move` | | `making` | shape written or updated |
+| `making` | `up` | | `idle` | default size if it was a click; selected; text editor for `text` and `sticky`; history sealed |
+| `making` | `cancel` | | `idle` | the gesture is cancelled: the started shape goes |
+
+- **Reachable invalid states or transitions:** `move` and `up` in `idle` have no row.
+
+### B21. Text editor
+
+- **Where:** `core/text-editor.ts` `TextEditor`, `EDITOR_MACHINE`; `BoardCore.editor`. The web view puts a hidden text field over the shape and sends what it holds (`set`) and its composition events; nothing in the core knows a DOM.
+- **States:** `closed`; `editing` (the editor holds a shape id, its text and the selection range); `composing` (an input method is making a character; the text is the field's text with the composition in it).
+- **Invariants:** the shape id, the text and the range are the state's data, kept in `session` (empty id when `closed`); every `set` in `editing` or `composing` writes the shape's `text` (a `label` for a box shape) with the merge key `edit:<n>`, so typing is one undo step, sealed on close; closing a `text` or `sticky` shape that holds only white space removes it in the same step; `open` is refused for a locked shape, a shape of a kind that holds no text, or a shape that is not there (`bad_argument`); listeners are told on `open` and on `close` (the select tool's `editing`, the web field).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | the shape takes text and is not locked | `editing` | session set, listeners told |
+| `editing` | `set` | | `editing` | text and range written to the shape |
+| `editing` | `compose` | an input method started | `composing` | |
+| `editing` | `commit` | | `closed` | history sealed, empty text shape removed, session cleared |
+| `composing` | `set` | | `composing` | text written |
+| `composing` | `endCompose` | | `editing` | |
+| `composing` | `commit` | | `closed` | as above |
+
+- **Reachable invalid states or transitions:** `set`, `compose` and `commit` in `closed` have no row; `open` in `editing` or `composing` has no row, so a second shape cannot be opened before the first is committed; `compose` in `composing` has no row.
+
+### B22. Snap
+
+- **Where:** `core/snap.ts` `Snapper`, `SNAP_MACHINE`.
+- **States:** `idle` (no gesture); `tracking` (a move or a resize is running and no guide is near); `snapped` (at least one guide holds the box).
+- **Invariants:** the moving box is snapped to the edges and the centres of the other shapes on the page (those the index finds near it), to equal gaps (the gap on one side of the box equals a gap between two other boxes, or the gaps on both sides are equal) and to the page grid when the page shows one (24 units); the threshold is 6 screen pixels, so `6 / zoom` page units; for a move the box's three vertical and three horizontal lines are tried, for a resize only the lines of the edges that move; the nearest line within the threshold wins on each axis; `guides` holds the lines to draw (a guide has two ends in page units and a kind: `edge`, `centre`, `gap`, `grid`) and is empty unless `snapped`; the snapper has no clock and writes nothing to the store; `end` empties the guides.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | | `tracking` | candidate boxes read |
+| `tracking` | `found` | a line is within the threshold | `snapped` | guides set |
+| `tracking` | `miss` | | `tracking` | guides empty |
+| `snapped` | `found` | | `snapped` | guides set |
+| `snapped` | `miss` | | `tracking` | guides emptied |
+| `tracking` `snapped` | `end` | | `idle` | guides emptied |
+
+- **Reachable invalid states or transitions:** `found`, `miss` and `end` in `idle` have no row; `begin` while `tracking` or `snapped` has no row, so a second gesture cannot start before the first ends.
+
+### B23. Recognise hold
+
+- **Where:** `core/ink/hold.ts` `HoldWatch`, `HOLD_MACHINE`; used by the pen tool (`core/tools/pen.ts`).
+- **States:** `idle` (no stroke, or the stroke ended); `watching` (the pen is down and the stroke is being drawn; the time since the pen last moved is counted); `fired` (the pen stayed still for 500 ms and the stroke was handed to shape fixing; the pen is still down).
+- **Invariants:** the clock is the input layer's (`time` of the samples and the `now` of `tick`); the pen has moved when it is more than 3 screen pixels from where it last moved; the data of `watching` is the place and the time of the last move (`since`); the hold fires only for a stroke of at least 8 points and 40 screen pixels of length (a dot or a tap is not a shape); the highlighter does not watch; `fired` commits the stroke (one undo step), then replaces the ink by the clean shape in a second step when the fit is under 6% (`core/ink/recognise.ts`), and leaves the ink when nothing fits; after `fired` the rest of the gesture is ignored until the pen comes up; the toolbar's Fix does the same on the selected strokes (or the newest stroke) without this machine.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | the stroke began | `watching` | place and time kept |
+| `watching` | `move` | the pen moved | `watching` | place and time kept again |
+| `watching` | `fire` | 500 ms since the last move | `fired` | the stroke is committed and fixed |
+| `watching` | `end` | the pen came up | `idle` | |
+| `watching` | `cancel` | | `idle` | |
+| `fired` | `end` | the pen came up | `idle` | |
+| `fired` | `cancel` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `fire` in `idle` or `fired` has no row (a hold fires once); `move` in `fired` has no row, so the ink of a fixed stroke cannot grow; `begin` in `watching` or `fired` has no row.
+
+### B24. Image decode
+
+- **Where:** `web/images.ts` `ImageEntry`, `IMAGE_MACHINE`; one entry for each image asset the page shows.
+- **States:** `pending` (the browser is decoding the asset's bytes); `ready` (the picture can be drawn); `failed` (it cannot be decoded; a grey box with a cross is drawn).
+- **Invariants:** an entry is made the first time a tile asks for the asset and is kept until the asset record is gone; `ready` and `failed` are final; the entry's picture is released when the entry is dropped; the board draws a grey box with the asset's name while an entry is `pending` or `failed`, and asks for the tiles of the image to be drawn again when an entry leaves `pending`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `pending` | `decoded` | | `ready` | tiles of the image shapes marked, a frame asked for |
+| `pending` | `fail` | | `failed` | the same, with the cross |
+
+- **Reachable invalid states or transitions:** every move out of `ready` and `failed` has no row.
+
+### B25. Gesture
+
+- **Where:** `core/edit.ts` `Gesture`, `GESTURE_MACHINE`, `beginGesture(core, origin)`. Added in the round 3 fixes (BR-26); the select tool, the shape tools and the eraser write only through it, and `eslint.config.js` makes a `.change(` call in `core/tools/` an error ("tools write through a gesture, so a cancel puts back everything"). The editing commands of `core/edit.ts` take it in `WriteOptions.gesture`.
+- **States:** `open` (the gesture takes writes); `committed` (finished, its writes stay); `cancelled` (finished, its writes were put back).
+- **Invariants:** the gesture has one merge key (`gesture:<n>`, a count for each store), so every write of it joins one undo step; `write(fn)` runs `fn` as one store transaction (B1) and, when it was accepted, keeps for each record in its diff what the record was before the gesture's first write to it (`undefined` for a record the gesture added); a refused write changes nothing and is not counted; `cancel` writes every kept record back (a record the gesture added is removed, one it removed or changed is put back exactly) in one transaction with the same merge key, so the history finds the step empty and drops it; `commit` and `cancel` seal the history, so the next write starts a new step; a write after `commit` or `cancel` is refused (`bad_argument`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `open` | `write` | | `open` | one transaction; the records before are kept |
+| `open` | `commit` | | `committed` | history sealed |
+| `open` | `cancel` | | `cancelled` | every kept record written back; history sealed |
+
+- **Reachable invalid states or transitions:** every event in `committed` and `cancelled` has no row (a second `commit` or `cancel` and a late `write` do nothing). A listener that writes while the gesture's transaction notifies makes a diff of its own; the gesture does not keep it.
+
+### Round 4 (branch `feat/board-4`: figure cards and the customisable board)
+
+Written before the code of round 4 (`web/figures.ts`, `web/ui/`, `core/keymap.ts`). A figure card follows tiptap's `FIGURE_MACHINE` (T1) with one more state, `moving`, for the time the camera is moving; the layer that owns the cards has its own two small machines (the camera's motion as the cards see it, and who has the input). Every table below refuses at least one move. Marks that do not depend on each other sit in one named `readonly` record (`FigureCard.facts`: `pictureAsked`, `inputAsked`, `pictureDue`); the id of the card that holds the input is never kept in a field, it is the card whose own input machine is in `input`.
+
+### B26. Figure card
+
+- **Where:** `web/figures.ts` `FigureCard`, `CARD_MACHINE`; one card for each figure shape of the current page, owned by `FigureLayer`. Every mount, save and unmount of one card runs on its own promise chain (`queue`).
+- **States:** `picture` (no app; the slot shows the shape's `picture`, or nothing and the canvas shows the placeholder); `mounting` (claimed, `createApp` in flight); `live` (an app is there and shown, counted against the cap of 3); `moving` (an app is there, hidden, and the card's picture shows because the camera is moving; still counted against the cap); `saving` (not claimed, the app is still there while its picture is made); `failed` (the mount or the script failed once: the picture and a small error badge; tried again by the next live order); `dead` (failed twice; a picture until the script or mode changes); `gone` (terminal: the shape is removed, the page is left or the board is disposed).
+- **Invariants:** at most 3 cards are `mounting`, `live` or `moving` (the scheduler's `maxLive` and `makeRoom` both keep it: a card is claimed only when `makeRoom` says there is a place, otherwise it stays a `picture` and the scheduler's next order decides); a card holds at most one app; a card on another page has no card at all (the layer drops every card when the page changes); the script is the only source of truth: the card reads `props.script` and nothing else, and a script change from outside (undo, a paste, the lines panel) applies to the live card (added lines run alone, any other change loads again); the picture is a cache: it is written with `history: false`, and a script change writes `picture: null` in the same undo step; a card that is `gone` takes no order; `figure_failed` is reported once for each failure and the card keeps its picture.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `picture` | `claim` | the script and mode check | `mounting` | `makeRoom` saves the least recently used card that is not live |
+| `mounting` | `claim` | | `mounting` | |
+| `mounting` | `mounted` | still wanted, same mode | `live` | the script is loaded; the scheduler is told (`noteMounted`) |
+| `mounting` | `release` | the card is asked to give its place up (`makeRoom`, a save order) | `picture` | the app being made is freed when it arrives (the card no longer wants it) |
+| `mounting` | `unmounted` | released before the app came | `picture` | app freed |
+| `mounting` | `fail` | first failure: the app cannot be made, or its script cannot be loaded | `failed` | `figure_failed`, badge; `fail` is sent while the card is still `mounting`, and then the app is freed |
+| `mounting` | `giveUp` | second failure | `dead` | `figure_failed`; the card leaves the scheduler |
+| `failed` | `claim` | a live order after the failure | `mounting` | |
+| `live` | `claim` | | `live` | |
+| `live` | `move` | the camera moved (B28) | `moving` | the picture shows, the app hides |
+| `moving` | `claim` | | `moving` | |
+| `moving` | `settle` | the camera was still for 150 ms | `live` | the host is sized for the steady zoom and the app paints again |
+| `live`, `moving`, `saving` | `unmounted` | the mode changed, or the app is lost: the graphics context was lost (`webglcontextlost` on the app's canvas), or the app was destroyed from outside (its element left the host) | `picture` | app freed; the card is claimed again when the scheduler still wants it and there is a place |
+| `live`, `moving` | `release` | | `saving` | the reader's lines are kept, the picture is made |
+| `saving` | `claim` | wanted again during the export | `live` | the kept lines are dropped |
+| `saving` | `unmounted` | picture made | `picture` | app freed; the picture is written without an undo step |
+| `failed` | `revive` | script or mode changed | `picture` | failure count cleared |
+| `dead` | `revive` | script or mode changed | `picture` | registered again |
+| any but `gone` | `remove` | | `gone` | app freed, scheduler key dropped |
+
+- **Reachable invalid states or transitions:** `move` and `settle` in `picture`, `mounting`, `saving`, `failed` and `dead` have no row (a card with no shown app has nothing to hide); `mounted` in `picture` or `saving` has no row, so an app that arrives after a release is freed and the card stays as it was; `release` in `picture` and `failed` has no row (`mounting` has one, to `picture`); every event in `gone` has no row.
+
+### B27. Card input
+
+- **Where:** `web/figures.ts` `FigureCard.input`, `INPUT_MACHINE`; the layer keeps the rule that at most one card is in `input`.
+- **States:** `board` (pointer and keys go to the board; the card's host has `pointer-events: none`); `input` (the card has the pointer and the keys; the board ignores them).
+- **Invariants:** only a `live` card takes the input; a double click on a card or Enter with one card selected gives it (`give`), Esc inside the card, a press on the board outside the card, another page or the card leaving `live` takes it back (`release`); giving the input to one card first releases the one that had it; while a card is in `input` the board's tools see no pointer and no key from it; Esc inside the card does not clear the board's selection.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `board` | `give` | the card is `live` | `input` | the host takes `pointer-events`, the card takes the focus, the toolbar shows |
+| `input` | `release` | Esc, outside press, card not live | `board` | the host gives them back, the board takes the focus |
+
+- **Reachable invalid states or transitions:** `give` in `input` and `release` in `board` have no row.
+
+### B28. Camera motion (as the cards see it)
+
+- **Where:** `web/figures.ts` `FigureLayer.motion`, `MOTION_MACHINE`. Not the camera's own steady zoom (B4); it also counts a pan.
+- **States:** `still` (the camera is where it was at the last frame); `moving` (it changed at a recent frame).
+- **Invariants:** the layer compares the camera's `x`, `y` and `zoom` with the last frame's; a change sends `moved`; `settle` is sent when 150 ms of the frame clock pass with no change (`STEADY_DELAY_MS`); entering `moving` sends `move` to every card, leaving it sends `settle` to every card; while `moving` the layer asks for frames, so the settle comes with no other event; the scheduler is told of the motion (`noteScroll`) so a card builds only after the camera settled.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `still` | `moved` | camera changed | `moving` | cards `move` |
+| `moving` | `moved` | camera changed | `moving` | the settle time starts again |
+| `moving` | `settle` | 150 ms with no change | `still` | cards `settle` |
+
+- **Reachable invalid states or transitions:** `settle` in `still` has no row.
+
+### B29. Menus
+
+- **Where:** `web/ui/menus.ts` `MenuHost`, `MENU_MACHINE`. The page list (B13) and the More shapes menu keep their own state; this machine is for the menus whose items are a list the host can change.
+- **States:** `closed`; `main` (the main menu, from the top-left button); `page` (the menu of one page, from the page bar); `context` (right-click or a long press, at a point).
+- **Invariants:** one menu is open at a time; the items are built when the menu opens, by the host's function over the default list (`menus.main`, `menus.page`, `menus.context`: `(items, target) => MenuItem[]`), and a function that throws or returns a bad list gives the default list (`onError`); an item whose `enabled(target)` is false is shown disabled and its `run` is never called; a menu closes when an item runs, on Esc and on a press elsewhere; `run` is called after the menu closed and a throw from it is reported (`onError`) and goes no further.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `openMain` | | `main` | items built |
+| `closed` | `openPage` | the page exists | `page` | items built for the page |
+| `closed` | `openContext` | | `context` | items built for the target |
+| `main`, `page`, `context` | `close` | item, Esc, outside press | `closed` | element removed |
+| `main` | `openPage`, `openContext` | | `page`, `context` | the open menu closes first |
+| `page` | `openMain`, `openContext` | | `main`, `context` | the same |
+| `context` | `openMain`, `openPage` | | `main`, `page` | the same |
+
+- **Reachable invalid states or transitions:** `close` in `closed` has no row; opening the menu that is already open has no row, so a second press on the button does not rebuild it (it closes it, through `close`).
+
+### B30. Key map
+
+- **Where:** `core/keymap.ts` `KeyMap`, `KEYMAP_MACHINE`.
+- **States:** `building` (the map takes bindings); `sealed` (the map answers lookups).
+- **Invariants:** a map is made from the defaults and the host's `keys` option: the host's entries first, in the order the host wrote them, then the defaults the host did not name; `false` removes an action's keys; a string or a list replaces them; each key string is normalised (`mod`, `shift`, `alt`, the key in lower case, in that order); a key string already taken by an earlier action is `shortcut_conflict` (`detail.key`, `detail.actions`) and the later action goes without it (the earlier one keeps it); a key string that does not parse is `bad_argument` and is left out; a lookup reads the map only when it is `sealed`, so a half-built map never answers; `rebind` (a host changing `keys` while the board runs) opens it again and seals it when done.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `building` | `bind` | the key is free | `building` | action to key |
+| `building` | `bind` | the key is taken | `building` | `shortcut_conflict`; the later action has no key |
+| `building` | `seal` | | `sealed` | |
+| `sealed` | `rebind` | | `building` | the table is cleared |
+
+- **Reachable invalid states or transitions:** `bind` in `sealed` and `seal` in `sealed` have no row (the sealed map is read only).
+
+### Round 5 (branch `feat/board-5`: agents on the board)
+
+Written before the code of round 5 (`core/agent.ts`, `core/agent-service.ts`, `core/agent-hand.ts`, `core/circle.ts`, `core/tools/ask.ts`, `web/agent-*.ts`, `web/ui/agent-panel.ts`). The runner (B31) writes the model's actions through one gesture for each call; the job (B32) is one request to the server and its answer; circle to ask (B33) is the user's side of a request; the hand animation (B34) is what the live layer shows while an action is being drawn; the panel (B35) is the screen's side. Every table below refuses at least one move, and a refused move is reported (`internal`). Data that is not a state sits in a named record or a list that is emptied when the machine leaves the state; no nullable field holds part of a state.
+
+### B31. Agent runner
+
+- **Where:** `core/agent.ts` `BoardAgent`, `RUNNER_MACHINE`. One runner for each board; `board_read` needs no state and is a plain method.
+- **States:** `idle` (no `board` call is running); `running` (a call is applying its actions, in one gesture with origin `model`); `stopping` (`stop` was called: the action in hand is ended and the rest of the call is not run).
+- **Invariants:** calls run one after the other (a call that arrives while one runs waits for it); each call has one gesture (B25), or the job's gesture when the job (B32) gives one, and every action of it is one `gesture.write` (one store transaction, B1), so a failed action changes nothing and the next action still runs; a call with its own gesture commits it when it ends, even when it was stopped, so what was made stays and is one undo step; the job commits its gesture when the job ends; `$last` is the id of the shape the previous action made (an arrow does not count, so a label can follow it), kept from one call to the next (a streamed answer is several calls), and forgotten when a `page` action changes the page or a new request begins (`forget`); the shapes the runner makes carry `meta.madeBy: 'model'`; `edit`, `move` and `delete` of a shape without that mark are refused with `agent_refused` unless the call allows it; an action that was stopped before it ran is reported `agent_partial`; the epoch (a count that `stop` raises) tells a call that was stopped from one that was not, so a call that begins after a stop is not stopped by it; a hand-style action waits for the hand animation (B34) and, when it is stopped part of the way, stores what was drawn so far; a `limit` from the store is reported as `agent_refused`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `run` | the call is valid (1 to 20 actions) | `running` | gesture begun |
+| `running` | `done` | the last action ended | `idle` | gesture committed |
+| `running` | `stop` | | `stopping` | the epoch is raised; the hand animation is cancelled |
+| `stopping` | `done` | the action in hand ended | `idle` | gesture committed; unrun actions reported `agent_partial` |
+
+- **Reachable invalid states or transitions:** `run` in `running` or `stopping` has no row (a second call waits on the queue and begins in `idle`); `stop` in `idle` and in `stopping` has no row (asked first with `can`).
+
+### B32. Agent job
+
+- **Where:** `core/agent-service.ts` `AgentJob`, `JOB_MACHINE`; `AgentService` keeps the jobs, the newest last, and the conversation.
+- **States:** `ready` (made, nothing sent); `waiting` (the request is out and no answer has come); `working` (at least one answer of actions has come); `done` (the server said `done`); `stopped` (the user pressed Stop); `failed` (the server or the network failed, or the answer was not understood); `replaced` (a newer request took over). The last four are final.
+- **Invariants:** a job is one request and has one gesture (B25, origin `model`) that every runner call of its answer writes through, committed when the job ends, so the whole answer is one undo step; a newer request aborts the older one at once (`replace`, its signal is aborted) and the older answer is not applied any more, what it made stays; Stop aborts the signal, ends the animation and the runner call that is applying actions (B31), and the job is `stopped`; the ids of what a job made are kept with the job; an answer is applied one event at a time, in order, each `actions` event as one runner call; a final job takes no more events; without a transport `ask` returns `agent_unavailable` and makes no job; a job that ended before `done` with something made gives `agent_partial` (what was made stays; the notice lists what failed), one that ended with nothing made gives `agent_unavailable` when it failed and `agent_partial` when it was stopped or replaced; the server's own `error` event ends the job `failed` with the server's message; a `say` event (a piece of the agent's words) is data, not a move: while the job is live, `ask` keeps the pieces of the answer in a local list and, when the job ends, writes them joined as one `agent` line of the conversation (after the lines that say what the actions did), so the words of a stopped or failed answer are shown too; the pieces of a replaced job are dropped (a newer request has begun); an answer with words and no action ends `done` and the notice "The agent made nothing." is not written when there were words.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `ready` | `start` | | `waiting` | the request is sent |
+| `waiting` | `actions` | the event holds a list | `working` | applied by the runner |
+| `waiting` | `done` | | `done` | |
+| `working` | `actions` | | `working` | applied by the runner |
+| `working` | `done` | | `done` | |
+| `waiting`, `working` | `stop` | | `stopped` | signal aborted, the runner stopped |
+| `waiting`, `working` | `fail` | an `error` event, a thrown transport, a bad line | `failed` | `onError` gets the error |
+| `waiting`, `working` | `replace` | a newer request | `replaced` | signal aborted |
+
+- **Reachable invalid states or transitions:** every event in `done`, `stopped`, `failed` and `replaced` has no row (a late event of an aborted stream is dropped, and the loop asks first with `can`); `actions` and `done` in `ready` have no row; `start` anywhere but `ready` has no row. `say` has no row in any state: it is not an event of the table (see the invariants).
+
+### B33. Circle to ask
+
+- **Where:** `core/circle.ts` `CircleAsk`, `CIRCLE_MACHINE`; the Ask tool (`core/tools/ask.ts`) and the pen's barrel button only feed it points.
+- **States:** `idle` (nothing circled); `drawing` (the loop is being drawn); `choosing` (the loop is closed, the items are found and the suggestions are shown); `asking` (a suggestion was picked and its request is out).
+- **Invariants:** the loop is kept in page units in one array that is emptied when the machine goes to `idle`; a loop of fewer than 3 points goes back to `idle`; the items are found when the loop closes (shapes whose middle is inside, ink with more than half its points inside, as the lasso does), at most 60, in reading order; the suggestions are made at once from the item kinds, with no server (design 11.1), and always end with `ask`; a loop with nothing in it has only `ask`; the pen's barrel button held gives the Ask tool for that stroke (B12 `askHeld`); `pick` builds the request of agent.md 3 and gives it to the service; a new loop while `choosing` or `asking` replaces the old one (the service aborts the older request, B32); `dismiss` (Esc, a press elsewhere) goes back to `idle`; the pick `ask` is refused until its text is not empty; the loop, the items and the suggestions are emptied when the machine leaves `choosing` and `asking`.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `down` | | `drawing` | loop begun |
+| `drawing` | `move` | | `drawing` | a point added |
+| `drawing` | `up` | 3 or more points | `choosing` | items found, suggestions made |
+| `drawing` | `cancel` | | `idle` | loop emptied |
+| `choosing` | `pick` | a suggestion of the list, and text for `ask` | `asking` | the request goes to the service |
+| `choosing` | `down` | | `drawing` | the old loop, items and suggestions are dropped |
+| `choosing` | `dismiss` | | `idle` | emptied |
+| `asking` | `finish` | the job ended | `idle` | emptied |
+| `asking` | `down` | | `drawing` | the older request is aborted by the service |
+| `asking` | `dismiss` | | `idle` | emptied; the job is not stopped (Stop is the panel's) |
+
+- **Reachable invalid states or transitions:** `pick` in `idle`, `drawing` and `asking` has no row; `up` and `move` in `idle`, `choosing` and `asking` have no row (a stray pointer event is asked first with `can`); `finish` in any state but `asking` has no row.
+
+### B34. Hand animation
+
+- **Where:** `core/agent-hand.ts` `HandAnimation`, `ANIMATION_MACHINE`; the web layer (`web/agent-hand.ts`) gives it the frame time and draws what it says on the live layer.
+- **States:** `idle` (nothing is being drawn by the hand); `playing` (one action is being drawn); `landing` (the drawing is done and stored, and the hand's picture stays one frame, until the tile that holds the stored shape is drawn, so the shape does not blink).
+- **Invariants:** the animation has no clock: the time of every frame is given to `step`; the rate is 400 characters a second (`HAND_CPS`), a stroke counts one character for every 4 page units of its length (`STROKE_UNITS_PER_CHAR`), and no action takes more than 3 seconds; with reduced motion nothing is begun and the shape is stored at once; one animation at a time (a second `begin` is refused, the runner waits); `progress` is from 0 to 1 and never goes back; `cancel` gives the progress reached, so a stopped stroke stores what was drawn so far; the plan is a record that is not in the store, read only, and each frame is made from it, never by writing the store.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | a plan with something to draw | `playing` | the first frame's time is kept |
+| `playing` | `step` | progress below 1 | `playing` | a frame is made |
+| `playing` | `finish` | progress reached 1 | `landing` | the runner is told |
+| `playing` | `cancel` | Stop, a newer request | `landing` | the progress reached is given |
+| `landing` | `settle` | the next frame | `idle` | the hand's picture is dropped |
+
+- **Reachable invalid states or transitions:** `begin` in `playing` and `landing` has no row; `step` in `idle` and `landing` has no row (asked first with `can`: a frame with nothing playing is a plain frame); `cancel` in `idle` and `landing` has no row.
+
+### B35. Agent panel
+
+- **Where:** `web/ui/agent-panel.ts` `AgentPanel`, `PANEL_MACHINE`.
+- **States:** `closed` (only the small Agent button shows); `open` (the conversation and the box to talk show; nothing is running); `busy` (a request is running: the Stop button shows, the box is off, and the hand icon shows where the agent draws).
+- **Invariants:** the panel exists only when the board has an agent (a transport or a server); the conversation is read from the service's list, so the panel keeps no copy (the agent's words of an answer are one `agent` line of that list, so the panel shows them with no state of its own); the hand icon's place is a record `{ x, y }` in page units (the last place the runner told) and the icon shows only while `busy`, so no flag says whether it shows; Stop stops the job through the service (B32), at once, and the panel goes back to `open`; the panel opens by itself when a new request begins (a circle was picked), so the answer is seen (the panel counts the requests it has seen, so a job that goes on while the panel is shut does not open it again); without a transport the panel says the agent is unavailable and has no box.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `closed` | `open` | | `open` | the panel shows |
+| `closed` | `begin` | a request began (a circle was picked) | `busy` | the panel shows, the hand icon appears |
+| `open` | `close` | | `closed` | |
+| `open` | `begin` | a request began (a message, or a circle) | `busy` | the hand icon appears |
+| `busy` | `end` | the job ended (done, stopped, failed, replaced) | `open` | the hand icon goes |
+| `busy` | `close` | | `closed` | the job goes on |
+| `closed` | `end` | | `closed` | a job that ended while the panel was shut |
+
+- **Reachable invalid states or transitions:** `begin` in `busy` has no row (a newer request that replaces the running one keeps the panel `busy`: the panel asks first and does not send `begin`); `close` in `closed` has no row; `open` in `open` and `busy` has no row; `end` in `open` has no row.
+
+### B36. Lift (fix round, branch `fix/board-drag-gc`, BR-82)
+
+- **Where:** `core/lift.ts` `Lift`, `LIFT_MACHINE`; `BoardCore.lift`. Written by `Gesture` (B25) for origin `user`; read by the web view's tiles (`DrawList.plan(…, leave)`, `diffRegions(…, leave)`) and its overlay.
+- **States:** `resting` (no shape is held; some may still be settling); `held` (a person's gesture is open and holds the shapes it wrote).
+- **Invariants:** the held ids and the settling ids are two sets of data of the machine, not flags: a shape is in at most one of them; a held shape is in no tile and is drawn on the overlay every frame; a shape is held from the write after the first that changed it, so the tiles that showed it are drawn again once, without it; a removed shape is let go; only shape records are held, at most `LIFT_MAX` (400), the rest stay in the tiles; `release` moves every held id to settling and tells the listeners which ones (the view draws their tiles again); a settling shape is drawn over the visible tiles not drawn yet and is let go (`settled`) when none of them meets it; `clear` (a page change) forgets both sets; the model's gestures hold nothing.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `resting` | `hold` | a person's gesture wrote a shape | `held` | its id is held (it leaves settling) |
+| `held` | `hold` | | `held` | more ids held |
+| `held` | `release` | the gesture was committed or cancelled | `resting` | the held ids settle; listeners told |
+
+- **Reachable invalid states or transitions:** `release` in `resting` has no row (a gesture that wrote nothing ends with nothing held; `release` asks first). `clear` sends `release` when it can and empties both sets.
+
+## teacher
+
+Written before the code of round 1 (branch `feat/teacher-r1`, `packages/teacher/src/`). Later rounds append their machines below (round 4: `VOICE_MACHINE` in the studio). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is a bug, so the turn ends with an `internal` error event (`loop/turn.ts`) and a target reports it to the host's `onFault` (`tools/targets.ts`); a call that may come in any state asks `can` first. Data that is not a state (the counters of model and tool calls, the retry book, the failure streak, the loaded catalogue groups) sits next to the machine and is named in the invariants.
+
+### TE1. Turn
+
+- **Where:** `loop/turn.ts` `Turn`, `TURN_MACHINE`; `runTurn`.
+- **States:** `idle` (made, not started), `calling` (a model call is open and no tool call has arrived in it yet, or the next call is about to open), `running_tool` (the open reply has given at least one tool call, which runs as soon as its arguments are complete), `done` (a reply ended with no tool calls, or the stream was cut and reported), `limited` (a limit was hit: 8 model calls, 24 tool calls, or 60 s on the caller's clock or by the caller's `AbortSignal.timeout`, which aborts with a `TimeoutError` reason), `stopped` (the caller's `AbortSignal` fired), `failed` (the model client reported an error). `done`, `limited`, `stopped` and `failed` are final.
+
+| State | Holds |
+|---|---|
+| `idle` | the request; nothing sent |
+| `calling` | the messages so far; the reply's text goes out as `say` events as it arrives |
+| `running_tool` | the same, and the results of the tool calls run in this reply |
+| `done` | the notices of the turn (`retry_spent`, `stream_cut`) |
+| `limited` | what was drawn stays; one `turn_limit` (T003) error event ends the stream |
+| `stopped` | what was applied stays; a final `done` event with the notices |
+| `failed` | one error event, in the SDK shape, ends the stream |
+
+- **Invariants:** the model-call counter, the tool-call counter, the start time (from the caller's `now()`), the retry book (per line key: how many failures, the fingerprints, and whether the line is spent), the failure streak (kind and length, reset by a line that passes) and the loaded catalogue groups are data of the turn, never states; the counters only grow; a tool call never runs in `idle`, `done`, `limited`, `stopped` or `failed`; a tool call that arrives after a limit or an abort is not run; `say` events go out before the reply's tool calls run; the messages of a turn are the assistant reply (text and tool calls) followed by one tool message per tool call, in call order, then at most one line naming what did not draw; a final state sends no event to the machine again (the loop returns).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `start` | | `calling` | the prompt is built |
+| `calling` | `toolCall` | calls < 24 | `running_tool` | the tool runs; its outputs (`lines`, `control`) go out |
+| `calling` | `replyEnd` | the reply had no tool call | `done` | `done` event with the notices |
+| `calling` | `cut` | the client reported `stream_cut` | `done` | `done` event with a `stream_cut` notice |
+| `running_tool` | `toolCall` | calls < 24 | `running_tool` | another call of the same reply runs |
+| `running_tool` | `results` | the reply ended | `calling` | the messages grow by the reply and its results; model calls < 8 |
+| `running_tool` | `cut` | the client reported `stream_cut` | `done` | the calls that ran stay; `done` event with a `stream_cut` notice |
+| `calling`, `running_tool` | `limit` | a counter or the clock passed its limit, or the signal fired with a `TimeoutError` reason, also while the model sends nothing | `limited` | `turn_limit` error event |
+| `calling`, `running_tool` | `abort` | `signal.aborted` with any other reason | `stopped` | `done` event |
+| `calling`, `running_tool` | `modelError` | the client sent an error event | `failed` | error event |
+
+- **Reachable invalid states or transitions:** none known. `start` in any state but `idle` has no row (`runTurn` makes a new `Turn` each call). `replyEnd` in `running_tool` has no row: a reply that gave tool calls ends with `results`. `toolCall`, `results`, `replyEnd` in a final state have no row; the loop returns before it could send one.
+
+### TE2. Tool guard
+
+- **Where:** `tools/guard.ts` `ToolGuard`, `TOOL_MACHINE`; held by each target (`figureTarget`), used by `Toolset.call`.
+- **States:** `idle` (no tool runs on this target), `running` (one tool call runs on this target).
+- **Invariants:** at most one tool call runs on a target; a call that finds the guard `running` gets `tool_busy` (T002), is not run and does not change the guard; `end` always follows `begin`, also when the tool returns an error or throws (the throw is caught and becomes an `internal` error).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `begin` | | `running` | |
+| `running` | `end` | | `idle` | |
+
+- **Reachable invalid states or transitions:** `begin` in `running` has no row: `enter()` asks `can` first and answers `tool_busy`. `end` in `idle` has no row: `leave()` asks `can` first.
+
+### TE3. Figure stream (prompt to figure)
+
+Written before the code of round 2 (branch `feat/teacher-r2`).
+
+- **Where:** `stream/apply.ts` `FigureStream`, `FIGURE_STREAM_MACHINE`; `streamFigure`. The splitter (`stream/split.ts`) holds only the text of the line being written (data), no state.
+- **States:** `idle` (made, not started), `planning` (the plan call is open: words only, no lines), `scripting` (the script call is open: each line is applied when its newline arrives), `repairing` (the repair call is open: replacement lines for the lines that failed), `done` (the stream ended well, or was cut and reported), `limited` (the deadline passed: the caller's `AbortSignal.timeout` aborted with a `TimeoutError` reason), `stopped` (the caller's signal fired with any other reason), `failed` (the model client reported an error in the plan or script call, or no line passed at all). `done`, `limited`, `stopped` and `failed` are final.
+
+| State | Holds |
+|---|---|
+| `idle` | the request; nothing sent |
+| `planning` | the plan text so far (never sent out) |
+| `scripting` | the lines that passed, the lines that failed with their errors, the unfinished line |
+| `repairing` | the same, and the failures given to the model |
+| `done` | the notices (`retry_spent` for each line left out, `stream_cut`) |
+| `limited` | what passed stays; one `turn_limit` error event ends the stream |
+| `stopped` | what passed stays; a final `done` event with the notices |
+| `failed` | one error event, in the SDK shape, ends the stream (`model_bad_output` when no line passed) |
+
+- **Invariants:** the lines that passed, the lines that failed and the model-call counter are data, never states; a line goes out as a `lines` event only after it passed on the target, so what the client commits is always a script that loads; the plan text is never sent out; only the script call and the repair call write lines; the repair call runs at most once and only when at least one line failed and the script call ended well; a final state sends no event to the machine again.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `plan` | the plan call is not skipped | `planning` | plan call opened |
+| `idle` | `script` | the plan call is skipped (an edit of fewer than 3 objects, a request that names the result) | `scripting` | script call opened |
+| `planning` | `planned` | the plan reply ended | `scripting` | script call opened with the plan |
+| `scripting` | `repair` | the reply ended, at least one line failed | `repairing` | repair call opened with the failures |
+| `scripting` | `finish` | the reply ended, no line failed | `done` | `done` event |
+| `scripting` | `cut` | the client reported `stream_cut` | `done` | the unfinished line is dropped; `done` with a `stream_cut` notice |
+| `repairing` | `finish` | the reply ended | `done` | lines still failing are left out; `done` with a `retry_spent` notice each |
+| `planning`, `scripting`, `repairing` | `limit` | the signal fired with a `TimeoutError` reason, or a call or line limit passed | `limited` | `turn_limit` error event |
+| `planning`, `scripting`, `repairing` | `abort` | the signal fired with any other reason | `stopped` | `done` event |
+| `planning`, `scripting` | `modelError` | the client sent an error event | `failed` | error event |
+| `scripting`, `repairing` | `unusable` | the reply ended and no line has passed in the whole stream, and none is left to repair | `failed` | `model_bad_output` error event |
+| `repairing` | `cut` | the client reported an error or `stream_cut` in the repair call | `done` | the lines that passed stay; the failures are left out |
+
+- **Reachable invalid states or transitions:** `plan` and `script` in any state but `idle` have no row (`streamFigure` makes a new `FigureStream` each call). `repair` in `planning` has no row: the plan call never writes lines. `modelError` in `repairing` has no row: a failed repair call is `cut`, because the figure already holds good lines.
+
+### Round 3 (branch `feat/teacher-r3`): the board on the real AI, no new machine
+
+Round 3 adds no state of its own; this note says where each new part gets its states, so a reviewer does not look for a table.
+
+| Part | Where | States come from |
+|---|---|---|
+| `board_read` and `board` tools, `boardTarget` | `tools/board.ts`, `tools/board-target.ts` | The tool guard (TE2) of the target. The request's items, page and `allowEdit` are data fixed when the target is made. The one thing that changes while a call runs, how many `page` actions the answer has made, is a counter in the named record `seen` (after a page action the items no longer describe the current page, so the id checks leave the rest to the board). |
+| `boardTurn` (jobs `circle` and `talk`) | `loop/board.ts` | The turn (TE1). The count of `actions` events sent and whether the model said anything are data, read once at the end: a talk with words and no action ends with `done`; a turn with neither, and a circle that drew nothing, end with `model_bad_output`. A circle's words are held in a local list until `done`. |
+| `POST /v1/board/ask` | `packages/server/src/jobs/board.ts` | The request job (SV1) and the model call (SV2), as `/v1/figure/draw`. |
+| The studio's choice of agent | `apps/studio/src/board-agent.ts`, `studio-page.ts` | One probe answer, read once after the board first opens. The board opens at once with the demo agent; a ready server then replaces its transport and label. Nothing else changes, so there is no state to table. |
+
+### Round 4 (branch `feat/teacher-r4`): voice lessons
+
+Written before the code of round 4. The teacher's own part adds no machine; the studio's voice lesson adds one (TE4).
+
+| Part | Where | States come from |
+|---|---|---|
+| Film tools `pause`, `resume`, `seek_beat`, `show_me` | `tools/film.ts` | The tool guard (TE2) of the target. The clock they move is the target's (`target.clock`); on a board target the clock is a record `{ t }` in the target (data: the film time the card in focus was last asked for), not a state. `show_me` is a `draw` call of one `SetValue` line, so it has no state of its own. |
+| Sentence splitter | `stream/sentences.ts` `SentenceSplitter` | The text since the last sentence end is data, as the line splitter's unfinished line is (TE3). It has no state: `push` returns the sentences that ended, `flush` returns the rest. |
+| The live job | `loop/live.ts` `liveTurn` | The turn (TE1). It forwards the turn's events and turns `say` pieces into whole sentences; a reply's rest is flushed at the next event that is not `say`. Nothing else changes. |
+| `POST /v1/teach` | `packages/server/src/jobs/teach.ts` | The request job (SV1) and the model call (SV2), as `/v1/board/ask`. |
+| `POST /v1/speech` | `packages/server/src/jobs/speech.ts` | The request job (SV1) with an audio answer, and the voices in order (SV3). |
+
+### TE4. Voice lesson (studio)
+
+- **Where:** `apps/studio/src/voice.ts` `VoiceLesson`, `VOICE_MACHINE`. The panel (`voice-ui.ts`) and the turn's NDJSON client (`teach-client.ts`) hold no state of their own: they read the machine.
+- **States:** `idle` (nothing is listening, running or playing), `listening` (the browser's speech recognition is open; where it is missing, the text box has the input and this state is not used), `thinking` (a `/v1/teach` turn is open and no sentence is playing: waiting for the model, or for the next sentence's audio), `speaking` (a sentence's audio, or the browser's voice, is playing).
+
+| State | Holds |
+|---|---|
+| `idle` | nothing; the panel shows the last answer's text |
+| `listening` | the open recognition and the text heard so far (interim, never sent) |
+| `thinking` | the turn's `AbortController`, the request's text, the sentence queue (audio fetched ahead) |
+| `speaking` | the same, and the clip that plays now |
+
+- **Invariants:** the turn's `AbortController`, the queue and the playing clip are one record, `run`, made when the turn begins and dropped on the move to `idle` or `listening` (the field and the machine cannot disagree); the sentence queue is data: each sentence keeps its text and the promise of its audio, which is started when the sentence is queued, so the next sentence's audio is being made while the one before it plays; the queue is played in order, and its end is a marker queued when the turn ends, so `drained` is sent only when the marker is reached and the player never guesses from an empty queue that the turn is over; a sentence whose audio failed is spoken with the browser's voice, and the order does not change; only whole sentences enter the queue (the teacher splits them, `say` pieces never reach the voice); a move out of `thinking` or `speaking` to `listening`, `thinking` (a new request) or `idle` always stops the clip, drops the queue and aborts the turn first (barge-in), and an event of the old turn that arrives later is ignored because its `run` is no longer the current one; the recognition is closed on every move out of `listening`; `lines`, `actions` and `control` events are applied when they arrive, whatever the state, so the figure changes while the sentence is spoken.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `idle` | `listen` | recognition exists | `listening` | recognition opens |
+| `listening` | `heard` | the final text is not empty | `thinking` | recognition closes; the request is sent |
+| `listening` | `stop` | the button again, no speech, or a recognition error that is not a failure | `idle` | recognition closes |
+| `idle`, `listening` | `type` | the text box has text | `thinking` | recognition closes if open; the request is sent |
+| `thinking`, `speaking` | `type` | the text box has text (barge-in by typing) | `thinking` | clip stopped, queue dropped, old turn aborted; the new request is sent |
+| `thinking` | `play` | the next sentence is ready to play | `speaking` | the clip starts |
+| `speaking` | `play` | the clip ended and a sentence is next | `speaking` | the next clip starts |
+| `speaking` | `wait` | the clip ended and the queue has no sentence yet | `thinking` | nothing plays |
+| `thinking`, `speaking` | `drained` | the end marker was reached | `idle` | the run is dropped |
+| `thinking`, `speaking` | `listen` | recognition exists (barge-in by voice) | `listening` | clip stopped, queue dropped, turn aborted; recognition opens |
+| `thinking`, `speaking` | `stop` | the Stop button | `idle` | clip stopped, queue dropped, turn aborted |
+| `listening`, `thinking`, `speaking` | `fail` | recognition failed, or the request could not start | `idle` | everything stopped; the reason shown |
+
+- **Reachable invalid states or transitions:** `play` and `wait` in `idle` and `listening` have no row: a late event of an old run is ignored by comparing `run`, and the player asks `can` first. `heard` outside `listening` has no row (a late recognition result after a barge-in is dropped). `listen` in `listening` and `stop` in `idle` have no row; the button asks `can`. The turn's own `done` or `error` event is not a move: it queues the end marker, and the player moves with `drained`.
+
+## server
+
+Written before the code of round 1 (branch `feat/teacher-r1`, `packages/server/src/`). Every machine is a `*_MACHINE` table over `StateMachine` from `@incantly/kernel`, made with its third argument, `onRefused`: a refused move is logged as `internal` with its fingerprint (`log.ts`) and the response is ended with `internal`. The rate limiter and the daily budget are counters, not states (server design 7).
+
+### SV1. Request job
+
+- **Where:** `jobs/job.ts` `Job`, `SERVER_JOB_MACHINE`; `http/ndjson.ts` writes through the job.
+- **States:** `received` (the request is read; checks not done), `running` (the checks passed; nothing is written yet), `streaming` (the first event of an NDJSON answer is written), `done` (the answer is complete: a JSON body, or the last event), `refused` (a check failed; the HTTP error body is the answer), `aborted` (the client closed the connection; the model call is aborted), `failed` (an error ended the job; before streaming it is an HTTP error, after it the last event). `done`, `refused`, `aborted` and `failed` are final.
+
+| State | Holds |
+|---|---|
+| `received` | the method, the path, the client's address and origin |
+| `running` | the parsed request, the job's `AbortController`, the client's rate slot |
+| `streaming` | the response head sent (`200`, `application/x-ndjson`); events flushed one by one |
+| `done` | the response ended; the rate slot released |
+| `refused` | one HTTP error body (`400`, `403`, `404`, `413`, `429`) |
+| `aborted` | the model call aborted; nothing more is written |
+| `failed` | `internal` (500 or a last event) with a fingerprint, or the job's own error |
+
+- **Invariants:** exactly one response ends each request; nothing is written in a final state; the head of an NDJSON answer is written once. On a model route it is written as soon as `checked` passes (`firstEvent` follows at once, with no event), so every error after the checks is the stream's last event and only a check answers with an HTTP status; the client's rate slot (one model request at a time) is released in every final state; a closed connection moves the job to `aborted` from `running` or `streaming` and aborts the model call at once; an exception in a handler becomes `internal`, never an unhandled rejection; a handler that returns without answering is failed through the machine (`ensureEnded` sends `fail`, as `internal`), never answered from the response's own flags, which only the low-level writers (`write*`) read (`incantly/state-no-io-flags`).
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `received` | `checked` | method, route, origin, size, JSON, fields, rate, budget and key pass | `running` | slot taken; on a model route `firstEvent` follows at once and the head is written |
+| `received` | `refuse` | a check failed | `refused` | HTTP error body written |
+| `received` | `fail` | an exception while checking | `failed` | `internal` HTTP error body written |
+| `running` | `firstEvent` | an NDJSON answer begins | `streaming` | head and first event written, flushed |
+| `running` | `finish` | a JSON answer is ready | `done` | body written |
+| `streaming` | `finish` | the turn ended | `done` | last event written, response ended |
+| `running`, `streaming` | `close` | the client closed | `aborted` | model call aborted, slot released |
+| `running` | `fail` | an error before any event (a route that is not a model route) | `failed` | HTTP error body written |
+| `streaming` | `fail` | an error after the first event | `failed` | `{ "error": … }` written as the last event, response ended |
+
+- **Reachable invalid states or transitions:** `finish`, `fail` and `close` in a final state have no row; the writer asks `can` first, so a late event of a closed connection is dropped, not reported. `firstEvent` in `streaming` has no row: the writer asks `can`. `checked` and `refuse` in `running` or later have no row.
+
+### SV2. Model call through the fallback
+
+Written before the code of round 2 (branch `feat/teacher-r2`).
+
+- **Where:** `providers/fallback.ts` `Fallback`, `CALL_MACHINE`; `fallbackClient`. One machine for each `chat` call. The skip list (model id to the time its 429 skip ends) is data shared by every call, not a state.
+- **States:** `trying` (no output has reached the caller: a model is open, or the next one is about to be), `streaming` (the first event of a model reached the caller: this model stays to the end), `done` (the reply ended), `failed` (no model gave output, or the model failed after output), `stopped` (the caller's signal fired). `done`, `failed` and `stopped` are final.
+
+| State | Holds |
+|---|---|
+| `trying` | the models not tried yet, why each tried one passed (busy, failed, timed out), the first-byte timer of the open model |
+| `streaming` | the model that answered; its events go out unchanged |
+| `done` | the model's `done` event went out |
+| `failed` | one error event: `model_busy`, `model_timeout` or `model_unavailable` before output; the model's own error after output |
+| `stopped` | the open request to the model is aborted; nothing more goes out |
+
+- **Invariants:** a model never changes after output reached the caller (the machine has no row from `streaming` back to `trying`); the first event of a model is its first byte (the first chat event with content: text, a tool call, `done` or an error; a keep-alive comment or a chunk with only the role does not count), and the 15 s timer is set only in `trying` and cleared by the first event or by the pass; a model that gave 429 is skipped for 60 s from the call that saw it (`skipUntil`, on the injected clock), and a call that finds every model skipped or busy ends as `model_busy` with the shortest wait as `retryAfterMs`; an error event before output passes to the next model, an error event after output is the caller's last event; the model request is aborted when the call ends in any final state; no event goes out after a final state.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `trying` | `passOn` | HTTP 429, 5xx, another failure, a network error, no first byte in 15 s, or an error event before output | `trying` | the model's request aborted; a 429 sets its skip |
+| `trying` | `output` | the model's first event is text or a tool call | `streaming` | the event goes out |
+| `trying` | `finish` | the model's first event is `done` | `done` | the event goes out |
+| `trying` | `exhaust` | no model is left | `failed` | `model_busy`, `model_timeout` or `model_unavailable` error event |
+| `streaming` | `finish` | the model's `done` event (the stream ended with `[DONE]`, or a choice carried a `finish_reason`) | `done` | the event goes out |
+| `streaming` | `fail` | the model's error event, or the stream ended with neither `done` nor a `finish_reason` | `failed` | the error event goes out (a cut stream is `stream_cut`) |
+| `trying`, `streaming` | `abort` | the caller's signal fired | `stopped` | the model's request aborted |
+
+- **Reachable invalid states or transitions:** `passOn` in `streaming` has no row (the fallback asks `can` first and forwards the error). `output` and `finish` in a final state have no row; the loop returns first.
+
+### SV3. Speech call and audio answer
+
+Written before the code of round 4 (branch `feat/teacher-r4`).
+
+- **Where:** `providers/speech.ts` `SpeechClient` (the voices in order), `jobs/speech.ts` `speech` (the route), `jobs/job.ts` `Job.audio` and `Job.chunk`.
+- **The voices in order** use the same table as SV2, `CALL_MACHINE`, with the same moves: `trying` (no byte of audio has reached the caller), `streaming` (the first byte reached the caller: this voice stays to the end), `done`, `failed`, `stopped`. A voice passes the call on at 429, 5xx, a network error, or no first byte within 15 s; a voice that gave 429 is skipped for 60 s; all busy is `model_busy` with `retryAfterMs`, all timed out `model_timeout`, any mix `model_unavailable`. The skip list is data shared by every call. A request may name the voice to try first (`model`, from the studio's held `x-voice` of the first sentence); an id no longer configured is ignored and the configured order stands. The voice that answered is the answer's `x-voice` header: data, not a state.
+- **The audio answer** is a `Job` (SV1) answer of another kind, with the same machine and no new row: the checks pass (`checked`, `running`), nothing is written until the first byte of audio arrives, then the head (`200`, `audio/mpeg` or `audio/pcm` with `x-sample-rate`) and the byte go out (`firstEvent`, `streaming`), the stream ends with `finish`. An error before the first byte is an HTTP error (`model_busy` 503 with `retry-after`, `model_unavailable` 503, `model_timeout` 504), because nothing has been sent: the studio then uses the browser's voice. An error after the first byte cannot change the head: the response is ended where it is (`fail` in `streaming` ends the response with no error line, since the body is not NDJSON), and the client plays what it has.
+- **Invariants:** the audio bytes are passed on as they arrive, never held back for the whole clip; the client closing the connection moves the job to `aborted` and aborts the provider request at once (no bytes are fetched for a closed client); the key goes only in the `Authorization` header; the provider's own text never reaches the client; the sentence is at most 500 characters; a request counts one tenth in the client's minute (`weight: 0.1`) and does not take the client's model slot (`exclusive` is not set: sentences of one lesson are fetched ahead, several at once); the day's model-call counter is not used, since the voice models are not chat calls.
+
+## lesson
+
+### Round 1 (branch `feat/lesson-r1`): the teacher and the server
+
+Written before the code of round 1. The server's lesson is one machine (LE1). The studio's `CONVERSATION_MACHINE` is written before the code of round 2.
+
+| Part | Where | States come from |
+|---|---|---|
+| `LessonMemory` (topic, plan, step, last turns, summary, hard notes) | `packages/teacher/src/lesson/memory.ts` | Plain data, rewritten by the tools and `recordTurn`. It holds no state: whether a plan exists is `plan.length`, and the server's machine (LE1) says what the lesson is doing. |
+| `lesson_plan`, `lesson_step` | `packages/teacher/src/lesson/tools.ts` | The tool guard of the target (TE2). They write into the memory the job gives them and hold nothing of their own. |
+| Repeated board actions in a turn (TR-49) | `packages/teacher/src/lesson/turn.ts` | A set of the actions that passed in the turn, emptied when a `page` action passes. Data of the turn, not a state. |
+| `lessonTurn` | `packages/teacher/src/lesson/turn.ts` | The turn (TE1). It forwards the turn's events, makes `say` pieces whole sentences, adds the `lesson` event when a tool changed the plan or the step, and puts `ended` on `done` when the learner asked to end. |
+| `POST /v1/lesson/start`, `/turn`, `/end` | `packages/server/src/jobs/lesson.ts` | `/turn` is the request job (SV1) and the model call (SV2), as `/v1/teach`. `/start` and `/end` are JSON answers of the same job. |
+
+### LE1. Lesson (server)
+
+- **Where:** `packages/server/src/lessons/store.ts` `LessonStore`, `LESSON_MACHINE`. One machine for each lesson held. The store (the map of lessons by id) is data: it holds at most 100 lessons, and it has no timer; every call reads the injected clock.
+- **States:** `new` (made by `/start`, no turn yet), `planning` (a turn runs and the lesson has no plan yet), `teaching` (a turn runs and the lesson has a plan), `waiting` (no turn runs; the learner is to speak), `ended` (final; the lesson is dropped from the store at once, so a later call finds no lesson: `lesson_unknown`).
+
+| State | Holds |
+|---|---|
+| `new` | the topic, the mode, the memory (empty), the time of the last call |
+| `planning`, `teaching` | the same, and the running turn: its number, the client that started it, and the function that stops it. These are one record, `run`: set only by `enter` when the machine moves into `planning` or `teaching`, put back to the idle record `NO_RUN` (turn number 0) only by `leave` when it moves out, and read only through a getter that asks the machine first, so a `run` the machine does not have is never seen (LR-1) |
+| `waiting` | the memory with the last turn recorded; the time of the last call |
+| `ended` | nothing; the lesson has left the store |
+
+- **Invariants:** `planning` and `teaching` are the states that have a running turn, so "a turn runs" is read from the machine and nowhere else (`lesson_busy`); a lesson has at most one turn running; `run` is the idle record in `new`, `waiting` and `ended`, and a turn's number is never reused, so a turn that was replaced and finishes late finds a different number and changes nothing (it does not move the machine; the memory already holds it as interrupted, see below); the plan exists exactly when the lesson has passed `planned` since its last `replan` (a lesson that left `planning` without a plan goes back to `planning` on its next turn, so `teaching` always has a plan); the idle time and the turn count are checked from the injected clock when a call reaches the store (`start`, `turn`, `end`), never by a timer: a lesson idle for 15 minutes, or with 200 turns done, is ended before the call is answered; at most 100 lessons are held, and a new one past that ends the idle lesson (state `new` or `waiting`) with the oldest last call; when every held lesson has a turn running, `/start` answers `lesson_full`; the lesson id is `crypto.randomUUID()`; the memory is in the server's memory only.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `new` | `begin` | the first turn begins | `planning` | a turn number and `run` are set; the turn count rises; the last call time is set |
+| `planning` | `planned` | `lesson_plan` passed in the running turn (the turn's `lesson` event shows a plan) | `teaching` | |
+| `planning`, `teaching` | `turnEnd` | the running turn ended (`done`, an error, a stop, a replaced turn) | `waiting` | `run` is idle; the last call time is set; the turn is recorded in the memory when it ended with `done`, and a turn that was stopped is recorded as interrupted (the learner's words, what the teacher had said so far and the mark "(interrupted)", LR-3) by `lessonTurn` the moment its signal fires |
+| `waiting` | `speak` | a turn begins and the memory has a plan | `teaching` | as `begin` |
+| `waiting` | `replan` | a turn begins and the memory has no plan | `planning` | as `begin` |
+| `new`, `planning`, `teaching`, `waiting` | `end` | `/v1/lesson/end`, a turn that ended with `ended` (the learner stopped it), 200 turns done, 15 minutes idle, or evicted | `ended` | the running turn is stopped; the lesson leaves the store |
+
+- **A turn that arrives while one runs** is not a move of its own. From the client that started the running turn it is a barge-in: the store sends `turnEnd` for the old turn (its function stops it), then `speak` or `replan` for the new one, in one call, so the old turn finishes with `superseded` and its words are in the memory as interrupted. From another client it is refused with `lesson_busy` and the lesson does not change.
+- **Reachable invalid states or transitions:** `planned` in `teaching` has no row (a plan that is replaced later in the lesson changes the memory, not the state; the store asks `can` first). `turnEnd` in `waiting` or `new` has no row (a late end of a replaced turn is dropped by its number, and the store asks `can` first). `speak`, `replan` and `begin` in `planning` or `teaching` have no row (the takeover sends `turnEnd` first). Nothing is accepted in `ended`.
+
+### Round 2 (branch `feat/lesson-r2`): the conversation on the board
+
+Written before the code of round 2. The studio's conversation is one machine (LE2); the server's machine (LE1) is not changed.
+
+| Part | Where | States come from |
+|---|---|---|
+| The conversation | `apps/studio/src/lesson.ts` `LessonConversation`, `CONVERSATION_MACHINE` | LE2 |
+| The lesson's plan and step shown at the top of the panel | `LessonConversation.view` | Data: the last `lesson` event of the server (`{ plan, step, state }`), shown as it came. It holds no state of the studio: the server's machine (LE1) says what the lesson is doing |
+| The lesson's id | `LessonConversation.#lessonId` | Data: set when `/v1/lesson/start` answered, put back to undefined when the conversation moves to `off` (the field is read only while the conversation is not `off`) |
+| The board's side of a turn (the gesture of the answer) | `apps/studio/src/voice-targets.ts` `boardConversation` | The gesture's own machine (B25). The target holds the answer's gesture in a record `{ gesture }` made by `begin` and committed (and dropped) by `finish`, so every `actions` event of one turn is one undo step |
+| The Talk panel's lesson controls (Start lesson, End lesson, plan, step) | `apps/studio/src/voice-ui.ts` | Hold no state: they read the conversation. Whether the panel is open is the only thing the panel keeps |
+
+### LE2. Conversation (studio)
+
+- **Where:** `apps/studio/src/lesson.ts` `LessonConversation`, `CONVERSATION_MACHINE`. It replaces the single-turn `VOICE_MACHINE` (TE4) on the board; the Talk panel of a graph or geometry view keeps `VoiceLesson` and TE4, which no longer opens the microphone when the panel opens (TR-50). The conversation reuses `SentenceQueue`, `Clip`, `ClipSource`, `BrowserVoice` and `Recogniser` of `voice.ts`, and the lesson client of `lesson-client.ts`.
+- **States:** `off` (no lesson is running here; the panel offers Start lesson), `listening` (it is the learner's turn: the microphone is open where the browser can listen; where it cannot, the text box has the turn and nothing is open), `thinking` (a turn is open and no sentence is playing: the lesson is being started, the model is working, or the next sentence's audio is being made), `speaking` (a sentence's audio, or the browser's voice, is playing), `paused` (the lesson is on but nothing listens and nothing runs: 8 seconds of silence, a microphone that failed, the learner paused it, or the panel was closed).
+
+| State | Holds |
+|---|---|
+| `off` | the transcript of the lesson that ended, if any; no lesson id, no turn |
+| `listening` | the lesson id (when the first turn has been made), the open recognition and the text heard so far (interim, never sent), the 8 s silence timer; none of these where the browser cannot listen |
+| `thinking` | the lesson id (when started), the turn's `AbortController`, the sentence queue (audio fetched ahead), the board's gesture of the answer |
+| `speaking` | the same, and the clip that plays now |
+| `paused` | the lesson id and the transcript |
+
+- **Invariants:**
+  - The turn's `AbortController`, the queue, the board target and what the server said about the turn's end are one record, `run`, made when a turn begins and dropped when the conversation leaves `thinking` or `speaking` for any other state (the field and the machine cannot disagree). The recognition and its silence timer are one record, `ear`, made on the move into `listening` and closed on every move out of it.
+  - **The microphone is closed while the teacher speaks:** the recognition exists only in `listening`, and the teacher's sentences are played only in `thinking` and `speaking`, so the two never overlap and the microphone cannot hear the teacher. A barge-in is a tap on the microphone or Space (the `listen` move), never speech.
+  - **The queue** is as the voice lesson's: each sentence keeps its text and the promise of its audio, started when the sentence is queued; the end of the turn is a marker queued when the turn ends, so `drained` is sent only when the marker is reached. A sentence whose audio failed is spoken with the browser's voice, in its place.
+  - **Listening again by itself:** `drained` moves to `listening` and opens the microphone; where the browser cannot listen it opens nothing, the panel puts the focus in the text box, and the lesson waits for `type`.
+  - **Silence:** the timer starts when the microphone opens and is cleared when any words are heard; when it fires the conversation moves with `pause`. The browser's own end of recognition with nothing heard is the same `pause`. Where nothing listens there is no timer.
+  - **The end of the lesson comes from the server:** a `done` event with `ended: true` (the learner said "stop the lesson", or the 200th turn) is kept in `run`; the turn's last sentences are spoken, and at the end marker the conversation sends `end` instead of `drained` (LF-5). An error `lesson_unknown` is the same, at once: the notice is shown and the panel offers Start a new lesson.
+  - **A new lesson:** the first words start it. `/v1/lesson/start` is asked inside the first turn (`thinking`), so a lesson id exists from the first turn's start; a start that failed is a lesson that is over: the notice (the server's message) is shown and the conversation goes `off`, so the panel offers Start lesson again. A turn that begins with no lesson id (a lesson begun by the microphone) asks `/start` first.
+  - **Barge-in** (`listen`, `type`, `pause`, `end` out of `thinking` or `speaking`) stops the clip, drops the queue, aborts the turn and commits the board's gesture first, and an event of the old turn that arrives later is ignored because its `run` is no longer the current one. The server records the interrupted turn in the lesson's memory (LR-3).
+  - **The board:** `actions` events of one turn go through the board's agent runner inside one gesture made when the turn begins and committed when it ends or is stopped, so the whole answer is one undo step. `say` goes into the transcript and the voice, `lesson` replaces the plan view; all three are applied when they arrive, whatever the state.
+- **Transitions:**
+
+| From | Event | Guard | To | Side effects |
+|---|---|---|---|---|
+| `off` | `start` | the learner typed or said the first words | `thinking` | the plan view is cleared; the turn begins (`/start`, then the first turn) |
+| `off` | `listen` | the browser can listen and the box is empty | `listening` | the microphone opens; the plan view is cleared |
+| `listening` | `heard` | the final text is not empty | `thinking` | the microphone and timer close; the turn begins |
+| `listening`, `paused` | `type` | the text box has text | `thinking` | the microphone and timer close if open; the turn begins |
+| `thinking`, `speaking` | `type` | the text box has text (barge-in by typing) | `thinking` | clip stopped, queue dropped, turn aborted, gesture committed; the new turn begins |
+| `thinking` | `play` | the next sentence is ready to play | `speaking` | the clip starts |
+| `speaking` | `play` | the clip ended and a sentence is next | `speaking` | the next clip starts |
+| `speaking` | `wait` | the clip ended and the queue has no sentence yet | `thinking` | nothing plays |
+| `thinking`, `speaking` | `drained` | the end marker was reached and the server did not end the lesson | `listening` | the run is dropped; the microphone opens (or the text box takes the focus) |
+| `thinking`, `speaking`, `paused` | `listen` | the tap on the microphone or Space | `listening` | clip stopped, queue dropped, turn aborted, gesture committed; the microphone opens (or the text box takes the focus) |
+| `listening`, `thinking`, `speaking` | `pause` | 8 s of silence, the recognition ended with nothing heard, the microphone failed (the reason is shown, and that typing works), the tap on the microphone while listening, or the panel was closed | `paused` | everything stopped as in a barge-in; the lesson id stays |
+| `listening`, `thinking`, `speaking`, `paused` | `end` | the End button, the end marker of a turn the server ended, `lesson_unknown`, or a `/start` that failed | `off` | everything stopped; `/v1/lesson/end` is asked when the learner ended it and the server has not; the lesson id is dropped |
+
+- **Reachable invalid states or transitions:** `play` and `wait` in `listening`, `paused` and `off` have no row (a late event of an old run is ignored by comparing `run`, and the player asks `can` first). `heard` outside `listening` has no row (a late recognition result after a barge-in is dropped). `listen` in `listening` has no row (the tap pauses), and `pause` in `paused` and `off` has none; the buttons ask `can`. `start` outside `off` has no row (the panel shows Start lesson only in `off`). `end` in `off` has no row. The turn's own `done` or `error` event is not a move: it queues the end marker, and the player moves with `drained` or `end`.
+
+## Explicit since the lint rules (branch `fix/lint-warnings`)
+
+Machines that were written as flags or direct writes are now tables over `transition` or `StateMachine` from `@incantly/kernel` (`AGENTS.md`, "Rules are checked by code"). The behaviour did not change; every test and film hash is the same. `GRID_MACHINE` and `ERROR_MACHINE` first had one row copied into every state; `incantly/state-table-refuses` found them (board review BR-1) and their rows now list only the moves that may happen.
+
+| Machine | Where | States | Notes |
+|---|---|---|---|
+| `SCHEDULE_MACHINE` | `packages/view/src/core/scheduler.ts` | placeholder, ready, live, paused, saved | V1: `build`, `restore`, `promote`, `pause`, `save` |
+| `TICK_MACHINE` | `packages/view/src/web/scheduler-host.ts` | idle, ticking, again | A tick asked for inside a tick runs once more, never nested |
+| `SAMPLER_MACHINE` | `packages/plot/src/function.ts` | setup, refine, classify, band | Refine and classify alternate; the exact band is last |
+| `WORKER_MACHINE` | `packages/sdk/src/worker/physics-host.ts` | off, idle, waiting, failed | One frame in flight; `failed` (no worker, or it crashed) is final |
+| `GRID_MACHINE` | `packages/kernel/src/physics/grid-life.ts` | running, unstable | Smoke and fire grids in the plane and in space. `running`: `blowUp` to `unstable`. `unstable`: `reset` to `running`; nothing else. A checkpoint load does not send an event of its own: `restoreLife` reads the saved state and sends `blowUp` or `reset` only when the state differs |
+| `ERROR_MACHINE`, `COVER_MACHINE` | `packages/ui/src/line-editor.ts` | typing, quiet, error; open, dismissed, confirm, confirmDismissed | The line's errors show after a pause; Esc hides the strip, then asks to clear. `ERROR_MACHINE`: `type` from every state to `typing` (and `typing` to itself); `settleQuiet` and `settleError` only from `typing` (the pause timer is started by an edit and cleared by a failed submit, so it fires only there); `fail` from every state to `error` |
+| `FIGURE_MACHINE` | `packages/tiptap/src/node-view.ts` | see T1 | |
+
+Marks that do not depend on each other are grouped in named records instead of loose flags: the physics drivers' `coneFacts`, `advanceFacts` and `doing`, the checker's `found` and `context`, the figure view's `frameLoop` and `layers`, the event hub's `queued`. The smoke grids' `staticDirty` became a count of wall moves (`markWallsAgain`), and the figure's `@clock` and `@solver` caches keep the item they were read from instead of a "read" flag.

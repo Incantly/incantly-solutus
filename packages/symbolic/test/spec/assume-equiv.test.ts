@@ -13,8 +13,8 @@ import {
   parseCondition,
   parseExpression,
   signOf,
-} from '@incantly/symbolic';
-import type { Domain, SymCond } from '@incantly/symbolic';
+} from '@incantly/symbolic/engine';
+import type { Domain, SymCond } from '@incantly/symbolic/engine';
 import { asBool, cd, equivVerdict, err, ex, expectWellFormed, exprText, noticeKinds, numeric, ran, val } from './helpers';
 
 const dom = (...pairs: readonly (readonly [string, Domain])[]) => assumptions(new Map(pairs));

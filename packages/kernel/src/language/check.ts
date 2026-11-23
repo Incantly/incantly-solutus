@@ -185,6 +185,11 @@ export const FIELDS: Record<string, Record<string, Ty>> = {
   Region: { value: T.Number, area: T.Number },
 };
 
+/** An area adds fields to a type (kept beside the ones the type already has). */
+export function registerFields(type: string, fields: Readonly<Record<string, Ty>>): void {
+  FIELDS[type] = { ...(FIELDS[type] ?? {}), ...fields };
+}
+
 interface Frame {
   readonly vars: Map<string, { slot: number; ty: Ty; unit?: 'angle' }>;
 }
@@ -254,8 +259,8 @@ class Checker {
   errors: LanguageError[] = [];
   notices: Notice[] = [];
   reads = new Set<ObjId>();
-  usesT = false;
-  hasCommand = false;
+  /** What checking the line found: it reads the clock (in its value, a style or a range bound), or calls a command. */
+  readonly found = { usesT: false, hasCommand: false, styleUsesT: false, rangeUsesT: false };
   /**
    * The one call that may be an action: the whole of an action line. Any other call to a command whose forms return
    * nothing is used as a value, and an action is not a value.
@@ -264,8 +269,6 @@ class Checker {
   /** Reads of range bounds and style values, kept apart from the reads of the value (see `apart`). */
   readonly rangeReads = new Set<ObjId>();
   readonly styleReads = new Set<ObjId>();
-  styleUsesT = false;
-  rangeUsesT = false;
   scopes: Frame[] = [];
   slotCount = 0;
   nodes = 0;
@@ -297,22 +300,22 @@ class Checker {
    */
   apart<R>(bucket: 'range' | 'style', fn: () => R): R {
     const savedReads = this.reads;
-    const savedT = this.usesT;
-    const savedCommand = this.hasCommand;
+    const savedT = this.found.usesT;
+    const savedCommand = this.found.hasCommand;
     this.reads = new Set<ObjId>();
-    this.usesT = false;
+    this.found.usesT = false;
     try {
       return fn();
     } finally {
       const into = bucket === 'range' ? this.rangeReads : this.styleReads;
       for (const id of this.reads) into.add(id);
-      if (this.usesT) {
-        if (bucket === 'range') this.rangeUsesT = true;
-        else this.styleUsesT = true;
+      if (this.found.usesT) {
+        if (bucket === 'range') this.found.rangeUsesT = true;
+        else this.found.styleUsesT = true;
       }
       this.reads = savedReads;
-      this.usesT = savedT;
-      this.hasCommand = savedCommand;
+      this.found.usesT = savedT;
+      this.found.hasCommand = savedCommand;
     }
   }
 
@@ -670,7 +673,7 @@ class Checker {
     const loc = this.lookupLocal(name);
     if (loc) return { n: 'local', slot: loc.slot, name, ty: loc.ty, s: e.s, e: e.e, ...(loc.unit ? { unit: loc.unit } : {}) };
     if (name === 't' || name === 'bt' || name === 'beat') {
-      this.usesT = true;
+      this.found.usesT = true;
       return { n: 'clock', which: name, ty: T.Number, s: e.s, e: e.e };
     }
     const c = constantByName(name);
@@ -682,7 +685,7 @@ class Checker {
       // in a symbolic argument an Expr or a Symbol is read as a number formula and a Cond as a condition: the engine
       // reads the tree, so `sqrt(a^2)` and `q and x > 0` check like any formula (cas/design.md 5.3)
       const k = obj.type.k as string;
-      const ty = this.casBody && (k === 'Expr' || k === 'Symbol') ? T.Number : this.casBody && k === 'Cond' ? T.Bool : obj.type;
+      const ty = this.context.casBody && (k === 'Expr' || k === 'Symbol') ? T.Number : this.context.casBody && k === 'Cond' ? T.Bool : obj.type;
       return { n: 'ref', id: obj.id, name, ty, s: e.s, e: e.e, ...(obj.unit ? { unit: obj.unit } : {}) };
     }
     return this.unknownName(e);
@@ -762,7 +765,7 @@ class Checker {
     if (name === 'zaxis') {
       return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name }, { hint: 'zaxis belongs to 3D figures.', fingerprintKey: name });
     }
-    const split = this.simpleUnknown ? undefined : this.splitProduct(name);
+    const split = this.context.simpleUnknown ? undefined : this.splitProduct(name);
     // a constant is never a near name for a typo (`e` would match every short name), and only a word of its own length can be
     const close = closestNames(name, [...this.fig.names(), ...CONSTANT_NAMES.filter((c) => c.length > 1), ...this.scopeNames()], 3);
     const want = this.wants.get(e);
@@ -774,7 +777,7 @@ class Checker {
     } else if (close.length > 0) {
       extra.hint = `Did you mean ${close.join(' or ')}?`;
       for (const c of close.slice(0, 2)) suggest.push(this.replaceRange(e.s, e.e, c));
-    } else if (this.casBody) {
+    } else if (this.context.casBody) {
       // cas/design.md 5.3 rule 5: in algebra an unknown other than x, y and z is made first, so a typo is never a new unknown
       extra.hint = `In algebra, x, y and z are unknowns; make ${name} one first with ${name} = Symbol(), or make it a number.`;
     } else if (this.scopeNames().length > 0) {
@@ -787,10 +790,10 @@ class Checker {
     if (suggest.length > 0) extra.suggest = suggest;
     if (split && suggest.length > 0) extra.fix = suggest[0] as string;
     // a slider that was never made
-    if (!this.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
+    if (!this.context.simpleUnknown && !nameProblem(name) && !reservedGroup(name, this.fig.commands, this.functions)) {
       const original = this.parsed.sm.text;
       // the line that makes the name what the argument needs: a slider for a number, a point for a point, nothing for a type with no plain literal
-      if (this.casBody) {
+      if (this.context.casBody) {
         extra.quickFixes = [{ label: `Make ${name} an unknown`, lines: [`${name} = Symbol()`, original] }];
         return this.err('unknown_name', e.s, e.e, 'lang.unknown_name', { name, type: 'Symbol' }, extra);
       }
@@ -807,16 +810,18 @@ class Checker {
   }
 
   unknownNameAt(t: { name: string; s: number; e: number }): null {
-    this.simpleUnknown = true;
+    this.context.simpleUnknown = true;
     try {
       return this.unknownName({ k: 'name', name: t.name, s: t.s, e: t.e });
     } finally {
-      this.simpleUnknown = false;
+      this.context.simpleUnknown = false;
     }
   }
-  simpleUnknown = false;
-  /** True while a symbolic argument of a CAS command is checked (cas/design.md 5.3). */
-  casBody = false;
+  /**
+   * Where the checker is now: reporting a lone unknown name (`simpleUnknown`), or inside a symbolic argument of a CAS
+   * command (`casBody`, cas/design.md 5.3). Each is set for one call and put back after it.
+   */
+  readonly context = { simpleUnknown: false, casBody: false };
   /** The type a bare name needs in its argument position, when the forms that fit agree; `Any` when it has no plain literal. */
   readonly wants = new Map<Expr, string>();
 
@@ -1361,7 +1366,7 @@ class Checker {
   }
 
   inferCommand(e: CallExpr, spec: import('./table').CommandSpec, expected?: Ty): TNode | null {
-    this.hasCommand = true;
+    this.found.hasCommand = true;
     const m = this.matchForms(spec.name, spec.forms, e, expected, spec.refuse);
     if (!m) return null;
     const form = m.form;
@@ -1775,12 +1780,12 @@ class Checker {
         this.errors = [];
         this.notices = [];
         let node: TNode | null;
-        const outerCas = this.casBody;
-        this.casBody = p.type.startsWith('Cas');
+        const outerCas = this.context.casBody;
+        this.context.casBody = p.type.startsWith('Cas');
         try {
           node = this.inferArg(a.value, set.members.length === 1 ? set.members[0] : undefined);
         } finally {
-          this.casBody = outerCas;
+          this.context.casBody = outerCas;
           const errs = this.errors;
           this.errors = saved;
           this.notices = savedN.concat(this.notices);

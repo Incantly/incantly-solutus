@@ -7,6 +7,7 @@ import { Figure } from '@incantly/kernel';
 import type { CommandRegistry } from '@incantly/kernel';
 import { check, el, fmt, number, segmented, select, statsTable } from './datalab';
 import { colorAt, paintScene } from '@incantly/sdk/screen';
+import type { FrameStyle } from '@incantly/sdk/screen';
 import type { SceneItem } from '@incantly/sdk/screen';
 import { Viewport } from '@incantly/sdk/screen';
 import { miniCurve } from './mini';
@@ -239,7 +240,7 @@ interface DistLike {
 
 const isDistLike = (v: unknown): v is DistLike => typeof v === 'object' && v !== null && (v as { kind?: unknown }).kind === 'dist';
 
-export function mountProbCalc(session: KernelSession, registry: CommandRegistry, say: (t: string) => void): ProbCalc {
+export function mountProbCalc(session: KernelSession, registry: CommandRegistry, say: (t: string) => void, style?: () => FrameStyle | undefined): ProbCalc {
   const element = el('aside', 'datalab probcalc');
   element.setAttribute('aria-label', 'Probability');
   element.hidden = true;
@@ -476,7 +477,7 @@ export function mountProbCalc(session: KernelSession, registry: CommandRegistry,
       const pad = (r.hi - r.lo) * 0.04;
       vp.fit({ x0: r.lo - pad, x1: r.hi + pad, y0: 0, y1: top }, 24, true);
       ctx.clearRect(0, 0, w, h);
-      paintScene(ctx, vp, items);
+      paintScene(ctx, vp, items, style?.());
       // markers: a guide line and a triangle on the x axis, with the value
       const mark = (x: number, which: string): void => {
         const px = vp.px(x);

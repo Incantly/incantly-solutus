@@ -10,8 +10,13 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 2. A field named `state`, `phase` or `status` SHALL change only through `transition(...)` or a `StateMachine` (`incantly/state-transition-only`); a constructor may set its first value.
 3. Such a field SHALL have a type that is a union of string literals or a named type alias, not `string`, `number`, `any` or no type (`incantly/state-union-type`).
 4. `transition(...)` and `new StateMachine(...)` SHALL take a table whose name ends in `_MACHINE` (`incantly/state-table-required`).
-5. A local copy of a state field made before an `await` SHALL NOT be read after it (`incantly/state-no-stale-after-await`).
-6. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
+5. A `*_MACHINE` table whose rows are all the same identifier, or all object literals with the same events and targets, SHALL be refused: a table that refuses nothing is a value, so it is derived or written with only the moves that may happen (`incantly/state-table-refuses`).
+6. A local copy of a state field made before an `await` SHALL NOT be read after it (`incantly/state-no-stale-after-await`).
+7. The kernel SHALL export `transition`, `canTransition` and `StateMachine`, with no DOM, timers or `Date`.
+8. In a class that holds a `StateMachine`, a field typed `X | null` or `X | undefined` that a method sets to a value when it sends a begin-like move (`begin`, `start`, `down`, `open`, `enter`, `press`, `grab`, `arm`, `activate`, `engage`) SHALL be set back to `null` or `undefined` somewhere in the class: it holds part of the state, so it is cleared when the machine leaves the state, or kept in the state's data (`incantly/state-no-shadow-null`).
+
+9. In `packages/board`, `packages/tiptap` and `tools`, `new StateMachine(table, initial)` SHALL take the third argument, `onRefused`, so a refused move is reported and never silent (`incantly/state-refusal-reported`). The board reports through its `onError` as `internal`; Tiptap through `reportError`.
+10. In a file that makes a `StateMachine`, reading `headersSent`, `writableEnded`, `writableFinished` or `readyState` (and `destroyed`, in a file that imports a `node:` module) off another object SHALL be an error outside a function whose name starts with `write` (`incantly/state-no-io-flags`): an I/O object's own flags are a second record of whether an answer or a stream is over, and the machine is the one record. A class's own getter (`this.destroyed`) derived from its machine is allowed.
 
 ### R2. Package rules (AGENTS.md)
 
@@ -20,6 +25,8 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 3. Code and comments SHALL NOT credit an AI assistant (`incantly/no-ai-credit`).
 4. The DOM-free packages, now including `packages/board/src/core`, SHALL NOT use DOM globals, timers, `fetch`, `Date` or `Math.random`.
 5. A core folder SHALL NOT import its web layer or a DOM package (`no-restricted-imports`).
+
+6. In product code, a property of an imported binding SHALL NOT be assigned (`x.y = …`), changed with `++` or `--`, or given to `Object.assign`, `Object.defineProperty` or `Object.setPrototypeOf` as the target (`incantly/no-imported-mutation`): a module's object is shared by everyone who imports it, so state is passed in, or each owner has its own, or the owner of a registry gives a function that writes it.
 
 ### R3. Repository checks (`tools/check-repo.mjs`, hackathon rules)
 
@@ -30,8 +37,8 @@ Area: `tools/eslint-rules/` (a local ESLint plugin, `incantly`), `tools/check-re
 
 ### R4. Strength
 
-1. New and rebuilt code (`packages/board`, `packages/tiptap`, `tools`) SHALL get every rule as an error.
-2. Older code SHALL get the state rules and `no-throw-export` as warnings until a later batch fixes it; every other rule is an error everywhere.
+1. Every rule SHALL be an error in every package. (Until `fix/lint-warnings`, older code had the state rules and `no-throw-export` as warnings.)
+2. `no-throw-export` SHALL look only at what a package's entry points reach (package.json `exports`, through `export *` and `export { … } from`), leave out entries listed in `incantly.internal`, and allow `throw new TypeError(…)` for a wrong argument type. `allowed-imports` SHALL refuse an internal entry outside tests, benches and configs.
 3. Each rule SHALL have tests that show code it accepts and code it refuses.
 
 ### R5. Tiptap

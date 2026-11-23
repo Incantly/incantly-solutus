@@ -45,7 +45,7 @@ The board has four layers. Layers 1 and 2 hold all logic and have no DOM, no tim
 | 3. Input | Turns pen, touch, mouse and keys into one stream of `InputSample` and `KeyInput` | `src/web/input.ts`: Pointer Events | `react-native-gesture-handler` stylus data |
 | 4. Drawing | Turns the core's draw list into pixels | `src/web/painter.ts` on the view package's WebGL 2 back-end, Canvas 2D as backup | A Skia surface that implements the same `BoardPainter` interface |
 
-The UI shell (toolbar, menus, page list) sits on top. On the web it is Web Components in `src/web/ui/`. It reads and writes the core only through its public API, so a host can replace it, and React Native writes its own.
+Layer 3 takes only events whose target is the board's own canvases or its card layer: a press on the shell's buttons, menus, panels or bars is not board input, and its moves and release are not heard either (BR-58). The UI shell (toolbar, menus, page list) sits on top. On the web it is Web Components in `src/web/ui/`. It reads and writes the core only through its public API, so a host can replace it, and React Native writes its own.
 
 The two contracts between layers:
 
@@ -83,7 +83,9 @@ interface BoardPainter {
 - Every write is a **transaction**: `board.change(origin, fn)`. All the writes in one transaction are checked against the kind's schema, applied together, and sent to listeners as one diff `{ added, updated, removed }`. `origin` is `user`, `model`, `host` or `remote`, as for kernel lines.
 - **Reactivity**: listeners get diffs; derived values (geometry, bounds, the spatial index, page thumbnails) are cached per record and dropped when that record changes. Nothing recomputes for a record that did not change.
 - **History**: one undo stack per document. A transaction is one step; a drag or a stroke is one step however many samples it had. A model's transactions are steps too, so a learner can undo an agent. `history: false` writes (camera, selection, pictures) are not steps.
-- Limits: 10,000 shapes per page, 100 pages per document, 2 million ink points per page, 50 MB of assets per document. Over a limit, the transaction is refused (`errors.md`).
+- **Props are never written in place; a change writes a new record.** A stored record and its `props` are frozen (shallow) when they are written, so a write in place fails. Every copy of a record (duplicate page, and paste in round 3) gives the copy its own `props` and `meta` through `copyProps`, a deep copy of plain data and typed arrays, so a copy shares nothing with the original or with the undo history.
+- **Errors** have the shape of the SDK and the Tiptap extension, `{ ok: false, kind, message, hint?, detail? }`, not the kernel's line error (a board error has no line or column). `errors.md` lists the kinds.
+- Limits: 10,000 shapes per page, 100 pages per document, 2 million ink points per page, 50 MB of assets per document. Over a limit, the transaction is refused (`errors.md`); a load does not test the limits, so a board that a lowered limit would refuse still opens.
 
 Records:
 
@@ -133,13 +135,14 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 
 1. Smooth the points with a short moving window weighted by distance (streamline), so a shaky hand gives a steady line.
 2. Width at each point: `size * (1 - thinning + thinning * pressure)`, eased, with the speed taper for simulated pressure.
-3. Offset each point left and right of the direction by half its width; round caps at both ends; a sharp turn (over 120°) adds the corner's arc so the line does not pinch.
-4. The outline is one polygon, tessellated once into triangles and cached until the stroke changes. Moving or zooming never re-tessellates.
+3. Offset each point left and right of the direction by half its width, on the bisector of the two segments; round caps at both ends; a turn of more than 30° gets its own offsets on each segment and a round arc on the outer side, so the line does not pinch (a turn over 120° always needs it).
+4. The outline is written as indexed triangles of one winding: a quad for each segment, a fan for each cap and each arc. Their union is the stroke, so no general polygon tessellator is needed and a sharp turn cannot make the outline cross itself. The triangles are cached by what they are made of: the stroke's points array (a stored record keeps its array while the points are the same), its stride, size and nib, and the zoom step's tolerance. A move writes a new record with the same points array, so moving or panning never rebuilds them; a change of points is a new array and a new outline; a zoom step rebuilds the arcs only.
+5. The live stroke does not rebuild its outline each frame: a point is final once the point eight after it exists (the streamlining, the width and the tilt read a few neighbours), so each frame keeps the triangles of the settled points and makes the last few segments again, and writes into arrays it keeps and doubles when they are full, so drawing makes no garbage. The result equals a full build of the same points.
 
 ### 6.3 Drawing it with no lag
 
-- The stroke being drawn is on its own **live layer**. Each frame draws only the new segment onto it; nothing else on the board redraws.
-- Predicted samples (`getPredictedEvents`) draw a short tail on the overlay, cleared every frame and never stored.
+- The stroke being drawn is on its own **live layer**. On the web it is a WebGL 2 canvas of its own: each frame the stroke's triangles go to the GPU from the outliner's own typed arrays and are drawn in one colour, so nothing else on the board redraws and no number object is made per call (the stroke's opacity is the canvas's CSS opacity). Where the browser has no WebGL 2 the layer is a Canvas 2D canvas that draws only the new groups.
+- Predicted samples (`getPredictedEvents`) draw a short tail on the same layer, a strip of triangles at half strength that is made again every frame and never stored.
 - On the web the live layer's canvas asks for a low-latency context (`desynchronized: true`) where the browser offers it.
 - On release, the outline is built, the stroke joins the page, and its tile is redrawn once.
 
@@ -151,7 +154,7 @@ Our own code in `core/ink/outline.ts` (no library; `docs/design/libraries.md` is
 | Highlighter | Wide, see-through, drawn under ink and shapes |
 | Eraser | Whole-stroke mode removes any stroke it touches; partial mode cuts strokes where it passes. The pen's eraser end picks the eraser for as long as it is used |
 | Laser | A fading trail for pointing; never stored, shown to others in a shared session |
-| Lasso | Selects the items it encloses (more than half of a stroke's points, or a shape's centre) |
+| Lasso | Selects the items it encloses (more than half of a stroke's points, or a shape's centre). The index grid gives the strokes whose boxes meet the loop; a stroke whose box is wholly inside is in with no point test, and only the others count points, stopping as soon as the answer is known |
 
 ### 6.5 Palm and finger
 
@@ -167,7 +170,7 @@ While a pen is down or hovering, touches are ignored for drawing; two-finger tou
 | `rect`, `ellipse`, `triangle`, `diamond`, `star` | `w`, `h`, `fill`, `stroke`, `dash`, `size`, `label` | `label` is text inside |
 | `line` | `points` (2 or more), `stroke`, `dash` | Points can be dragged |
 | `arrow` | `start`, `end`, `bend`, heads | Ends stick to shapes through bindings |
-| `text` | `text`, `font`, `size`, `align`, `w` (auto or fixed) | Maths between `$…$` is typeset by the view package's maths layout |
+| `text` | `text`, `font`, `size`, `align`, `w` (auto or fixed) | Maths between `$…$` is typeset by the view package's maths layout. An auto width is as wide as the laid-out boxes reach (the ink of an italic letter included), so no maths is cut off at the box |
 | `sticky` | `text`, `color` | Fixed size, grows with text |
 | `frame` | `w`, `h`, `name` | Holds children; clips them; can be a slide |
 | `image` | `asset`, `w`, `h`, `crop` | PNG, JPEG, WebP, SVG (checked, as SDK files) |
@@ -193,33 +196,42 @@ interface KindDef<P> {
 
 A host adds its own kind with `board.kinds.register(def)`. Built-in kinds use the same interface.
 
+**Default sizes.** The size of a shape made by a click is in the kind's `defaults` (`w` and `h`), and the shape tools read it from there, so a host's own kind in a shape tool follows the same rule and no tool keeps a size of its own. The built-in sizes: rect and ellipse 120 × 80, triangle and diamond 120 × 100, star 110 × 105, frame 400 × 300. A box kind's `check` fills a missing `w` or `h` from the same defaults.
+
 ### 7.3 Shape fixing
 
-When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from the toolbar), `core/ink/recognise.ts` tries, in order: a straight line, a circle or ellipse, a polygon with 3 to 6 corners (found from turning angle), an arrow (a line with a head). A fit is kept only when the mean distance from the stroke to the clean shape is under 6% of the shape's size. The stroke is replaced by the clean shape in one undo step; undo gives the ink back. No match leaves the ink.
+When a pen stroke ends and the pen is held still for 500 ms (or on "fix" from the toolbar), `core/ink/recognise.ts` looks at the stroke. An open stroke is a straight line, else an arrow (a line with a head). A closed stroke looks for its corners first: the stroke is simplified, points that lie on a side (the pen turns by under 20°) are dropped, and a corner is clear when the pen turns by more than 45° at it. With 3 to 6 clear corners the stroke is tried as a polygon (a rectangle when it has four right angles) before the ellipse, so a drawn pentagon or hexagon is a polygon and not a circle. The ellipse still wins when it is the closer fit (the mean distance to the ellipse is smaller than to the polygon), so a drawn circle stays a circle: a circle has no clear corners, and a hexagon laid over a circle is further from it than the circle is. A closed stroke with no such corners is tried as a circle or ellipse. A fit is kept only when the mean distance from the stroke to the clean shape is under 6% of the shape's size. The stroke is replaced by the clean shape in one undo step; undo gives the ink back. No match leaves the ink.
 
 ### 7.4 Editing
 
-- Select by click, Shift-click, box drag or lasso. Selected shapes show handles: 8 resize handles, one rotate handle, and the kind's own handles (arrow bend, line points).
+- Select by click, Shift-click, box drag or lasso. Selected shapes show handles: 8 resize handles, one rotate handle, and the kind's own handles (arrow bend, line points). A line or an arrow alone shows only its own handles (its ends and bend, or its points), because a box and a turn mean little for a line; with other shapes in the selection, the box with 8 handles and the rotate handle shows.
+- A drag, a resize, a rotation, a shape being made and an eraser stroke write through one gesture (`beginGesture` in `core/edit.ts`, B25). Each write is one transaction with the gesture's merge key, so the whole gesture is one undo step. The gesture keeps what every write changed (read from the store's diffs: the shape, the arrows that followed it, a binding it dropped or added, the members of a group), so a cancel puts back every one of those records and leaves no undo step. A tool never lists what to put back; `eslint.config.js` makes a `.change(` call in `core/tools/` an error.
 - Snap while moving and resizing: to other shapes' edges and centres, to equal gaps, and to the page grid when it is shown. Snap guides draw on the overlay.
-- Align, distribute, bring forward, send back, group, ungroup, lock, duplicate, flip.
+- Align, distribute, bring forward, send back, group, ungroup, lock, duplicate, flip. Front, back, forward and backward keep the selection's own order: a selection moved to the back stays in the same order relative to itself.
 - Copy and paste: inside a document and between documents as JSON records with a type tag; pasting plain text makes a text shape; pasting an Incantly script (header `# incantly 1`) makes a figure card; pasting an image makes an image shape.
 
 ## 8. Figure cards
 
 - A figure card stores its script, mode and size, as the Tiptap figure node does (`docs/features/tiptap/design.md` 2). The script is the only source of truth; `picture` is a cache.
-- Every figure card on the current page registers with one `SchedulerHost` (view package) per board. At most 3 are live; the rest show their picture inside the board's normal drawing.
-- Web: a live figure is a `createApp` host element placed over the board canvas and moved with the camera (a CSS transform, no re-layout). While the camera moves fast, live figures draw their last frame as a picture and remount when it stops (150 ms).
+- Every figure card on the current page registers with one `SchedulerHost` (view package) per board. At most 3 are live; the rest show their picture inside the board's normal drawing. A card is given a place only when the layer has one (`makeRoom`); when none is free, even for a card that was asked for the input, it stays a picture until the scheduler's next order. A card whose app is lost (the graphics context went, or the app was destroyed from outside) frees it, shows its picture, and is claimed again when the scheduler still wants it.
+- Web: a live figure is a `createApp` host element placed over the board canvas and moved with the camera (a CSS transform, no re-layout). The host is laid out for the steady zoom (between 0.5 and 3) and scaled by the rest. While the camera moves (a pan or a zoom), live figures show a snapshot of their canvas (the card's picture for 3D) and hide the app; 150 ms after the camera stops the host is sized for the new zoom and the app paints again (`web/figures.ts`, B26 to B28).
+- The layer reads the figure shapes of the current page from the store and keeps one card for each; it tells the scheduler which are in view and near from the camera, so a card on another page is never mounted. A card with no `picture` that is not live gets one made from its script in a headless app, one at a time; a live card writes its picture 500 ms after it first paints. The picture is written with `history: false`, and a change of script or mode clears it in the same undo step.
+- The card toolbar (edit lines, mode, play or pause, delete) is a bar over the selected card; edit lines is a panel with the script that writes through `setFigureScript`, so the live card follows the store like an undo does. A figure card in `readOnly` can be used (drag, play) but not changed.
 - React Native: the same card uses the SDK core with the Skia painter. No other change.
 - Double-click (or Enter) on a card gives it the input: drag points, move sliders. Esc gives the input back to the board.
+- The card layer is a DOM layer above the tiles, so it hides what the tiles draw under it. The painter's stack is: tiles, the card layer, the live stroke, the **top layer**, the overlay (selection, handles, guides). Each frame the board finds the shapes whose order is above a shown card (live or its picture) and whose box touches it (`core/card-over.ts`; a highlighter is below every shape and a card is never drawn over a card), and draws each on the top layer, clipped to the outlines of the cards it is above. The tiles still hold them, hidden by the card, so on screen nothing is drawn twice, and a stroke, an arrow or text drawn over a card shows over it. A shape that is between two cards that overlap is drawn over both (open: BR-62).
+- An arrow bound to a card ends 8 units short of the card's outline (`ARROW_GAP`), on the line it comes in on, so its head shows beside the card.
+- A live card draws the axes and grid its own figure asks for (`@axes`, `@grid`, as the mode's default sets them): the frame style belongs to each app, so a card and its picture look the same and two cards with different `@axes` on one board keep their own.
 
 ## 9. Camera, culling, tiles
 
 1. **Camera**: `x, y, zoom` per page; zoom from 0.05 to 20. Wheel and pinch zoom about the pointer; Space-drag, middle-drag and two fingers pan.
 2. **Spatial index**: a sparse grid of 512-unit cells per page, each holding the ids of shapes whose bounds touch it. Insert, move and remove cost the cells a shape touches. Queries for the viewport, a hit point, a lasso or a box read only those cells.
 3. **Culling**: only shapes in the viewport (plus a 256-pixel margin) are drawn. Selected shapes and the shape being edited are always drawn.
-4. **Tiles**: finished content is drawn into 512 × 512 device-pixel tiles at power-of-two zoom steps. Panning draws tiles. A changed shape marks only the tiles it touches. Tiles are kept in a least-recently-used cache with a memory cap (64 MB default, 24 MB on a device with 4 GB or less).
-5. **Steady zoom**: while the zoom changes, tiles of the nearest step are scaled; the exact step is drawn 150 ms after the zoom stops. Stroke widths and text use that steady zoom, so nothing re-tessellates mid-zoom.
+4. **Tiles**: finished content is drawn into 512 × 512 device-pixel tiles at power-of-two zoom steps. Panning draws tiles. A changed shape marks only the tiles it touches. Tiles are kept in a least-recently-used cache with a memory cap (64 MB default, 24 MB on a device with 4 GB or less). A tile is drawn in order on the GPU in one draw call: strokes as triangles, and the fills and lines of every shape as triangles too (the view package's path tessellation: fan or ear clipping for a fill, quads with round joins and caps and dashes for a line, each fill and line with its own depth so it blends once), and text as quads from a glyph atlas. Only the page's paper, pictures, shapes inside a frame and a shape the tessellator refuses are drawn with Canvas 2D on a canvas that is copied to a texture and drawn over what the tile holds so far. Tiles are drawn until a frame has spent 4 ms (at least one, at most 6), a tile with many shapes is drawn in slices that stop at that budget and go on in the next frame, and a frame that draws no tile and changes no camera composes nothing.
+5. **Steady zoom**: while the zoom changes, tiles of the nearest step are scaled; the exact step is drawn 150 ms after the zoom stops. A view that would need more than 48 tiles at the steady step (zoomed out far from it) uses the step of the zoom as it is now, so tiles are not drawn twice. Stroke widths and text use that steady zoom, so nothing re-tessellates mid-zoom.
 6. **Level of detail**: below a shape's size threshold on screen, kinds draw less (sticky notes without a shadow, dashed lines solid, text under 4 px as a grey bar, images at a lower resolution, figure cards as their picture).
+7. **Moving shapes are lifted out of the tiles** (BR-82, B36 in `docs/state-machines.md`): the shapes a person's gesture writes (a drag, a resize, a turn, a shape being drawn out, the eraser's cut pieces) are held by `core.lift` from the gesture's first write. The tiles are drawn once without them, and the overlay draws them at their place every frame, in the board's order among themselves and above the other shapes while they move. Moving them again marks no tile, and a tile being drawn in slices goes on. When the gesture ends (commit or cancel) they settle: the tiles they meet are drawn again with them, and until a tile on show holds them the overlay draws them clipped to the tiles not drawn yet, so nothing is shown twice or missing. At most 400 shapes are held (the overlay is drawn with Canvas 2D); the rest stay in the tiles. The model's gestures hold nothing: its hand draws what it makes. Before this, every move drew the tiles under a shape again a few a frame within the 4 ms budget, and the tiles not drawn yet showed parts of a dragged picture or rectangle where it had been.
 
 ## 10. Customisation
 
@@ -247,13 +259,15 @@ const board = createBoard({
 });
 ```
 
-- **Tools** are registered with `ToolDef`: an id, an icon, a label, a key, and a state machine of handlers (`onDown`, `onMove`, `onUp`, `onKey`, `onCancel`) that call the core API. Built-in tools use the same interface; `defaultTools` is a list a host filters.
-- **Toolbar** is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI.
+- **Tools** are registered with `ToolDef`: an id, an icon, a label, a key, and a state machine of handlers (`onDown`, `onMove`, `onUp`, `onKey`, `onCancel`) that call the core API. Built-in tools use the same interface; `defaultTools` is every built-in tool, in the order of `ui.md`, and a host filters it (`defaultTools.without('star')`); `inkTools` is the ink tools and the hand, for a board that only draws.
+- **Toolbar** ids are tool ids and the buttons `image`, `figure`, `fix`, `undo`, `redo` and `more-shapes`; `ui.labels` shows each name beside its icon, and `toolbar.position` is `top`, `bottom`, `left`, `right` or `none`. Figure is a button that makes a card, not a tool. It is built from `toolbar.groups`; an unknown tool id is reported (`tool_unknown`) and left out. A host can hide the toolbar and call `board.setTool(id)` from its own UI. The default board view lists the tools in the order of `ui.md` and puts triangle, diamond and star in a More shapes menu on the rectangle's group, so the toolbar is one row.
 - **Icons**: every built-in icon can be replaced by SVG text (checked: no script, no event attributes, no outside links) or by a factory that returns an element.
-- **Keys**: one map from action to key strings; `mod` is Ctrl or Cmd. A key used twice is reported (`shortcut_conflict`) and the later one is dropped.
+- **Keys**: one map from action to key strings; `mod` is Ctrl or Cmd. A key string is written `mod+shift+alt+key`, the key in lower case, whatever order the host wrote it in (B30). A key used twice is reported (`shortcut_conflict`) and the later one is dropped. The host's entries are read first, in the order it wrote them, so its key beats a default; `false` removes an action's keys. The actions are the tool ids and `undo`, `redo`, `delete`, `selectAll`, `duplicate`, `group`, `ungroup`, `forward`, `backward`, `front`, `back`, `zoomIn`, `zoomOut`, `zoom100`, `zoomFit`, `zoomSelection`, `nextPage`, `prevPage`, `figure` (`core/keymap.ts`, B30).
 - **Menus**: the context menu, page menu and main menu are lists of `MenuItem { id, label, icon?, key?, enabled(target), run(target) }`, built by functions the host can wrap.
 - **Theme**: CSS custom properties on the board element, so the host's styles win; light, dark and high contrast are built in.
-- **Strings**: every visible or spoken string goes through one table, using the app-modes language catalogues.
+- **Strings**: every visible or spoken string goes through one table: the host's `strings`, then its `translate` function (a studio gives the app-modes `I18n` over `board.<key>`), then the English table of `core/strings.ts`, then a tool's own label, then the key itself. A key the English table has is never replaced by a tool's label.
+- **Read only**: `readOnly` keeps the hand and the laser, hides the style bar, the selection bar, the edit buttons and the context menu, and leaves figure cards usable.
+- **Page paper**: a page's `background` (plain, grid, dots, lines) is drawn in each tile under the shapes (`drawBackground2D`), so it costs nothing while panning.
 - **Headless**: without `container`, `createBoard` returns the core only (store, pages, tools, agent actions) for servers, tests and a host's own UI.
 
 ## 11. Agents on the board
@@ -281,11 +295,15 @@ Handwriting is read only when the model can read pictures (open question 1). Wit
 
 ### 11.2 Talking agent
 
-The live teacher (core design section 10) gets two more tools, `board` and `board_read` (`agent.md`). With them it writes text in a hand style or typed, draws shapes and arrows, makes pen strokes that animate as if drawn by hand, highlights or circles things, points with the laser, makes figure cards from lines, moves the camera, and changes page. It reads the board as a list of items with their places, so it can say "the triangle on the left".
+The live teacher (core design section 10) gets two more tools, `board` and `board_read` (`agent.md`). With them it writes text in a hand style or typed, draws shapes and arrows, makes pen strokes that animate as if drawn by hand, highlights or circles things, points with the laser, makes figure cards from lines, moves the camera, and changes page. It reads the board as a list of items with their places, so it can say "the triangle on the left". With no stroke font, a hand-style `write` is stored as a text shape in the hand font, revealed as if written; a `stroke` is stored as ink (BR-59). `'free'` placing looks for the nearest empty strip in view before it goes below the content, and the request to the server carries `allowEdit` every time.
 
 ### 11.3 The client
 
-`packages/board` defines the protocol and the client, as `packages/tiptap` does, because `packages/server` is not built yet. `BoardAgentTransport = (request, signal) => AsyncIterable<BoardAgentEvent>`; the default is an HTTP client for `POST {server}/v1/board/ask`, NDJSON answers. Without a transport, the Ask tool says the agent is unavailable (`agent_unavailable`).
+`packages/board` defines the protocol and the client, as `packages/tiptap` does, because `packages/server` is not built yet. `BoardAgentTransport = (request, signal) => AsyncIterable<BoardAgentEvent>`; the default is an HTTP client for `POST {server}/v1/board/ask`, NDJSON answers. Without a transport, the Ask tool says the agent is unavailable (`agent_unavailable`). `createBoard({ agent: { transport | server, vision?, reducedMotion?, label? } })` sets it; `board.agent` holds the runner of the two tools (`board_read`, `board`), the service (the conversation, `ask`, `talk`, `stop`) and the circle. The answer streams in as NDJSON events (`agent.md` 3); a newer request aborts the older one; a stop partway gives `agent_partial` and what was made stays.
+
+### 11.4 Hand animation and the panel
+
+A hand-style `write` and a `stroke` are drawn on the live layer as items that are in no tile (`BoardPainter.drawItems`), about 400 characters a second (a stroke counts one for every 4 page units), never longer than 3 seconds; with reduced motion they appear at once. The board's frame loop is the clock. The agent panel (ui.md) shows the conversation, the Stop button and a hand icon that moves to where the agent draws.
 
 ## 12. Saving
 
@@ -298,21 +316,23 @@ The live teacher (core design section 10) gets two more tools, `board` and `boar
 
 ## 13. Performance
 
-All of `docs/design/performance.md` applies. The board's own budgets, measured on the 4 GB laptop (Chrome with the CPU 4× slower) and in Node:
+All of `docs/design/performance.md` applies. The board's own budgets, measured in Chrome with the CPU 4× slower (as on the 4 GB laptop) and in Node:
 
-| What | Budget |
-|---|---|
-| Pen sample to pixel on screen | under 16 ms; 8 ms on a 120 Hz screen |
-| Core work per input sample | under 0.1 ms |
-| One frame while drawing a stroke | under 2 ms of script |
-| Pan and zoom with 10,000 shapes on the page | 60 fps; frame under 8 ms |
-| Hit test at a point | under 0.1 ms |
-| Lasso of 2,000 strokes | under 4 ms |
-| Open a 1,000-shape board | under 200 ms to first picture |
-| Switch to a page of 2,000 shapes | under 100 ms |
-| Undo of a 500-shape paste | under 16 ms |
-| Garbage while drawing | none (0 collections over a 10 s stroke) |
-| Memory for 100,000 ink points | under 8 MB in the store |
+| What | Budget | Measured (Chrome, CPU ×4) | Measured (Node) |
+|---|---|---|---|
+| Pen sample to pixel on screen | under 16 ms; 8 ms on a 120 Hz screen | 7.3 to 10.2 ms mean (95%: 15.2 to 17.0 ms) at 60 Hz | needs a screen |
+| Core work per input sample | under 0.1 ms | 0.04 ms (the whole pointer-move handler) | 0.0004 ms |
+| One frame while drawing a stroke | under 2 ms of script | 0.25 to 0.42 ms mean, 0.8 to 1.0 ms at 95% | 0.0094 ms |
+| Pan and zoom with 10,000 shapes on the page | 60 fps; frame under 8 ms | pan 1.0 to 1.2 ms at 95%, 60 frames a second; zoom 5.4 to 5.5 ms at 95% (10.2 ms before shapes were drawn on the GPU) | 0.15 ms |
+| Hit test at a point | under 0.1 ms | needs no screen | 0.002 ms |
+| Lasso of 2,000 strokes | under 4 ms | 2.6 to 3.3 ms, the slowest of four runs | 0.39 ms |
+| Open a 1,000-shape board | under 200 ms to first picture | 62 to 68 ms | 6.2 ms (load, index and the draw lists of the tiles in view) |
+| Switch to a page of 2,000 shapes | under 100 ms | 42 to 51 ms to the last tile, 8 to 10 ms to the first frame | 4.8 ms |
+| Undo of a 500-shape paste | under 16 ms | needs no screen | 0.18 ms (0.31 ms with bindings) |
+| Garbage while drawing | none (0 collections over a 10 s stroke) | no scavenge once the pen's code is warm (the full run: 0 scavenges, 2 major collections of V8's memory reducer); 1 scavenge when the row runs alone on a fresh page (it was 3 to 5); script garbage 2 MB to about 0.7 MB a stroke; still over the goal as the row counts (BR-77) | 0 |
+| Memory for 100,000 ink points | under 8 MB in the store | needs no screen | 3.1 MB |
+
+The numbers, how they are measured and the cause of the row that is over are in `handoff/board/bench.md`; the scripts are `packages/board/bench/*.bench.ts` (Node) and `packages/board/bench/chrome-board.mjs` (Chrome).
 
 How:
 
@@ -324,6 +344,7 @@ How:
 6. At most 3 live figure cards; the rest are pictures.
 7. No per-shape animation: the laser and the agent's hand-drawn strokes animate on the overlay or the live layer only.
 8. A performance monitor: frame times, the slowest 5% of frames, input lag, tiles drawn, shapes culled, as events (`board.perf.on(…)`) with no cost when nobody listens.
+9. No garbage in the paths that run for every sample and every frame (BR-77): lists that are filled again keep their storage (written by index and cut to their count; `length = 0` drops the storage, lint rule `no-length-reset`); numbers go to hot calls that may not be inlined through fields or typed arrays, not as arguments (each such argument is a number on the heap); no `Math.hypot`; the tail of the stroke is guessed by the core's `Predictor` from the samples, not asked of the browser (`getPredictedEvents()` makes new event objects at every move); the live stroke's arrays hold a ten-second stroke from the start and grow four times over; and the pen's code is run once on a throwaway stroke soon after the board opens, so the first real stroke runs optimised code (the first tiers of the engine keep every number on the heap).
 
 ## 14. React Native (designed, not built)
 
@@ -344,12 +365,11 @@ How:
 
 ## 16. Open questions
 
-1. Can Muse Spark read pictures? If yes, circle to ask reads handwriting from a picture of the circle. If no, it works on shapes, typed text, figure cards and recognised ink only.
+1. Can the model read pictures? Yes: the free vision models on OpenRouter read a circled handwritten equation (checked 2026-11-22), so circle to ask sends a picture of the circle when `agent.vision` is on.
 2. Shared boards (many people at once): the diffs and origins are ready for it, but a sync library (Yjs is not on the allowed list) or our own relay through `packages/server` is a later decision.
 
 ## Sources studied
 
-- tldraw SDK public documentation on performance (viewport culling, reactive updates, batched store changes, steady zoom, geometry caching, level of detail, performance events) and on its store. Ideas only; we read no tldraw source, and use none of its code or names.
 - MDN: `PointerEvent.getCoalescedEvents()`, `getPredictedEvents()`, `pressure`, `tiltX`, `tiltY`; the WICG ink-enhancement explainer on predicted points.
 - React Native Gesture Handler and React Native Skia public documentation, for section 14.
 - The pressure-stroke outline method (smoothing, pressure to width, offset, round caps), as described in public articles; our code is our own.
