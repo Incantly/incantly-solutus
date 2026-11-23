@@ -18,6 +18,11 @@ import { OPENROUTER_REFERER, OPENROUTER_TITLE, OPENROUTER_URL } from './openrout
 export interface SpeechRequest {
   /** One sentence, at most 500 characters. */
   readonly text: string;
+  /**
+   * The voice model to try first, when the caller holds one for the conversation (the voice that answered the first
+   * sentence). A model that is not among `models` is ignored: the order is unchanged.
+   */
+  readonly preferred?: string;
   /** How to say it (a voice model that takes delivery instructions uses them; the others ignore them). */
   readonly instructions?: string;
 }
@@ -107,6 +112,16 @@ export class OpenRouterSpeech implements SpeechClient {
     return until === undefined ? 0 : Math.max(0, until - this.now());
   }
 
+  /**
+   * The voices in the order this call tries them: the caller's held voice first, then the rest as configured. A held
+   * voice that is no longer configured is ignored, so an old pin never fails a sentence.
+   */
+  private order(preferred: string | undefined): readonly string[] {
+    const models = this.options.models;
+    if (preferred === undefined || !models.includes(preferred)) return models;
+    return [preferred, ...models.filter((model) => model !== preferred)];
+  }
+
   async speak(request: SpeechRequest, signal: AbortSignal): Promise<SpeechAudio | ServerError> {
     const machine = new StateMachine(CALL_MACHINE, 'trying', (from, event) => this.options.onFault?.(from, event));
     const passes: Pass[] = [];
@@ -114,7 +129,7 @@ export class OpenRouterSpeech implements SpeechClient {
       if (signal.aborted) resolve(STOPPED);
       else signal.addEventListener('abort', () => resolve(STOPPED), { once: true });
     });
-    for (const model of this.options.models) {
+    for (const model of this.order(request.preferred)) {
       if (signal.aborted) {
         machine.send('abort');
         return serverError('model_unavailable', 'The voice was stopped.');

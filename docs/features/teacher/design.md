@@ -138,7 +138,7 @@ The live teacher talks with a real voice. The package itself never handles audio
 | Way | Where | Note |
 |---|---|---|
 | Listening | The browser's speech recognition (Web Speech API), in the studio | Text goes to the server as the turn's request. Where the browser has none, the studio shows a text box. OpenRouter has no free speech-to-text model (checked 2026-11-22), so listening stays in the browser |
-| Speaking | A free OpenRouter voice model through the server's `POST /v1/speech` (server design 6) | Each `say` sentence is sent as soon as it ends, and its audio plays in order while the next one is made. A sentence's audio starts about 1 to 2 s after the request |
+| Speaking | A free OpenRouter voice model through the server's `POST /v1/speech` (server design 6) | Each `say` sentence is sent as soon as it ends, and its audio plays in order while the next one is made. A sentence's audio starts about 1 to 2 s after the request. The answer's `x-voice` is held by the studio, so every later sentence asks for the same voice: one lesson is one voice |
 | Speaking, fallback | The browser's speech synthesis | Used when the server's voice is busy, fails, or is off |
 | Turn taking | The studio | When the person speaks while the teacher talks, playback stops, queued sentences are dropped and the current turn is aborted |
 

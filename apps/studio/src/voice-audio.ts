@@ -115,28 +115,49 @@ function pcmClip(bytes: Uint8Array, rate: number): Clip | undefined {
 
 /**
  * The teacher's voice: each sentence is fetched from `POST /v1/speech` the moment it is asked for, and the clip is whole
- * when it arrives (the next sentence's request is already out while this one plays). Gives `undefined` for any failure,
- * so the lesson speaks that sentence with the browser's voice.
+ * when it arrives (the next sentence's request is already out while this one plays). The first answer names the voice that
+ * spoke (`x-voice`), and every later sentence asks for that same voice, so one conversation keeps one voice; when the
+ * server has to fall back because that voice is busy, the voice that spoke takes over for the rest. Gives `undefined` for
+ * any failure, so the lesson speaks that sentence with the browser's voice.
  */
 export function speechClips(fetchImpl: typeof fetch = (input, init) => fetch(input, init)): ClipSource {
-  return async (text, signal) => {
+  /** The voice that first answered, held for every later sentence. */
+  let held: string | undefined;
+  /** Sentences asked for before a voice is known take their turn, so their racing requests choose one voice between them. */
+  let turns: Promise<unknown> = Promise.resolve();
+
+  const clipOf = async (text: string, signal: AbortSignal, model: string | undefined): Promise<Clip | undefined> => {
     try {
-      const res = await fetchImpl('/v1/speech', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'audio/*' }, body: JSON.stringify({ text }), signal });
+      const body = model === undefined ? { text } : { text, model };
+      const res = await fetchImpl('/v1/speech', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'audio/*' }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         await res.body?.cancel().catch(() => undefined);
         return undefined;
+      }
+      const named = res.headers.get('x-voice');
+      if (named !== null && named !== '') {
+        // the first answer names the voice; a later answer that had to fall back takes over, so the conversation settles
+        // on the voice that spoke. A late answer from a voice the studio has already left never takes it back.
+        if (held === undefined || (model === held && named !== held)) held = named;
       }
       const type = res.headers.get('content-type') ?? '';
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.length === 0) return undefined;
       if (type.includes('audio/pcm')) {
-        const named = Number(res.headers.get('x-sample-rate'));
-        return pcmClip(bytes, Number.isInteger(named) && named >= 8000 && named <= 192_000 ? named : DEFAULT_RATE);
+        const rate = Number(res.headers.get('x-sample-rate'));
+        return pcmClip(bytes, Number.isInteger(rate) && rate >= 8000 && rate <= 192_000 ? rate : DEFAULT_RATE);
       }
       return mp3Clip(bytes, type);
     } catch {
       return undefined;
     }
+  };
+
+  return (text, signal) => {
+    if (held !== undefined) return clipOf(text, signal, held);
+    const mine = turns.then(() => clipOf(text, signal, held));
+    turns = mine.then(() => undefined, () => undefined);
+    return mine;
   };
 }
 
