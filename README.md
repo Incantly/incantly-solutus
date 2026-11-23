@@ -4,6 +4,20 @@ A voice-driven live blackboard for maths and science. A teacher speaks, and the 
 
 Built with Kiro.
 
+## What it can do
+
+A lesson, spoken and drawn on the board at the same time — a plan, a figure, and the teacher's questions:
+
+<img src="handoff/lesson/screens/live-lesson-turn1.png" alt="A live lesson: a spoken plan, a vector figure, and the teacher's questions in the Talk panel" width="760">
+
+Ask in words and the figure is built: a circle, a point on it, and its tangent:
+
+<img src="handoff/teacher/screens/live-voice-geometry.png" alt="A geometry figure drawn from a spoken request: a circle, a point on it and its tangent" width="760">
+
+Graphs, live figure cards, pictures and handwriting on the endless board:
+
+<img src="handoff/board/screens/final-three-live-cards-with-pictures.png" alt="The board with live figure cards, pictures, handwritten curves and a background menu" width="760">
+
 ## Requirements
 
 - Node.js 22.12 or later, with npm.
