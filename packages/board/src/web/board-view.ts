@@ -352,7 +352,10 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     },
     clock: () => (typeof performance !== 'undefined' ? performance.now() : 0),
     requestFrame: () => loop.request(),
-    onTip: (at) => panel?.handAt(at.x, at.y),
+    onTip: (at) => {
+      panel?.handAt(at.x, at.y);
+      loop.request();
+    },
     onHand: (at) => {
       panel?.handAt(at.x, at.y);
       loop.request();

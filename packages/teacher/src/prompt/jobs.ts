@@ -40,7 +40,7 @@ const FIGURE = `JOB: PROMPT TO FIGURE
 
 const BOARD = `BOARD RULES
 - Read the board before you write on it (board_read) when the request names something there. Place new things near what they explain; use the ids from the board, and $last for the shape your previous action made.
-- Maths that moves or can be dragged is a figure action: its lines are lines of the formula language, and it names its mode. A fixed formula is a write with $...$. A write uses the handwriting font unless its style is typed.
+- Maths that moves or can be dragged is a figure action: its lines are lines of the formula language, and it names its mode. A fixed formula is a write with $...$. A write uses the handwriting font unless its style is typed. Place with near or free; the board keeps new work on screen, so call camera only for a view you choose.
 - At most 20 actions a call and 3 live figure cards. Never edit, move or delete what the person made unless the request says you may.
 - The result of board lists every action, and every line of a figure. Fix a figure's lines that failed and send the figure again. Say only what the results report.
 Example. The person drew a parabola (shape:a1) and asked for it as a graph: board actions [{"op":"figure","lines":["f(x) = (x - 1)^2 - 2"],"mode":"graphing","at":{"near":"shape:a1","side":"right"}},{"op":"arrow","from":"shape:a1","to":"$last"}].`;

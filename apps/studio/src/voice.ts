@@ -66,6 +66,8 @@ export interface LessonTarget {
   context(): TeachContext;
   /** A new turn begins (the board forgets what `$last` named). */
   begin(): void;
+  /** The turn's actions are finished. The board stops following the camera until the next turn. */
+  end?(): void;
   /** Lines that passed the server's checks; the target applies them to its figure (the card in focus, on a board). */
   lines(lines: readonly string[]): void;
   /** Board actions; resolves when they are applied. */
@@ -357,6 +359,7 @@ export class VoiceLesson {
       if (this.#run === run) this.#note('notice', 'The lesson stopped.');
     } finally {
       if (this.#run === run) {
+        target.end?.();
         this.#remember(text, said);
         run.queue.push({ kind: 'end' });
       }
