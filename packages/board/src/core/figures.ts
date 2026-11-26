@@ -42,15 +42,27 @@ export interface NewFigure {
   readonly script?: string;
 }
 
+/** A calculator and a probability panel need more room than a graph; geometry needs room for its tools. */
+const FIGURE_SIZE: Readonly<Record<string, { readonly w: number; readonly h: number }>> = {
+  scientific: { w: 420, h: 520 },
+  probability: { w: 440, h: 560 },
+  geometry: { w: 520, h: 400 },
+};
+
 /** Adds an empty (or scripted) figure card with its middle at `at`. One undo step. Returns the shape id. */
 export function addFigure(core: BoardCore, spec: NewFigure, origin: Origin = 'user'): BoardResult<string> {
   const page = core.pages.current;
   if (page === null) return boardError('bad_argument', 'The board has no page.', { detail: { field: 'page' } });
-  const w = FIGURE_DEFAULTS.w;
-  const h = FIGURE_DEFAULTS.h;
+  const sized = FIGURE_SIZE[spec.mode ?? ''];
+  const w = sized?.w ?? FIGURE_DEFAULTS.w;
+  const h = sized?.h ?? FIGURE_DEFAULTS.h;
   let id = '';
   const props: Record<string, unknown> = {};
   if (spec.mode !== undefined) props['mode'] = spec.mode;
+  if (sized !== undefined) {
+    props['w'] = w;
+    props['h'] = h;
+  }
   if (spec.script !== undefined) props['script'] = withHeader(spec.script);
   const done = core.store.change(origin, (tx) => {
     const made = putNewShape(tx, core.store, { kind: 'figure', page, x: spec.at.x - w / 2, y: spec.at.y - h / 2, props });

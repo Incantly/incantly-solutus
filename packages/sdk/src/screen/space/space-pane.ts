@@ -143,9 +143,9 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
 
   const paint = (): void => {
     frame = 0;
-    const r = element.getBoundingClientRect();
-    w = r.width || 800;
-    h = r.height || 600;
+    // Layout size, not the transformed box, so a board zoom does not resize the view twice.
+    w = element.clientWidth || 800;
+    h = element.clientHeight || 600;
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
       canvas.width = Math.round(w * dpr);
@@ -201,7 +201,9 @@ export function mountSpace(opts: SpacePaneOptions): SpacePane {
 
   const local = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
     const r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    const sx = r.width > 0 ? canvas.clientWidth / r.width : 1;
+    const sy = r.height > 0 ? canvas.clientHeight / r.height : 1;
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
   };
   const valueOf = (name: string): V3 | undefined => {
     const o = opts.figure().get(name);

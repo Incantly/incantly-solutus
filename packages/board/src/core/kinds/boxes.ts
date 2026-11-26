@@ -8,7 +8,8 @@ import type { BoardResult } from '../errors';
 import { ellipsePoly, inPolygon, distToPath, TAU } from '../math2d';
 import { DASHES, FONT_FAMILIES, cssOrNull, dashFor, ellipsePath, pathPart, polygonPath } from '../paint';
 import type { Dash, FontFamily, Part, PathData } from '../paint';
-import { layoutText, textParts } from '../text';
+import { TEXT_ALIGNS, layoutText, textParts } from '../text';
+import type { TextAlign } from '../text';
 import type { ShapeRecord } from '../types';
 import type { DrawLod, KindDef, KindGeometry } from './def';
 import { DIM_MAX, DIM_MIN, SIZE_MAX, TEXT_MAX, bagOf, failed, firstError, readColor, readEnum, readFill, readNumber, readText } from './props';
@@ -26,10 +27,18 @@ export interface BoxProps {
   /** The outline's width in page units. */
   readonly size: number;
   readonly label: string;
+  /** Across the box: the start, the middle, or the end. */
+  readonly labelAlign: TextAlign;
+  /** Down the box: the top, the middle, or the bottom. */
+  readonly labelV: LabelAnchor;
   readonly font: FontFamily;
 }
 
-export const BOX_DEFAULTS: BoxProps = Object.freeze({ w: 120, h: 80, fill: 'none', stroke: '#1f2430', dash: 'solid', size: 3, label: '', font: 'sans' });
+/** Where a label sits down a box. */
+export type LabelAnchor = 'start' | 'middle' | 'end';
+export const LABEL_ANCHORS: readonly LabelAnchor[] = ['start', 'middle', 'end'];
+
+export const BOX_DEFAULTS: BoxProps = Object.freeze({ w: 120, h: 80, fill: 'none', stroke: '#1f2430', dash: 'solid', size: 3, label: '', labelAlign: 'center', labelV: 'middle', font: 'sans' });
 
 /** The size a shape of the kind has when it is made by a click (design 7.2); the kinds not listed use `BOX_DEFAULTS`. */
 const BOX_SIZES: Readonly<Record<string, { readonly w: number; readonly h: number }>> = {
@@ -93,6 +102,8 @@ function styled(props: BoxProps, style: Parameters<NonNullable<KindDef<BoxProps>
     ...(style.dash !== undefined ? { dash: style.dash } : {}),
     ...(style.size !== undefined ? { size: Math.min(SIZE_MAX, Math.max(0.5, style.size)) } : {}),
     ...(style.font !== undefined ? { font: style.font } : {}),
+    ...(style.labelAlign !== undefined ? { labelAlign: style.labelAlign } : {}),
+    ...(style.labelV !== undefined ? { labelV: style.labelV } : {}),
   };
 }
 
@@ -107,10 +118,12 @@ export function checkBox(props: unknown, what: string): BoardResult<BoxProps> {
   const dash = readEnum(p, 'dash', BOX_DEFAULTS.dash, DASHES);
   const size = readNumber(p, 'size', BOX_DEFAULTS.size, 0.5, SIZE_MAX);
   const label = readText(p, 'label', '', TEXT_MAX);
+  const labelAlign = readEnum(p, 'labelAlign', BOX_DEFAULTS.labelAlign, TEXT_ALIGNS);
+  const labelV = readEnum(p, 'labelV', BOX_DEFAULTS.labelV, LABEL_ANCHORS);
   const font = readEnum(p, 'font', BOX_DEFAULTS.font, FONT_FAMILIES);
-  const error = firstError(w, h, fill, stroke, dash, size, label, font);
+  const error = firstError(w, h, fill, stroke, dash, size, label, labelAlign, labelV, font);
   if (error !== undefined) return error;
-  return ok({ w, h, fill, stroke, dash, size, label, font } as BoxProps);
+  return ok({ w, h, fill, stroke, dash, size, label, labelAlign, labelV, font } as BoxProps);
 }
 
 /** The outline of a box shape as a path: the ellipse is made of curves, the rest of straight sides. */
@@ -139,9 +152,12 @@ function boxKind(kind: BoxKind): KindDef<BoxProps> {
       const { w, h, fill, stroke, dash, size, label, font } = shape.props;
       const parts: Part[] = [pathPart(outlinePath(kind, w, h), cssOrNull(fill), stroke, size, lod === 'full' ? dashFor(dash, size) : [])];
       if (lod === 'full' && label !== '') {
+        const align = shape.props.labelAlign ?? 'center';
+        const down = shape.props.labelV ?? 'middle';
         const room = Math.max(8, w - 2 * LABEL_PAD);
-        const laid = layoutText(label, LABEL_PX, font, stroke, room, 'center');
-        parts.push(...textParts(laid, (w - laid.w) / 2, (h - laid.h) / 2, font));
+        const laid = layoutText(label, LABEL_PX, font, stroke, room, align);
+        const y = down === 'start' ? LABEL_PAD : down === 'end' ? Math.max(LABEL_PAD, h - LABEL_PAD - laid.h) : Math.max(LABEL_PAD, (h - laid.h) / 2);
+        parts.push(...textParts(laid, LABEL_PAD, y, font));
       }
       return parts;
     },

@@ -38,6 +38,10 @@ export interface StylePatch {
   readonly dash?: Dash;
   readonly size?: number;
   readonly font?: FontFamily;
+  /** Where a box's label sits across the box. */
+  readonly labelAlign?: 'start' | 'center' | 'end';
+  /** Where a box's label sits down the box. */
+  readonly labelV?: 'start' | 'middle' | 'end';
 }
 
 /** How a kind holds the text that is typed into it. */

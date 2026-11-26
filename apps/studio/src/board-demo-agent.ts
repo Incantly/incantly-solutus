@@ -50,11 +50,11 @@ function circleAnswer(r: Extract<BoardAgentRequest, { kind: 'circle' }>): Answer
       return [
         [{ op: 'write', text: '$f(x) = (x - 1)^2 - 2$', at: near(c, 'right'), style: 'hand', size: 30 }],
         [{ op: 'arrow', from: c, to: '$last' }],
-        [{ op: 'write', text: 'A fixed answer: the demo cannot read your curve.', at: near('$last', 'below'), style: 'typed', size: 16 }],
+        [{ op: 'write', text: 'A fixed answer: the demo cannot read your curve.', at: near('$last', 'below'), style: 'hand', size: 16 }],
       ];
     case 'solve':
       return [
-        [{ op: 'write', text: said !== undefined ? `You circled: ${said}` : 'Solving it:', at: near(c, 'right'), style: 'typed', size: 18 }],
+        [{ op: 'write', text: said !== undefined ? `You circled: ${said}` : 'Solving it:', at: near(c, 'right'), style: 'hand', size: 18 }],
         [{ op: 'write', text: '$x^2 - 2x - 3 = 0$', at: near('$last', 'below'), style: 'hand', size: 28 }],
         [{ op: 'write', text: '$(x - 3)(x + 1) = 0$', at: near('$last', 'below'), style: 'hand', size: 28 }],
         [{ op: 'write', text: '$x = 3$ or $x = -1$', at: near('$last', 'below'), style: 'hand', size: 28 }],
@@ -73,7 +73,7 @@ function circleAnswer(r: Extract<BoardAgentRequest, { kind: 'circle' }>): Answer
     case 'explain': {
       const summary = first(r.items, (i) => i.summary !== undefined)?.summary;
       return [
-        [{ op: 'write', text: summary !== undefined ? `This card holds: ${summary}.` : 'This is a figure card.', at: near(c, 'right'), style: 'typed', size: 18 }],
+        [{ op: 'write', text: summary !== undefined ? `This card holds: ${summary}.` : 'This is a figure card.', at: near(c, 'right'), style: 'hand', size: 18 }],
         [{ op: 'arrow', from: c, to: '$last' }],
         [{ op: 'mark', target: c, how: 'circle' }],
       ];
@@ -84,7 +84,7 @@ function circleAnswer(r: Extract<BoardAgentRequest, { kind: 'circle' }>): Answer
       return card(c, ['a = 1', 'f(x) = a * x^2'], 'graphing', 'The slider is the number a.');
     case 'ask':
       return [
-        [{ op: 'write', text: `You asked: “${r.text ?? ''}”.`, at: near(c, 'right'), style: 'typed', size: 18 }],
+        [{ op: 'write', text: `You asked: “${r.text ?? ''}”.`, at: near(c, 'right'), style: 'hand', size: 18 }],
         [{ op: 'write', text: 'This demo agent is scripted and has no AI, so it only gives this fixed note.', at: near('$last', 'below'), style: 'hand', size: 20 }],
         [{ op: 'arrow', from: c, to: '$last' }],
       ];
@@ -123,10 +123,10 @@ function talkAnswer(r: Extract<BoardAgentRequest, { kind: 'talk' }>): Answer {
   if (/mark|circle|highlight|underline/.test(t)) {
     return item !== undefined
       ? [[{ op: 'mark', target: item.id, how: 'circle' }]]
-      : [[{ op: 'write', text: 'Nothing is in view to mark. Draw something first.', at: 'free', style: 'typed', size: 18 }]];
+      : [[{ op: 'write', text: 'Nothing is in view to mark. Draw something first.', at: 'free', style: 'hand', size: 18 }]];
   }
   if (/point|laser|show me/.test(t)) {
-    return item !== undefined ? [[{ op: 'point', target: item.id }]] : [[{ op: 'write', text: 'Nothing is in view to point at.', at: 'free', style: 'typed', size: 18 }]];
+    return item !== undefined ? [[{ op: 'point', target: item.id }]] : [[{ op: 'write', text: 'Nothing is in view to point at.', at: 'free', style: 'hand', size: 18 }]];
   }
   if (/camera|zoom|all|everything/.test(t)) return [[{ op: 'camera', target: 'all' }]];
   if (/hello|hi\b|write|say|name/.test(t)) return [[{ op: 'write', text: 'Hello! I am a scripted demo, with no AI.', at: 'free', style: 'hand', size: 30 }]];
@@ -136,7 +136,7 @@ function talkAnswer(r: Extract<BoardAgentRequest, { kind: 'talk' }>): Answer {
         op: 'write',
         text: 'I am a scripted demo with no AI. Try: graph, wave, hello, triangle, mark, point, show all. Or circle something with Ask.',
         at: 'free',
-        style: 'typed',
+        style: 'hand',
         size: 18,
       },
     ],

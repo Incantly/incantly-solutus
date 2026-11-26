@@ -128,7 +128,8 @@ async function drawAndStore(core: BoardCore, call: CallState, env: ActionEnv, pl
 // the actions that make things
 
 async function writeText(core: BoardCore, a: Extract<BoardAction, { op: 'write' }>, call: CallState, env: ActionEnv): Promise<ActionResult> {
-  const hand = a.style === 'hand';
+  // Handwriting is the default. `typed` is the plain font, and it appears at once.
+  const hand = a.style !== 'typed';
   const proto = protoOf(core, 'text', { text: a.text, font: hand ? 'hand' : 'sans', size: a.size ?? 24, color: a.color ?? '#1f2430', w: a.text.length > 48 && !a.text.includes('\n') ? 480 : null });
   if (!proto.ok) return proto;
   const shape = placed(core, call, env, proto.value, a.at);
@@ -141,7 +142,7 @@ const BOX_KINDS: readonly string[] = ['rect', 'ellipse', 'triangle', 'diamond', 
 async function makeShape(core: BoardCore, a: Extract<BoardAction, { op: 'shape' }>, call: CallState, env: ActionEnv): Promise<ActionResult> {
   const color = a.color;
   let props: Record<string, unknown>;
-  if (BOX_KINDS.includes(a.kind)) props = { ...(a.w !== undefined ? { w: a.w } : {}), ...(a.h !== undefined ? { h: a.h } : {}), ...(a.label !== undefined ? { label: a.label } : {}), ...(color !== undefined ? { stroke: color } : {}) };
+  if (BOX_KINDS.includes(a.kind)) props = { ...(a.w !== undefined ? { w: a.w } : {}), ...(a.h !== undefined ? { h: a.h } : {}), ...(a.label !== undefined ? { label: a.label, font: 'hand' } : {}), ...(color !== undefined ? { stroke: color } : {}) };
   else if (a.kind === 'line') props = { points: [0, 0, a.w ?? 120, a.h ?? 0], ...(color !== undefined ? { stroke: color } : {}) };
   else if (a.kind === 'sticky') props = { ...(a.label !== undefined ? { text: a.label } : {}), ...(color !== undefined ? { color } : {}) };
   else props = { ...(a.w !== undefined ? { w: a.w } : {}), ...(a.h !== undefined ? { h: a.h } : {}), name: a.label ?? 'Frame', ...(color !== undefined ? { stroke: color } : {}) };

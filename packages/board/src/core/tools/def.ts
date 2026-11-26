@@ -32,6 +32,10 @@ export interface ShapeStyle {
   /** A line width in page units; text takes a size from it. */
   size: number;
   font: FontFamily;
+  /** Where a new box's label sits across the box. */
+  labelAlign?: 'start' | 'center' | 'end';
+  /** Where a new box's label sits down the box. */
+  labelV?: 'start' | 'middle' | 'end';
 }
 
 export function defaultStyles(): ToolStyles {
@@ -39,7 +43,7 @@ export function defaultStyles(): ToolStyles {
     pen: { nib: 'pen', size: 3, color: '#1f2430', opacity: 1 },
     highlighter: { nib: 'highlighter', size: 18, color: '#ffd400', opacity: 0.4 },
     eraser: { mode: 'whole', radius: 10 },
-    shape: { color: '#1f2430', fill: 'none', dash: 'solid', size: 4, font: 'sans' },
+    shape: { color: '#1f2430', fill: 'none', dash: 'solid', size: 4, font: 'sans', labelAlign: 'center', labelV: 'middle' },
     fixHold: true,
   };
 }

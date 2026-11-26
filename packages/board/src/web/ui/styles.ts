@@ -24,14 +24,16 @@ export const CSS = `
 .ib-tools[data-position=none]{display:none}
 .ib-ico{display:inline-flex;align-items:center;justify-content:center;pointer-events:none}
 .ib-ico svg{display:block}
-.ib-list.ib-more{left:0;top:auto;bottom:62px;min-width:120px}
-.ib-view[data-toolbar=top] .ib-list.ib-more{top:62px;bottom:auto}
-.ib-view[data-toolbar=left] .ib-list.ib-more,.ib-view[data-toolbar=right] .ib-list.ib-more{top:auto;bottom:auto}
+.ib-list.ib-more,.ib-list.ib-figmenu{left:0;top:auto;bottom:62px;min-width:120px}
+.ib-view[data-toolbar=top] .ib-list.ib-more,.ib-view[data-toolbar=top] .ib-list.ib-figmenu{top:62px;bottom:auto}
+.ib-view[data-toolbar=left] .ib-list.ib-more,.ib-view[data-toolbar=right] .ib-list.ib-more,.ib-view[data-toolbar=left] .ib-list.ib-figmenu,.ib-view[data-toolbar=right] .ib-list.ib-figmenu{top:auto;bottom:auto}
 .ib-style{right:12px;top:70px;flex-wrap:wrap;max-width:300px;justify-content:flex-start}
-.ib-style[hidden],.ib-list[hidden]{display:none}
+.ib-penbar{position:absolute;z-index:5;flex-wrap:nowrap;max-width:min(460px,calc(100% - 24px))}
+.ib-style[hidden],.ib-penbar[hidden],.ib-list[hidden]{display:none}
 .ib-sep{width:1px;align-self:stretch;background:var(--ib-border,#d5d7dd);margin:2px 2px}
 .ib-swatch{width:22px;height:22px;padding:0!important;border-radius:50%!important;border:2px solid var(--ib-panel,#fff)!important;box-shadow:0 0 0 1px var(--ib-border,#c5c8d0)}
 .ib-swatch[aria-pressed=true]{box-shadow:0 0 0 2px var(--ib-accent,#4f46e5)!important;background-clip:padding-box}
+.ib-nib,.ib-align{padding:4px 6px!important;min-width:28px}
 .ib-pages{left:12px;top:12px}
 .ib-list{position:absolute;left:0;top:100%;margin-top:6px;min-width:170px;background:var(--ib-panel,#fff);border:1px solid var(--ib-border,#d5d7dd);border-radius:var(--ib-radius,10px);box-shadow:0 6px 18px var(--ib-shadow,rgba(15,23,42,.16));padding:4px;display:flex;flex-direction:column;z-index:6}
 .ib-list button{text-align:start}

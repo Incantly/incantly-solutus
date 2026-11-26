@@ -15,7 +15,7 @@ The live teacher (core design 10) keeps `draw`, `figure`, `pause`, `resume`, `se
 
 ```ts
 type BoardAction =
-  | { op: 'write'; text: string; at: Place; style?: 'hand' | 'typed'; size?: number; color?: string }   // $…$ is maths
+  | { op: 'write'; text: string; at: Place; style?: 'hand' | 'typed'; size?: number; color?: string }   // handwriting unless style is typed; $…$ is maths
   | { op: 'shape'; kind: 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star' | 'line' | 'sticky' | 'frame'; at: Place; w?: number; h?: number; label?: string; color?: string }
   | { op: 'arrow'; from: Target; to: Target; label?: string }
   | { op: 'stroke'; points: readonly [number, number][]; at: Place; color?: string; size?: number }      // drawn as if by hand
@@ -31,7 +31,7 @@ type Place = { x: number; y: number } | { near: Target; side: 'right' | 'left' |
 ```
 
 - `Place` with `near` is the normal way: the board finds a free spot on that side and never covers other shapes. `'free'` picks the nearest empty spot in view: it looks at every empty strip between the shapes' boxes, the one nearest the middle of the view first, and only when no strip holds the thing (with a margin of 40 units from the edge of the view) does it go below all content.
-- `stroke` and `write` with `style: 'hand'` animate on the live layer (about 400 characters a second). A `stroke` is stored as ink; a hand-style `write` is stored as a text shape in the hand font, since there is no stroke font (BR-59). With reduced motion they appear at once.
+- A `write` with no style, and a `write` with `style: 'hand'`, use the handwriting font and animate on the live layer (about 400 characters a second). `style: 'typed'` uses the plain font and appears at once. A `stroke` is stored as ink; a hand-style `write` is stored as a text shape in the hand font, since there is no stroke font (BR-59). With reduced motion they appear at once. A label the agent puts on a shape uses the handwriting font too.
 - `figure` makes a figure card and runs its lines through the teacher's `draw`, so line errors come back in the kernel's format.
 - An action that fails changes nothing and does not stop the actions after it, as with `draw` lines: each action is checked on its own, so an action with a wrong field gets its own error and the rest run. A refusal (`agent_refused`) is a shape that is gone or on another page, a locked shape, a shape the model did not make (below), a limit, or more than 20 actions in the call. Both layers say so for a call of 21 or more: the teacher's `board` tool answers `tool_input` (T001) before anything reaches the board, and the board's own runner answers `agent_refused` for a call that reaches it.
 - `Place` `{ x, y }` is where the thing's box begins. `mark` has no `Place`: it goes round, under or over its target (`circle` is an ellipse, `underline` a line, `highlight` a translucent rectangle, `box` a rectangle, in red or yellow). `point` is the laser over the target's box for a moment and stores nothing. `arrow` with a `label` also writes the label above the arrow's middle. `edit` of a figure card takes its lines as `text` (one a line) and runs them again; `edit` of other shapes sets their text (a label, a sticky note's text, a frame's name).

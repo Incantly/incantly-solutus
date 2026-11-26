@@ -4,6 +4,7 @@
  */
 import { pointInPolygon } from '../index-grid';
 import { rotateAbout } from '../math2d';
+import { sampleHalfWidth } from './outline';
 import type { InkProps } from '../kinds/ink';
 import type { Bounds, ShapeRecord } from '../types';
 
@@ -155,43 +156,185 @@ export function inkTouches(shape: ShapeRecord<string, InkProps>, ax: number, ay:
 }
 
 /**
- * Cuts a stroke where the eraser's path passed: each segment that the path touches goes, and the runs of two or more
- * points that are left are the pieces (new arrays; the stroke's own array is not written). Returns null when the path
- * touched nothing, an empty list when nothing is left.
+ * Cuts a stroke where the eraser's path passed. A segment is split at the edge of the eraser, not thrown away: the
+ * pieces end where the ink meets the ring, and a run of two or more points is kept (new arrays; the stroke's own
+ * array is not written). Returns null when the path touched nothing, an empty list when nothing is left.
  */
 export function cutInk(turned: ShapeRecord<string, InkProps>, ax: number, ay: number, bx: number, by: number, radius: number): Float32Array[] | null {
   // a turned stroke is cut where it is drawn; its pieces have the turn written in and belong to a shape with rotation 0
   const shape = bakeInkRotation(turned);
-  const { points, stride, size } = shape.props;
+  const { points, stride, size, nib } = shape.props;
   const n = Math.floor(points.length / stride);
-  const reach = radius + size * 0.5;
-  const reach2 = reach * reach;
   const lax = ax - shape.x;
   const lay = ay - shape.y;
   const lbx = bx - shape.x;
   const lby = by - shape.y;
   if (n === 0) return null;
   if (n === 1) {
-    return pointSegmentDistSq(points[0] as number, points[1] as number, lax, lay, lbx, lby) <= reach2 ? [] : null;
+    const half = halfAt(points, stride, size, nib, 0, 1, 0);
+    return pointSegmentDistSq(points[0] as number, points[1] as number, lax, lay, lbx, lby) <= (radius + half) * (radius + half) ? [] : null;
   }
   const pieces: Float32Array[] = [];
+  const run: number[] = [];
+  let open = false;
   let touched = false;
-  let start = 0;
+  const close = (): void => {
+    if (run.length >= stride * 2) pieces.push(Float32Array.from(run));
+    run.length = 0;
+    open = false;
+  };
+  const dropLast = (): void => {
+    run.length = Math.max(0, run.length - stride);
+    if (run.length >= stride * 2) close();
+    else {
+      run.length = 0;
+      open = false;
+    }
+  };
   for (let j = 0; j + 1 < n; j++) {
-    const hit =
-      segmentDistSq(
-        points[j * stride] as number, points[j * stride + 1] as number,
-        points[(j + 1) * stride] as number, points[(j + 1) * stride + 1] as number,
-        lax, lay, lbx, lby,
-      ) <= reach2;
-    if (!hit) continue;
+    const half = Math.max(halfAt(points, stride, size, nib, j, j + 1, 0), halfAt(points, stride, size, nib, j, j + 1, 1));
+    const span = erasedSpan(
+      points[j * stride] as number, points[j * stride + 1] as number,
+      points[(j + 1) * stride] as number, points[(j + 1) * stride + 1] as number,
+      lax, lay, lbx, lby, radius + half,
+    );
+    if (span === null) {
+      if (!open) {
+        pointAt(run, points, stride, j, 0);
+        open = true;
+      }
+      pointAt(run, points, stride, j, 1);
+      continue;
+    }
     touched = true;
-    if (j - start + 1 >= 2) pieces.push(points.slice(start * stride, (j + 1) * stride));
-    start = j + 1;
+    const e0 = span[0];
+    const e1 = span[1];
+    if (e0 <= SPAN_EPS) {
+      if (open) dropLast();
+    } else {
+      if (!open) pointAt(run, points, stride, j, 0);
+      pointAt(run, points, stride, j, e0);
+      close();
+    }
+    if (e1 < 1 - SPAN_EPS) {
+      pointAt(run, points, stride, j, e1);
+      pointAt(run, points, stride, j, 1);
+      open = true;
+    }
   }
-  if (!touched) return null;
-  if (n - start >= 2) pieces.push(points.slice(start * stride, n * stride));
-  return pieces;
+  if (open) close();
+  return touched ? pieces : null;
+}
+
+/** Shorter than this, an erased span is the same point. */
+const SPAN_EPS = 1e-5;
+
+/** Half the drawn width at `t` along the segment from point `j` to `j + 1`. */
+function halfAt(points: Float32Array, stride: number, size: number, nib: InkProps['nib'], j: number, next: number, t: number): number {
+  const i0 = j * stride;
+  const i1 = next * stride;
+  const pressure = (points[i0 + 2] as number) + ((points[i1 + 2] as number) - (points[i0 + 2] as number)) * t;
+  const dx = (points[i1] as number) - (points[i0] as number);
+  const dy = (points[i1 + 1] as number) - (points[i0 + 1] as number);
+  const len = Math.hypot(dx, dy);
+  const tiltX = stride === 5 ? (points[i0 + 3] as number) : 0;
+  const tiltY = stride === 5 ? (points[i0 + 4] as number) : 0;
+  return sampleHalfWidth(size, nib, pressure, tiltX, tiltY, len > 0 ? dx / len : 1, len > 0 ? dy / len : 0);
+}
+
+/** Appends the point at `t` along the segment that starts at point `j`. */
+function pointAt(out: number[], points: Float32Array, stride: number, j: number, t: number): void {
+  const i0 = j * stride;
+  const i1 = (j + 1) * stride;
+  for (let k = 0; k < stride; k++) {
+    const a = points[i0 + k] as number;
+    out.push(a + ((points[i1 + k] as number) - a) * t);
+  }
+}
+
+/**
+ * The part of segment `a`-`b` that comes within `reach` of segment `c`-`d`, as `t` from 0 to 1, or null when it
+ * misses. A capsule is convex, so the part is one interval.
+ */
+function erasedSpan(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number, reach: number): [number, number] | null {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const cdx = dx - cx;
+  const cdy = dy - cy;
+  const cd2 = cdx * cdx + cdy * cdy;
+  const reach2 = reach * reach;
+  let lo = 1;
+  let hi = 0;
+  let any = false;
+  const take = (span: [number, number] | null): void => {
+    if (span === null) return;
+    any = true;
+    if (span[0] < lo) lo = span[0];
+    if (span[1] > hi) hi = span[1];
+  };
+  // a point eraser is only the circle; a segment also has the circle at its far end and the band between them
+  take(clipSpan(diskSpan(ax, ay, abx, aby, cx, cy, reach2), ax, ay, abx, aby, cx, cy, cdx, cdy, cd2, -Infinity, cd2 > 1e-18 ? 0 : Infinity));
+  if (cd2 > 1e-18) {
+    take(clipSpan(diskSpan(ax, ay, abx, aby, dx, dy, reach2), ax, ay, abx, aby, cx, cy, cdx, cdy, cd2, 1, Infinity));
+    take(clipSpan(slabSpan(ax, ay, abx, aby, cx, cy, cdx, cdy, cd2, reach), ax, ay, abx, aby, cx, cy, cdx, cdy, cd2, 0, 1));
+  }
+  if (!any) return null;
+  const a = lo < 0 ? 0 : lo;
+  const b = hi > 1 ? 1 : hi;
+  return a <= b ? [a, b] : null;
+}
+
+/** Where `|P(t) - centre|^2 <= reach2` on the infinite line through the segment. `P(t) = (ax, ay) + t (abx, aby)`. */
+function diskSpan(ax: number, ay: number, abx: number, aby: number, cx: number, cy: number, reach2: number): [number, number] | null {
+  const vx = ax - cx;
+  const vy = ay - cy;
+  const qa = abx * abx + aby * aby;
+  const qb = 2 * (vx * abx + vy * aby);
+  const qc = vx * vx + vy * vy - reach2;
+  if (qa < 1e-18) return qc <= 0 ? [0, 1] : null;
+  const disc = qb * qb - 4 * qa * qc;
+  if (disc < 0) return null;
+  const s = Math.sqrt(disc);
+  const t0 = (-qb - s) / (2 * qa);
+  const t1 = (-qb + s) / (2 * qa);
+  return t0 < t1 ? [t0, t1] : [t1, t0];
+}
+
+/** Where the line stays within `reach` of the infinite line through `c` to `c + cd`. */
+function slabSpan(ax: number, ay: number, abx: number, aby: number, cx: number, cy: number, cdx: number, cdy: number, cd2: number, reach: number): [number, number] | null {
+  const limit = reach * Math.sqrt(cd2);
+  const g0 = (ax - cx) * cdy - (ay - cy) * cdx;
+  const gd = abx * cdy - aby * cdx;
+  if (Math.abs(gd) < 1e-14) return Math.abs(g0) <= limit ? [-Infinity, Infinity] : null;
+  const tA = (-limit - g0) / gd;
+  const tB = (limit - g0) / gd;
+  return tA < tB ? [tA, tB] : [tB, tA];
+}
+
+/** `span` limited to the `t` whose projection onto `c` to `c + cd` lies between `uMin` and `uMax`, and to 0..1. */
+function clipSpan(span: [number, number] | null, ax: number, ay: number, abx: number, aby: number, cx: number, cy: number, cdx: number, cdy: number, cd2: number, uMin: number, uMax: number): [number, number] | null {
+  if (span === null) return null;
+  let lo = span[0];
+  let hi = span[1];
+  if (cd2 > 1e-18 && uMax < Infinity) {
+    const u0 = ((ax - cx) * cdx + (ay - cy) * cdy) / cd2;
+    const du = (abx * cdx + aby * cdy) / cd2;
+    const along = duRange(u0, du, uMin, uMax);
+    if (along === null) return null;
+    if (along[0] > lo) lo = along[0];
+    if (along[1] < hi) hi = along[1];
+  }
+  if (lo < 0) lo = 0;
+  if (hi > 1) hi = 1;
+  return lo <= hi ? [lo, hi] : null;
+}
+
+/** The `t` for which `u0 + t du` lies between `uMin` and `uMax`. */
+function duRange(u0: number, du: number, uMin: number, uMax: number): [number, number] | null {
+  if (Math.abs(du) < 1e-14) return u0 >= uMin && u0 <= uMax ? [-Infinity, Infinity] : null;
+  const tOf = (u: number): number => (u - u0) / du;
+  if (du > 0) return [uMin === -Infinity ? -Infinity : tOf(uMin), uMax === Infinity ? Infinity : tOf(uMax)];
+  return [uMax === Infinity ? -Infinity : tOf(uMax), uMin === -Infinity ? Infinity : tOf(uMin)];
 }
 
 /** How many of the stroke's points are inside the polygon `[x0, y0, x1, y1, …]` of page units. */
