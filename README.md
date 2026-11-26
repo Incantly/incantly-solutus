@@ -37,7 +37,7 @@ npm install
 npm run studio     # the web app at http://127.0.0.1:5173
 ```
 
-Open the address in a browser. Type a line such as `A = (1, 2)` or `c = Circle(A, 3)` into the input bar; the line list shows each object, its value and any error with a one-click fix. Undo, redo, rename, delete, sliders, save and load work from the studio. Drawing on a canvas arrives with the renderer area.
+Open the address in a browser. The first page explains each part of the studio. Start opens it; an address with `?mode=geometry` (or any mode) opens that app directly. Type a line such as `A = (1, 2)` or `c = Circle(A, 3)` into the input bar; the line list shows each object, its value and any error with a one-click fix. Undo, redo, rename, delete, sliders, save and load work from the studio. Drawing on a canvas arrives with the renderer area.
 
 ## Check
 
