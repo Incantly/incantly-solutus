@@ -4,7 +4,7 @@
  * design.md section 1). All parameters are required (variants differ by arity,
  * never by optionals), so no two forms of a command are ambiguous.
  */
-import type { CommandForm, CommandSpec, ParamSpec } from '../../language/table';
+import type { CommandForm, CommandSpec, FormCheck, ParamSpec } from '../../language/table';
 import type { CommandRule } from '../../graph/registry';
 import { formCheckFor, refuseFor } from './checks';
 import { T_CONIC_LIKE, T_LINE_LIKE, T_LINE_LIKE_VEC, T_PATH, T_REGION, T_SHAPEN, T_SHAPEN_NCF, T_SHAPEN_NF } from './types';
@@ -24,6 +24,8 @@ interface FormDef {
   readonly rule: CommandRule;
   readonly unit?: 'angle';
   readonly explain?: string;
+  /** Check-time result type. `undefined` keeps `returns`. */
+  readonly resultType?: (c: FormCheck) => string | undefined;
 }
 
 const cmd = (name: string, group: string, forms: readonly FormDef[]): CommandSpec => {
@@ -43,6 +45,7 @@ const cmd = (name: string, group: string, forms: readonly FormDef[]): CommandSpe
         ...(f.unit ? { unit: f.unit } : {}),
         ...(f.explain ? { explain: f.explain } : {}),
         ...(check ? { check } : {}),
+        ...(f.resultType ? { resultType: f.resultType } : {}),
       };
     }),
     ...(refuse ? { refuse } : {}),
@@ -459,6 +462,17 @@ const polygonCommands: readonly CommandSpec[] = [
 
 /* ------------------------------ transforms ------------------------------ */
 
+/** An axis-parallel mirror stays a function; any other mirror is a curve (R2). */
+const reflectFuncResult = (c: FormCheck): string => {
+  const axis = c.args[1]?.axis;
+  return axis === 'vertical' || axis === 'horizontal' ? 'Function' : 'Curve';
+};
+
+/** A horizontal line fixed by the text keeps a stretched function a function (R3). */
+const stretchFuncResult = (c: FormCheck): string => (c.args[1]?.axis === 'horizontal' ? 'Function' : 'Curve');
+
+
+
 const transformCommands: readonly CommandSpec[] = [
   cmd('Translate', 'transforms', [
     { params: [p('shape', T_SHAPEN), p('v', 'Vector')], returns: '=shape', summary: 'slide along a vector', rule: T.translateRule, explain: '{name} is {0} moved by {1}' },
@@ -484,7 +498,7 @@ const transformCommands: readonly CommandSpec[] = [
   cmd('Reflect', 'transforms', [
     { params: [p('shape', T_SHAPEN_NF), p('mirror', T_LL)], returns: '=shape', summary: 'flip across a line', rule: T.reflectLineRule, explain: '{name} is {0} reflected in {1}' },
     { params: [p('shape', T_SHAPEN_NF), p('mirror', T_LL), p('progress', 'Number')], returns: '=shape', summary: 'flip across a line, shown partway', rule: T.reflectLineProgressRule },
-    { params: [p('shape', T_FN1), p('mirror', T_LL)], returns: 'Curve', summary: 'flip a function across a line', rule: T.reflectLineFuncRule },
+    { params: [p('shape', T_FN1), p('mirror', T_LL)], returns: 'Curve', resultType: reflectFuncResult, summary: 'flip a function across a line: an axis-parallel mirror stays a function and any other mirror is a curve', rule: T.reflectLineFuncRule },
     { params: [p('shape', T_FN1), p('mirror', T_LL), p('progress', 'Number')], returns: 'Curve', summary: 'flip a function across a line, shown partway', rule: T.reflectLineFuncRule },
     { params: [p('shape', T_SHAPEN), p('center', 'Point')], returns: '=shape', summary: 'flip about a point', rule: T.reflectPointRule },
     { params: [p('shape', T_SHAPEN), p('center', 'Point'), p('progress', 'Number')], returns: '=shape', summary: 'flip about a point, shown partway', rule: T.reflectPointProgressRule },
@@ -530,7 +544,7 @@ const transformCommands: readonly CommandSpec[] = [
     { params: [p('shape', 'Circle'), p('line', T_LL), p('ratio', 'Number'), p('progress', 'Number')], returns: 'Conic', summary: 'stretch a circle, shown partway', rule: T.stretchCircleProgressRule },
     { params: [p('shape', 'Circle'), p('v', 'Vector')], returns: 'Conic', summary: 'stretch a circle along a vector', rule: T.stretchCircleVecRule },
     { params: [p('shape', 'Circle'), p('v', 'Vector'), p('progress', 'Number')], returns: 'Conic', summary: 'stretch a circle, shown partway', rule: T.stretchCircleVecProgressRule },
-    { params: [p('shape', T_FN1), p('line', T_LL), p('ratio', 'Number')], returns: 'Curve', summary: 'stretch a function', rule: T.stretchFuncRule },
+    { params: [p('shape', T_FN1), p('line', T_LL), p('ratio', 'Number')], returns: 'Curve', resultType: stretchFuncResult, summary: 'stretch a function across a line: a horizontal line keeps it a function', rule: T.stretchFuncRule },
     { params: [p('shape', T_FN1), p('line', T_LL), p('ratio', 'Number'), p('progress', 'Number')], returns: 'Curve', summary: 'stretch a function, shown partway', rule: T.stretchFuncProgressRule },
     { params: [p('shape', T_FN1), p('v', 'Vector')], returns: 'Curve', summary: 'stretch a function along a vector', rule: T.stretchFuncVecRule },
     { params: [p('shape', T_FN1), p('v', 'Vector'), p('progress', 'Number')], returns: 'Curve', summary: 'stretch a function, shown partway', rule: T.stretchFuncVecProgressRule },

@@ -189,12 +189,57 @@ describe('types of images, functions, and live behaviour', () => {
     expect(f.get('g')?.type).toBe('Function');
     near(num(f, 'y0'), 6, 1e-12);
   });
-  // to be implemented: a command's result type is fixed when the line is checked, so it cannot depend on whether the
-  // line it reflects in is vertical. Needs a check-time hook that picks the result type from the argument values.
-  it.skip('a Function reflected about the vertical line x = 1 is a Function: g(3) = f(-1)', () => {
+  it('a Function reflected about the vertical line x = 1 is a Function: g(3) = f(-1)', () => {
     const f = fig(['f(x) = x^2 + x', 'g = Reflect(f, Line((1, 0), (1, 1)))', 'y0 = g(3)']);
     expect(f.get('g')?.type).toBe('Function');
     near(num(f, 'y0'), 0, 1e-12);
+  });
+  it('a Function reflected about the horizontal line y = 1 is a Function: g(2) = -2', () => {
+    const f = fig(['f(x) = x^2', 'g = Reflect(f, Line((0, 1), (1, 1)))', 'y0 = g(2)']);
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), -2, 1e-12);
+  });
+  it('a Function stretched across the horizontal line y = 1 by 2 is a Function: g(2) = 7', () => {
+    const f = fig(['f(x) = x^2', 'g = Stretch(f, Line((0, 1), (1, 1)), 2)', 'y0 = g(2)']);
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), 7, 1e-12);
+  });
+  it('a Function reflected in the slanted line through (0, 0) and (1, 1) is a Curve', () => {
+    expect(fig(['f(x) = x^2', 'g = Reflect(f, Line((0, 0), (1, 1)))']).get('g')?.type).toBe('Curve');
+  });
+  it('Reflect(f, m) is a Curve when m names a vertical line', () => {
+    expect(fig(['f(x) = x^2', 'm = Line((1, 0), (1, 1))', 'g = Reflect(f, m)']).get('g')?.type).toBe('Curve');
+  });
+  it('Reflect(f, Line((a, 0), (a, 1))) stays a Function after a changes, and g(3) = f(2a - 3)', () => {
+    const f = fig(['f(x) = x^2', 'a = 1 in 0..5 step 0.1', 'g = Reflect(f, Line((a, 0), (a, 1)))', 'y0 = g(3)']);
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), 1, 1e-12);
+    f.setFree('a', 4, 'slider');
+    f.flush();
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), 25, 1e-12);
+  });
+  it('Reflect(f, yaxis) is a Function: g(3) = -3', () => {
+    const f = fig(['f(x) = x', 'g = Reflect(f, yaxis)', 'y0 = g(3)']);
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), -3, 1e-12);
+  });
+  it('Stretch(f, xaxis, 2) is a Function: g(3) = 18', () => {
+    const f = fig(['f(x) = x^2', 'g = Stretch(f, xaxis, 2)', 'y0 = g(3)']);
+    expect(f.get('g')?.type).toBe('Function');
+    near(num(f, 'y0'), 18, 1e-12);
+  });
+  it('Reflect of a function about a vertical line with progress is a Curve', () => {
+    expect(fig(['f(x) = x^2', 'g = Reflect(f, Line((1, 0), (1, 1)), progress = 0.5)']).get('g')?.type).toBe('Curve');
+  });
+  it('Reflect of a function about a horizontal line with progress is a Curve', () => {
+    expect(fig(['f(x) = x^2', 'g = Reflect(f, Line((0, 1), (1, 1)), progress = 1)']).get('g')?.type).toBe('Curve');
+  });
+  it('Stretch of a function across a horizontal line with progress is a Curve', () => {
+    expect(fig(['f(x) = x^2', 'g = Stretch(f, Line((0, 1), (1, 1)), 2, progress = 0.5)']).get('g')?.type).toBe('Curve');
+  });
+  it('Stretch of a function across a vertical line with progress is a Curve', () => {
+    expect(fig(['f(x) = x^2', 'g = Stretch(f, Line((1, 0), (1, 1)), 2, progress = 1)']).get('g')?.type).toBe('Curve');
   });
   it('a Function rotated is a Curve', () => expect(fig(['f(x) = x^2', 'g = Rotate(f, 30°, (0, 0))']).get('g')?.type).toBe('Curve'));
   it('an image cannot be dragged: not_draggable', () => {

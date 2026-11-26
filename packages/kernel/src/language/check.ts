@@ -13,6 +13,7 @@ import { CONSTANT_NAMES, nameProblem, reservedGroup } from './names';
 import { defineLine } from '../errors/suggest';
 import { own } from './props';
 import { classify } from './relation';
+import { fixedAxisOf } from './fixed-axis';
 import type { ArgFacts, CallCheck, FigureView, FormCheck, FormLike, FunctionTable, ObjectInfo, ParamSpec, Refusal } from './table';
 import { formText } from './table';
 import type { RelTree, TArg, TNode } from './tnode';
@@ -1370,7 +1371,17 @@ class Checker {
     const m = this.matchForms(spec.name, spec.forms, e, expected, spec.refuse);
     if (!m) return null;
     const form = m.form;
-    const ret = form.returns;
+    let ret = form.returns;
+    const pick = form.resultType;
+    if (pick !== undefined && m.facts !== undefined) {
+      let chosen: string | undefined;
+      try {
+        chosen = pick(m.facts);
+      } catch {
+        return this.err('internal', e.s, e.e, 'lang.internal', { where: `${spec.name} result type` }, { recovery: 'report', fingerprintKey: spec.name });
+      }
+      if (chosen !== undefined) ret = chosen;
+    }
     if (ret === null && this.actionCall !== e) {
       return this.err('type_mismatch', e.s, e.e, 'lang.type_mismatch_where', { why: `${spec.name} is an action, not a value` }, {
         hint: 'Write it on its own line.',
@@ -1439,7 +1450,14 @@ class Checker {
   /** What a check-time hook may know about a typed argument. */
   argFacts(node: TNode | null | undefined, a: Arg | undefined): ArgFacts {
     if (!node || !a) return { type: '', literal: undefined, text: a ? this.textOf(a.value) : '', omitted: !a };
-    const base = { type: tyStr(node.ty), literal: literalOf(node), text: this.textOf(a.value), omitted: false };
+    const axis = fixedAxisOf(node);
+    const base = {
+      type: tyStr(node.ty),
+      literal: literalOf(node),
+      text: this.textOf(a.value),
+      omitted: false,
+      ...(axis !== undefined ? { axis } : {}),
+    };
     if (node.n === 'relation') return { ...base, relation: node.shape };
     if (node.n !== 'ref') return base;
     // a bare object name: the hook may read what the object is now
@@ -1486,7 +1504,7 @@ class Checker {
     call: CallExpr,
     _expected?: Ty,
     refuseCall?: (c: CallCheck) => Refusal | undefined,
-  ): { form: F; bound: TArg[] } | null {
+  ): { form: F; bound: TArg[]; facts?: FormCheck } | null {
     const args = call.args;
     // names and duplicates
     const seen = new Map<string, number>();
@@ -1853,28 +1871,34 @@ class Checker {
       for (const ai of best.b.restArgs) flush(ai);
       for (const t of typed.values()) if (t.node && !flushedArgs.has(t.ai)) this.notices.push(...t.notices);
       this.checkBinderUse(best.bound, best.b.form, args);
-      // the form's own check-time hook: a literal or a type that can never work is an error on the line
-      const hook = (best.b.form as { check?: (c: FormCheck) => Refusal | undefined }).check;
-      if (hook) {
+      // facts for the check hook and for resultType, built once the form is chosen
+      const hooks = best.b.form as { check?: (c: FormCheck) => Refusal | undefined; resultType?: (c: FormCheck) => string | undefined };
+      let facts: FormCheck | undefined;
+      if (hooks.check !== undefined || hooks.resultType !== undefined) {
         const nParams = best.b.form.params.length;
         const paramArg = (k: number): Arg | undefined => {
           const ai = best.b.bind[k];
           return ai === undefined || ai === -1 ? undefined : (args[ai] as Arg);
         };
-        const facts = best.b.form.params.map((_p, k) => this.argFacts(best.bound[k]?.expr, paramArg(k)));
-        const rest = best.b.restArgs.map((ai, j) => this.argFacts(best.bound[nParams + j]?.expr, args[ai] as Arg));
-        let refusal: Refusal | undefined;
-        try {
-          refusal = hook({ command: specName, args: facts, rest });
-        } catch {
-          return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${specName} check hook` }, { recovery: 'report', fingerprintKey: specName });
-        }
-        if (refusal) {
-          return this.refuse(refusal, specName, call, (r) =>
-            r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param), forms);
+        facts = {
+          command: specName,
+          args: best.b.form.params.map((_p, k) => this.argFacts(best.bound[k]?.expr, paramArg(k))),
+          rest: best.b.restArgs.map((ai, j) => this.argFacts(best.bound[nParams + j]?.expr, args[ai] as Arg)),
+        };
+        if (hooks.check !== undefined) {
+          let refusal: Refusal | undefined;
+          try {
+            refusal = hooks.check(facts);
+          } catch {
+            return this.err('internal', call.cs, call.ce, 'lang.internal', { where: `${specName} check hook` }, { recovery: 'report', fingerprintKey: specName });
+          }
+          if (refusal) {
+            return this.refuse(refusal, specName, call, (r) =>
+              r.param === undefined ? undefined : r.inRest === true ? (args[best.b.restArgs[r.param] ?? -1] as Arg | undefined) : paramArg(r.param), forms);
+          }
         }
       }
-      return { form: best.b.form as F, bound: best.bound };
+      return { form: best.b.form as F, bound: best.bound, ...(facts !== undefined ? { facts } : {}) };
     }
 
     // real errors inside arguments take priority over a form diagnosis

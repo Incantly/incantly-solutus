@@ -1,0 +1,11 @@
+# Function images that stay functions: spec review
+
+Branch `feat/geometry-reflect`. No source or test file was changed.
+
+The code matches the spec. `resultType` runs in `inferCommand` only after `matchForms` has chosen the form and the check hook has returned without a refusal. A bare `ref` gets no `axis`. `yaxis` is vertical and `xaxis` is horizontal. `Line((a, 0), (a, 1))` is vertical because the `x` subtrees match and the `y` subtrees do not; `a + 0` is a `bin` and `a` is a `ref`, so they are not the same tree. Reflect and Stretch with `progress` stay `Curve` and have no `resultType` hook. Stretch across a vertical line stays `Curve`. The horizontal stretch is `g(x) = c + r (f(x) − c)`, and ratio 0 is `singular_transform`. An oblique mirror goes through `mapFunctionToCurve` and is not a failure. No new dependency, no `console`, and no throw on the public boundary (a throw inside `resultType` becomes the existing `internal` error). The tests in `packages/kernel/test/spec/geometry/transforms.test.ts` assert R6 and do not contradict it.
+
+Files read: `.kiro/specs/geometry-reflect/requirements.md`, `.kiro/specs/geometry-reflect/design.md`, `.kiro/specs/geometry-reflect/tasks.md`, `handoff/geometry-reflect/builder-notes.md`, `handoff/geometry-reflect/test-report.md`, `packages/kernel/src/language/table.ts`, `packages/kernel/src/language/check.ts`, `packages/kernel/src/language/fixed-axis.ts`, `packages/kernel/src/commands/geometry/commands.ts`, `packages/kernel/src/commands/geometry/transforms.ts`, `packages/kernel/test/spec/geometry/transforms.test.ts`. Sections 6.5 and 6.7 of `docs/features/polygons-transforms/design.md` were used as the behaviour source named by the feature design.
+
+## Note
+
+**R4.** `packages/kernel/src/language/fixed-axis.ts` (`sameTree`). The spec says the same tree means the same shape, the same literals and the same names. `sameTree` returns false for a `cond` node (`if(...)`) and a `tick` node (`f'(x)`) without looking at their children, so two copies of the same `if` or the same derivative mark are not the same tree. `Line((if(p, a, b), 0), (if(p, a, b), 1))` therefore has no axis, and the image is a `Curve`. R1.3 treats a `Curve` image as correct when the text’s direction is not recognised. Names, literals, `a + 0`, calls and the other ordinary number nodes are compared. Note, not a must-fix.

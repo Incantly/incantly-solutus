@@ -78,6 +78,11 @@ export interface ArgFacts {
    * of degree 2 or less with `==`; `curve` is any other equation; `region` is an inequality.
    */
   readonly relation?: 'line' | 'circle' | 'conic' | 'curve' | 'region';
+  /**
+   * Direction fixed by the text of this argument (a built-in axis, an axis-parallel line through two points, or a
+   * line equation). Absent when the text does not fix it, including a bare name of a figure object.
+   */
+  readonly axis?: 'vertical' | 'horizontal';
 }
 
 /** The arguments of the chosen form, in parameter order, then the rest arguments. */
@@ -134,6 +139,11 @@ export interface CommandForm {
    * literal that can never work (`Circle(O, -2)`) is an error on the line instead of an undefined object. Must be pure.
    */
   readonly check?: (c: FormCheck) => Refusal | undefined;
+  /**
+   * Result type from the arguments, once this form is chosen and `check` has accepted the line. A returned string
+   * replaces `returns` for that call. `undefined` keeps `returns`. Must be pure: it reads `FormCheck` only.
+   */
+  readonly resultType?: (c: FormCheck) => string | undefined;
 }
 
 export interface CommandSpec {

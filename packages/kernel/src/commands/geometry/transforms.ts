@@ -4,6 +4,7 @@
  * maps, and Transform values (8.6) with composition.
  */
 import type { CommandRule, RuleCall } from '../../graph/registry';
+import { fixedAxisOf } from '../../language/fixed-axis';
 import type { FunctionValue } from '../../language/runtime';
 import type { ArcValue, ConicValue, HLine, StoredTransform, V2 } from './types';
 import {
@@ -696,6 +697,18 @@ function mapFunction(t: StoredTransform, f: FunctionValue): Mapped {
       }
       return { fail: 'out_of_domain', detail: 'oblique reflection of a function is a curve' };
     }
+    case 'stretch': {
+      // Horizontal line y = c only (polygons-transforms 6.7). Other directions are curves.
+      const horiz = Math.abs(t.nx) <= 1e-12 && Math.abs(t.ny) > 0;
+      if (!horiz) return { fail: 'out_of_domain', detail: 'this map sends functions to curves' };
+      if (t.ratio === 0) return { fail: 'singular_transform' };
+      const c = -t.c0 / t.ny;
+      const r = t.ratio;
+      return { value: wrap((x) => {
+        const y = ev(x);
+        return y === undefined ? undefined : c + r * (y - c);
+      }) };
+    }
     case 'then': {
       let cur: FunctionValue = f;
       for (const s of t.steps) {
@@ -1153,6 +1166,19 @@ export const stretchCircleVecRule: CommandRule = rule((call) => {
 export const stretchFuncRule: CommandRule = rule((call) => stretchFuncBody(call, undefined));
 export const stretchFuncProgressRule: CommandRule = rule((call) => stretchFuncBody(call, N(call, 3)));
 
+/** Direction fixed by the mirror's text (R4). A bare name has none, so the image stays a curve. */
+function fixedMirror(call: RuleCall): 'vertical' | 'horizontal' | undefined {
+  const tree = call.args[1]?.tree;
+  return tree === undefined ? undefined : fixedAxisOf(tree);
+}
+
+/** Axis-parallel carrier. Vertical is `x = c`; horizontal is `y = c`. */
+function parallelDir(nx: number, ny: number): 'vertical' | 'horizontal' | undefined {
+  if (Math.abs(ny) <= 1e-12 && Math.abs(nx) > 0) return 'vertical';
+  if (Math.abs(nx) <= 1e-12 && Math.abs(ny) > 0) return 'horizontal';
+  return undefined;
+}
+
 function stretchFuncBody(call: RuleCall, u: number | undefined): unknown {
   const ll = lineLikeOf(call.values[1]);
   const f = call.values[0] as FunctionValue;
@@ -1160,7 +1186,13 @@ function stretchFuncBody(call: RuleCall, u: number | undefined): unknown {
   if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (!saneNum(call, r)) return undefined;
   if (u !== undefined && !saneNum(call, u)) return undefined;
-  return finish(call, mapFunctionToCurve(stretchLineStored(ll, r, u), f));
+  const t = stretchLineStored(ll, r, u);
+  if (t.kind === 'stretch' && t.ratio === 0) return call.fail('singular_transform');
+  // A horizontal line fixed by the text stays a function. Progress, and every other line, is a curve.
+  if (u === undefined && fixedMirror(call) === 'horizontal' && parallelDir(ll.a, ll.b) === 'horizontal') {
+    return finish(call, mapFunction(t, f));
+  }
+  return finish(call, mapFunctionToCurve(t, f));
 }
 
 export const stretchFuncVecRule: CommandRule = rule((call) => {
@@ -1546,11 +1578,23 @@ export const rotateFuncRule: CommandRule = rule((call) => {
   return finish(call, mapFunctionToCurve(rotateStored(angle, c, u === undefined ? undefined : clampProgress(u)), call.values[0] as FunctionValue));
 });
 
-/** `Reflect(f, line[, progress])`: a Curve; the checker cannot tell an axis-parallel line from the type alone (6.7). */
+/**
+ * `Reflect(f, line[, progress])`. An axis-parallel mirror whose direction the text fixes stays a function
+ * (polygons-transforms 6.7). A partial fold, a slanted mirror, and a bare name are a curve. An oblique mirror
+ * is not a failure.
+ */
 export const reflectLineFuncRule: CommandRule = rule((call) => {
   const ll = lineLikeOf(call.values[1]);
   const u = call.values.length > 2 ? N(call, 2) : undefined;
   if (!ll) return call.fail('coincident_points', 'the axis has no direction');
   if (u !== undefined && !saneNum(call, u)) return undefined;
-  return finish(call, mapFunctionToCurve(reflectLineStored(ll, u), call.values[0] as FunctionValue));
+  const f = call.values[0] as FunctionValue;
+  const t = reflectLineStored(ll, u);
+  const fixed = u === undefined ? fixedMirror(call) : undefined;
+  if (fixed !== undefined && parallelDir(ll.a, ll.b) !== undefined) {
+    const m = mapFunction(t, f);
+    if (!isFail(m)) return finish(call, m);
+    if (m.fail !== 'out_of_domain') return finish(call, m);
+  }
+  return finish(call, mapFunctionToCurve(t, f));
 });
