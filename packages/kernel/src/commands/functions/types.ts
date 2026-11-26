@@ -12,6 +12,13 @@ import type { Pt } from '../../contracts/values';
 
 /* ------------------------- area registries (append-only) ------------------------- */
 
+declare module '../../contracts/errors' {
+  interface AreaNoticeKinds {
+    // curves-loci: the whole plane satisfies the relation
+    identically_true: true;
+  }
+}
+
 declare module '../../contracts/values' {
   interface AreaTypeNames {
     // functions: SlopeField results carry the field and its options; the view samples them.

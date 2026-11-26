@@ -2,6 +2,7 @@
  * Line-level checks: definitions, functions, rates, restyle, rerange, directives and actions
  * (docs/features/language/design.md 3.8, 3.12, 3.13). Built on the expression checker.
  */
+import { makeNotice } from '../errors/notices';
 import type { Result } from '../contracts/errors';
 import type { ObjId } from '../contracts/values';
 import type { Expr, LineNode, NameRef, ParsedLine, Pos, RangeClause, StyleItem } from './ast';
@@ -11,6 +12,7 @@ import { buildError, closestNames, notice, withMore } from './errors';
 import type { ErrorExtra, LanguageError } from './errors';
 import { RESERVED_ALTERNATIVES, nameProblem, reservedGroup, reservedGroupText } from './names';
 import { printLineNode } from './printer';
+import { identicallyTrue } from './relation';
 import { COLOR_WORDS, DIRECTIVES, PROPERTIES, own } from './props';
 import { SELF_ID } from './table';
 import type { ObjectInfo } from './table';
@@ -595,6 +597,7 @@ function checkDefine(c: Checker, written: Extract<LineNode, { k: 'define' }>): P
     }
   }
   const free = isFreeNode(c, tn) && !isState;
+  if (tn.n === 'relation' && tn.identicallyTrue === true) c.warn(makeNotice('identically_true'));
   return {
     kind: 'define',
     op: existing ? 'redefine' : 'add',
@@ -828,6 +831,15 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
   const type = typeOf(body);
   if (c.errors.length === 0) checkRedefinition(c, t, existing, type, { s: t.s, e: node.expr.e });
   if (c.errors.length > 0) return undefined;
+  let expr: TNode = body;
+  if (isPredicate && body.n === 'cmp') {
+    const sx = params[0]?.slot;
+    const sy = params[1]?.slot ?? -1;
+    if (sx !== undefined && identicallyTrue({ t: 'cmp', ops: body.ops, operands: body.operands }, sx, sy)) {
+      c.warn(makeNotice('identically_true'));
+      expr = { ...body, identicallyTrue: true };
+    }
+  }
   return {
     kind: 'function',
     op: existing ? 'redefine' : 'add',
@@ -837,7 +849,7 @@ function checkFunction(c: Checker, node: Extract<LineNode, { k: 'function' }>): 
     free: false,
     isState: false,
     ...(existing ? { existing: existing.id } : {}),
-    expr: body,
+    expr,
     params,
     ...(domain && domain.length > 0 ? { domain } : {}),
     ...(style ? { style } : {}),

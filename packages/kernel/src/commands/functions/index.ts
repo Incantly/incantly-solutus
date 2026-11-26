@@ -34,7 +34,7 @@ export {
 const NOTICES: Readonly<Record<string, { code: string; severity: 'info' | 'warning'; template: string }>> = {
   blowup: { code: 'F101', severity: 'warning', template: 'The solution reaches infinity near {at}, so it stops there (blow-up).' },
   tangent: { code: 'F102', severity: 'info', template: 'The curves touch without crossing (tangent) at {count} of the points.' },
-  identically_true: { code: 'F103', severity: 'info', template: 'Every point satisfies this, so the result is the whole plane (identically_true).' },
+  identically_true: { code: 'F103', severity: 'warning', template: 'Every point satisfies this, so the result is the whole plane (identically_true).' },
   sample_cap: { code: 'F104', severity: 'warning', template: 'The path needed more samples than the cap of {max} allows; it stops where the cap was reached (sample_cap).' },
   step_limit: { code: 'F105', severity: 'warning', template: 'The work budget ran out; this is the best estimate so far (step_limit).' },
 };

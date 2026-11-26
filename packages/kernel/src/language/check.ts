@@ -1870,6 +1870,14 @@ class Checker {
       });
       for (const ai of best.b.restArgs) flush(ai);
       for (const t of typed.values()) if (t.node && !flushedArgs.has(t.ai)) this.notices.push(...t.notices);
+      if (specName === 'Curve') {
+        for (const arg of best.bound) {
+          if (arg?.param.type === 'Relation' && arg.expr?.n === 'relation' && arg.expr.identicallyTrue === true) {
+            this.warn(makeNotice('identically_true'));
+            break;
+          }
+        }
+      }
       this.checkBinderUse(best.bound, best.b.form, args);
       // facts for the check hook and for resultType, built once the form is chosen
       const hooks = best.b.form as { check?: (c: FormCheck) => Refusal | undefined; resultType?: (c: FormCheck) => string | undefined };
@@ -2122,7 +2130,18 @@ class Checker {
       const tree = this.relTree(e);
       if (!tree) return null;
       const cls = classify(tree, sx, sy);
-      return { n: 'relation', tree, slotX: sx, slotY: sy, ...(cls.poly ? { poly: cls.poly } : {}), shape: cls.shape, ty: T.Relation, s: e.s, e: e.e };
+      return {
+        n: 'relation',
+        tree,
+        slotX: sx,
+        slotY: sy,
+        ...(cls.poly ? { poly: cls.poly } : {}),
+        ...(cls.identicallyTrue === true ? { identicallyTrue: true as const } : {}),
+        shape: cls.shape,
+        ty: T.Relation,
+        s: e.s,
+        e: e.e,
+      };
     } finally {
       this.popFrame();
     }

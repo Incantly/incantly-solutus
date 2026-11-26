@@ -25,6 +25,8 @@ export interface FunctionValue {
   call1?(x: number): number;
   /** Reason of the last undefined result of this function. */
   reason?: UndefReason | undefined;
+  /** The predicate body was proved true at every real input. */
+  readonly identicallyTrue?: true;
   /** Batch form for the plotter. Writes NaN for undefined samples. */
   batch?(xs: Float64Array, out: Float64Array): void;
 }
@@ -38,6 +40,8 @@ export interface RelationValue {
   readonly test: (x: number, y: number) => boolean | undefined;
   /** Polynomial coefficients of the first comparison, when it is a polynomial of degree <= 2. */
   readonly poly?: { readonly xx: number; readonly xy: number; readonly yy: number; readonly x: number; readonly y: number; readonly c: number } | undefined;
+  /** Proved true at every real x and y. `residual` and `test` are unchanged. */
+  readonly identicallyTrue?: true;
 }
 
 export type RuntimeValue =

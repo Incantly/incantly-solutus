@@ -44,7 +44,7 @@ export type TNode =
   | (B & { readonly n: 'unary'; readonly op: '-' | '+' | 'not'; readonly arg: TNode; readonly impl?: (a: unknown, env: unknown) => unknown })
   | (B & { readonly n: 'bin'; readonly op: string; readonly l: TNode; readonly r: TNode; readonly variant: OpVariant; readonly impl?: AreaOpImpl })
   /** `impls[i]`: an area's equality for the i-th comparison (`A == B` of matrices), when it has one. */
-  | (B & { readonly n: 'cmp'; readonly ops: readonly CmpOp[]; readonly operands: readonly TNode[]; readonly impls?: readonly (AreaOpImpl | undefined)[] })
+  | (B & { readonly n: 'cmp'; readonly ops: readonly CmpOp[]; readonly operands: readonly TNode[]; readonly impls?: readonly (AreaOpImpl | undefined)[]; readonly identicallyTrue?: true })
   | (B & { readonly n: 'fact'; readonly arg: TNode })
   | (B & { readonly n: 'callObj'; readonly id: ObjId; readonly name: string; readonly args: readonly TNode[] })
   | (B & { readonly n: 'builtin'; readonly spec: FunctionSpec; readonly form: FunctionForm; readonly args: readonly TNode[] })
@@ -64,7 +64,7 @@ export type TNode =
    */
   | (B & { readonly n: 'cells'; readonly rect: CellRect; readonly items: readonly CellItem[]; readonly as: 'range' | 'list' | 'rows' })
   | (B & { readonly n: 'cond'; readonly arms: readonly { readonly c: TNode; readonly v: TNode }[]; readonly otherwise?: TNode })
-  | (B & { readonly n: 'relation'; readonly tree: RelTree; readonly slotX: number; readonly slotY: number; readonly poly?: PolyNodes; readonly shape: RelationShape });
+  | (B & { readonly n: 'relation'; readonly tree: RelTree; readonly slotX: number; readonly slotY: number; readonly poly?: PolyNodes; readonly shape: RelationShape; readonly identicallyTrue?: true });
 
 /** One filled cell of a range: a `ref` with its address. */
 export type CellItem = TNode & { readonly n: 'ref'; readonly col: number; readonly row: number; readonly blank?: boolean };
