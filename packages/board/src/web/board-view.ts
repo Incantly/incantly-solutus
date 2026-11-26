@@ -400,7 +400,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   surface.append(painter.element);
   const toolBar = h('div', { class: 'ib-bar ib-tools', role: 'toolbar', 'aria-label': strings.t('toolbar.label'), 'data-position': shell.position });
   const styleBar = h('div', { class: 'ib-bar ib-style', 'aria-label': strings.t('style.label') });
-  const penBar = h('div', { class: 'ib-bar ib-penbar', role: 'toolbar', 'aria-label': strings.t('style.pen', 'Pen'), hidden: '' });
+  const penBar = h('div', { class: 'ib-bar ib-penbar', role: 'group', 'aria-label': strings.t('style.pen', 'Pen'), hidden: '' });
   const pageBar = h('div', { class: 'ib-bar ib-pages', 'aria-label': strings.t('pages.label') });
   const zoomBar = h('div', { class: 'ib-bar ib-zoom', 'aria-label': strings.t('zoom.label') });
   root.append(surface);
