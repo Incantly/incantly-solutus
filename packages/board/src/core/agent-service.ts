@@ -300,45 +300,50 @@ export class AgentService {
     const allow = request.kind === 'talk' ? request.allowEdit : EDITS_MINE.includes(request.choice);
     // the pieces of the agent's words, joined into one line of the conversation when the answer ends
     const said: string[] = [];
+    const ticket = this.runner.followBegin();
     try {
-      for await (const event of transport(request, job.controller.signal)) {
-        if (!job.live) break;
-        if ('say' in event) {
-          if (typeof event.say !== 'string') {
-            job.fail('bad_stream', 'The server sent words that are not text.');
+      try {
+        for await (const event of transport(request, job.controller.signal)) {
+          if (!job.live) break;
+          if ('say' in event) {
+            if (typeof event.say !== 'string') {
+              job.fail('bad_stream', 'The server sent words that are not text.');
+              break;
+            }
+            said.push(event.say);
+          } else if ('actions' in event) {
+            if (!Array.isArray(event.actions)) {
+              job.fail('bad_stream', 'The server sent actions that are not a list.');
+              break;
+            }
+            job.gotActions();
+            await this.#apply(job, event.actions, allow, gesture);
+          } else if ('done' in event) {
+            job.finish();
+            break;
+          } else if ('error' in event) {
+            job.fail(event.error.kind, event.error.message);
+            break;
+          } else {
+            job.fail('bad_stream', 'The server sent an answer that is not actions.');
             break;
           }
-          said.push(event.say);
-        } else if ('actions' in event) {
-          if (!Array.isArray(event.actions)) {
-            job.fail('bad_stream', 'The server sent actions that are not a list.');
-            break;
-          }
-          job.gotActions();
-          await this.#apply(job, event.actions, allow, gesture);
-        } else if ('done' in event) {
-          job.finish();
-          break;
-        } else if ('error' in event) {
-          job.fail(event.error.kind, event.error.message);
-          break;
-        } else {
-          job.fail('bad_stream', 'The server sent an answer that is not actions.');
-          break;
         }
+      } catch (e) {
+        job.fail('transport', e instanceof Error ? e.message : 'the request failed');
       }
-    } catch (e) {
-      job.fail('transport', e instanceof Error ? e.message : 'the request failed');
+      // an answer that ended with no `done` and was not stopped did not finish
+      if (job.live) job.fail('ended', 'The answer ended before it was finished.');
+      gesture.commit();
+      // a replaced job's words are not shown: a newer request has begun and its lines follow the user's
+      const words = job.state === 'replaced' ? '' : said.join('').trim();
+      if (words !== '') this.say('agent', words);
+      const outcome = this.#outcome(job, words !== '');
+      this.#changed();
+      return outcome;
+    } finally {
+      this.runner.followEnd(ticket);
     }
-    // an answer that ended with no `done` and was not stopped did not finish
-    if (job.live) job.fail('ended', 'The answer ended before it was finished.');
-    gesture.commit();
-    // a replaced job's words are not shown: a newer request has begun and its lines follow the user's
-    const words = job.state === 'replaced' ? '' : said.join('').trim();
-    if (words !== '') this.say('agent', words);
-    const outcome = this.#outcome(job, words !== '');
-    this.#changed();
-    return outcome;
   }
 
   async #apply(job: AgentJob, actions: readonly unknown[], allowForeign: boolean, gesture: Gesture): Promise<void> {

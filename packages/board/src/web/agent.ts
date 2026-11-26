@@ -32,6 +32,8 @@ export interface AgentOption {
   readonly label?: string;
   /** For tests and hosts that route requests themselves; default `fetch`. */
   readonly fetch?: typeof fetch;
+  /** When false, the camera stays put while the agent draws. Default true: new work is kept on screen. */
+  readonly follow?: boolean;
 }
 
 export interface AgentKit {
@@ -64,13 +66,24 @@ const prefersReducedMotion = (): boolean => typeof matchMedia === 'function' && 
 export function createAgentKit(core: BoardCore, option: AgentOption | undefined, env: KitEnv): AgentKit {
   const opt = option ?? {};
   const transport = opt.transport ?? (opt.server !== undefined && opt.server.trim() !== '' ? httpAgentTransport(opt.server, opt.fetch) : undefined);
+  // The hand is built before the runner, and each frame of a stroke tells the runner where the pen is.
+  const follow: { runner?: BoardAgent } = {};
   const hand =
     env.requestFrame !== undefined
-      ? new WebHand({ core, requestFrame: env.requestFrame, onTip: (at) => env.onTip?.(at), onError: env.onError })
+      ? new WebHand({
+          core,
+          requestFrame: env.requestFrame,
+          onTip: (at) => {
+            follow.runner?.followTip(at);
+            env.onTip?.(at);
+          },
+          onError: env.onError,
+        })
       : undefined;
   const figures = sdkFigureHost();
   const options: AgentOptions = {
     figures,
+    follow: opt.follow !== false,
     reducedMotion: () => opt.reducedMotion ?? prefersReducedMotion(),
     ...(env.view !== undefined ? { view: env.view } : {}),
     ...(env.viewSize !== undefined ? { viewSize: env.viewSize } : {}),
@@ -80,6 +93,7 @@ export function createAgentKit(core: BoardCore, option: AgentOption | undefined,
     ...(env.onHand !== undefined ? { onHand: env.onHand } : {}),
   };
   const runner = new BoardAgent(core, options);
+  follow.runner = runner;
   const service = new AgentService(runner, { ...(transport !== undefined ? { transport } : {}), onError: env.onError });
   const circle = new CircleAsk(core, service, {
     figures,

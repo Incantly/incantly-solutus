@@ -9,6 +9,8 @@ import { StateMachine } from '@incantly/kernel';
 import type { MachineTable } from '@incantly/kernel';
 import { applyAction } from './agent-actions';
 import type { CallState } from './agent-actions';
+import { cameraSucceeded, framePose, insideView, panPose, pointInView } from './agent-follow';
+import type { FollowPose } from './agent-follow';
 import type { HandPlayer } from './agent-hand';
 import { readBoard } from './agent-read';
 import type { FigureHost } from './agent-read';
@@ -19,8 +21,10 @@ import { beginGesture } from './edit';
 import type { Gesture } from './edit';
 import type { BoardError, BoardResult } from './errors';
 import { boardError, ok, refusedMove } from './errors';
+import { shapeBounds, unionBounds } from './geometry';
 import { sendIfAble } from './machine';
 import type { Bounds } from './types';
+import { isShape } from './types';
 
 /** A tool as a model's prompt wants it: a name, a description and a plain JSON schema. */
 export interface AgentToolDef {
@@ -48,7 +52,7 @@ export const BOARD_READ_TOOL: AgentToolDef = Object.freeze({
 
 export const BOARD_TOOL: AgentToolDef = Object.freeze({
   name: 'board',
-  description: `Changes the board with ${ACTIONS_MAX} actions at most, in order. Each action is one undoable change; one that fails changes nothing and the rest still run. Results: { ok: true, id } or an error. Place new things near what they explain; do not change the user's work unless asked.`,
+  description: `Changes the board with ${ACTIONS_MAX} actions at most, in order. Each action is one undoable change; one that fails changes nothing and the rest still run. Results: { ok: true, id } or an error. Place new things near what they explain; do not change the user's work unless asked. The board moves the view so new work stays on screen; use camera only for a view you choose.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -117,6 +121,11 @@ export interface AgentOptions {
   readonly onPoint?: (box: Bounds) => void;
   /** Where the agent is working now (the hand icon of the panel). */
   readonly onHand?: (at: { readonly x: number; readonly y: number }) => void;
+  /**
+   * When false, the camera stays where the user left it while the agent draws. Default true: the board pans to a
+   * working point that leaves the view, and frames a call whose new shapes are not fully on screen.
+   */
+  readonly follow?: boolean;
 }
 
 export interface RunOptions {
@@ -142,6 +151,14 @@ export class BoardAgent {
   #queue: Promise<unknown> = Promise.resolve();
   /** The shape the previous action made: `$last` carries over from one call of a streamed answer to the next. */
   #last: string | undefined;
+  /**
+   * Camera follow for the answer in progress (not a machine: the user may take the camera at any moment). `idle` between
+   * answers; a pose while this answer is being followed (the pose the runner last set); `released` once the user pans or
+   * zooms, or when follow is off, until the answer ends.
+   */
+  #follow: 'idle' | 'released' | FollowPose = 'idle';
+  /** Raised by `followBegin`, so an older answer's `followEnd` cannot clear a newer one. */
+  #followEpoch = 0;
 
   constructor(core: BoardCore, options: AgentOptions = {}) {
     this.core = core;
@@ -190,6 +207,31 @@ export class BoardAgent {
     this.#options.hand?.cancel();
   }
 
+  /**
+   * Starts following for one answer (a talk, a circle, a lesson turn, or one direct call). The number it returns is
+   * passed to `followEnd`: a newer answer raises it, and the older end does nothing.
+   */
+  followBegin(): number {
+    this.#followEpoch++;
+    if (this.#options.follow === false) this.#follow = 'released';
+    else this.#adopt();
+    return this.#followEpoch;
+  }
+
+  /** Ends the follow `followBegin` started, when no newer answer has begun. */
+  followEnd(ticket: number): void {
+    if (ticket !== this.#followEpoch) return;
+    this.#follow = 'idle';
+  }
+
+  /** Pans so a working point that has left the view sits in the middle. A point already in view does not move the camera. */
+  followTip(at: { readonly x: number; readonly y: number }): void {
+    if (!this.#stillFollowing()) return;
+    if (pointInView(this.#view(), at)) return;
+    const zoom = this.core.camera?.zoom ?? 1;
+    this.#place(panPose(at, this.#size(), zoom));
+  }
+
   #view(): Bounds {
     if (this.#options.view !== undefined) return this.#options.view();
     const camera = this.core.camera;
@@ -208,15 +250,22 @@ export class BoardAgent {
     const gesture = request.gesture ?? beginGesture(this.core, 'model');
     const call: CallState = { gesture, allowForeign: request.allowForeign === true, last: this.#last, stopped: stoppedNow };
     const o = this.#options;
+    // a call outside an answer (a test, one tool call) follows on its own and ends when the call ends
+    const opened = this.#follow === 'idle';
+    const ticket = opened ? this.followBegin() : 0;
     const env = {
       view: () => this.#view(),
-      viewSize: () => o.viewSize?.() ?? DEFAULT_SIZE,
+      viewSize: () => this.#size(),
       clock: () => o.clock?.() ?? 0,
       reducedMotion: () => o.reducedMotion?.() === true,
       ...(o.figures !== undefined ? { figures: o.figures } : {}),
       ...(o.hand !== undefined ? { hand: o.hand } : {}),
       ...(o.onPoint !== undefined ? { onPoint: o.onPoint } : {}),
-      ...(o.onHand !== undefined ? { onHand: o.onHand } : {}),
+      onHand: (at: { readonly x: number; readonly y: number }) => {
+        this.followTip(at);
+        o.onHand?.(at);
+      },
+      onCamera: () => this.#claimFollow(),
     };
     try {
       for (const action of actions) {
@@ -225,12 +274,76 @@ export class BoardAgent {
           continue;
         }
         results.push(await applyAction(this.core, action, call, env));
+        this.#releaseIfTaken();
       }
+      this.#frameNew(results, actions);
     } finally {
       this.#last = call.last;
       if (own) gesture.commit();
+      if (opened) this.followEnd(ticket);
       sendIfAble(this.#machine, 'done');
     }
     return ok(results);
+  }
+
+  #size(): { readonly w: number; readonly h: number } {
+    return this.#options.viewSize?.() ?? DEFAULT_SIZE;
+  }
+
+  /** Copies the camera into the follow pose. Only called while a pose is held, or when an answer begins. */
+  #adopt(): void {
+    const camera = this.core.camera;
+    this.#follow = camera === undefined ? { x: 0, y: 0, zoom: 1 } : { x: camera.x, y: camera.y, zoom: camera.zoom };
+  }
+
+  /** The agent's own camera move (a pan, a frame, a `camera` or `page` action) becomes the pose we expect next. */
+  #claimFollow(): void {
+    if (typeof this.#follow !== 'object') return;
+    this.#adopt();
+  }
+
+  /** True while this answer is still following and the camera is still the pose we set. A mismatch releases it. */
+  #stillFollowing(): boolean {
+    if (typeof this.#follow !== 'object') return false;
+    if (this.#poseMatches()) return true;
+    this.#follow = 'released';
+    return false;
+  }
+
+  #poseMatches(): boolean {
+    if (typeof this.#follow !== 'object') return false;
+    const camera = this.core.camera;
+    if (camera === undefined) return this.#follow.x === 0 && this.#follow.y === 0 && this.#follow.zoom === 1;
+    return camera.x === this.#follow.x && camera.y === this.#follow.y && camera.zoom === this.#follow.zoom;
+  }
+
+  #releaseIfTaken(): void {
+    if (typeof this.#follow !== 'object') return;
+    if (!this.#poseMatches()) this.#follow = 'released';
+  }
+
+  /** Frames the shapes this call left on the current page, when they are not already fully in view. */
+  #frameNew(results: readonly ActionResult[], actions: readonly unknown[]): void {
+    if (!this.#stillFollowing() || cameraSucceeded(actions, results)) return;
+    let bounds: Bounds | undefined;
+    const page = this.core.pages.current;
+    for (const result of results) {
+      if (!result.ok || result.id === undefined) continue;
+      const rec = this.core.store.get(result.id);
+      if (rec === undefined || !isShape(rec) || rec.page !== page) continue;
+      bounds = unionBounds(bounds, shapeBounds(rec, this.core.store.kinds));
+    }
+    if (bounds === undefined || insideView(this.#view(), bounds)) return;
+    const zoom = this.core.camera?.zoom ?? 1;
+    this.#place(framePose(bounds, this.#size(), zoom));
+  }
+
+  #place(pose: FollowPose): void {
+    const camera = this.core.camera;
+    const page = this.core.pages.current;
+    if (camera === undefined || page === null || typeof this.#follow !== 'object') return;
+    camera.moveTo(pose.x, pose.y, pose.zoom, this.#options.clock?.() ?? 0);
+    this.core.cameras.save(page);
+    this.#claimFollow();
   }
 }

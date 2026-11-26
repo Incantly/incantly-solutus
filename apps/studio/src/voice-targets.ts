@@ -47,6 +47,7 @@ function boardInView(view: BoardView): LessonBoard {
 export function boardConversation(view: BoardView): ConversationTarget {
   /** The gesture of the answer in progress (data: committed and dropped by `finish`, or by the next `begin`). */
   const answer: { gesture?: Gesture } = {};
+  let ticket = 0;
   const settle = (): void => {
     answer.gesture?.commit();
     delete answer.gesture;
@@ -56,6 +57,7 @@ export function boardConversation(view: BoardView): ConversationTarget {
     begin() {
       settle();
       view.agent.runner.forget();
+      ticket = view.agent.runner.followBegin();
       answer.gesture = beginGesture(view.agent.runner.core, 'model');
     },
     async actions(actions) {
@@ -64,6 +66,7 @@ export function boardConversation(view: BoardView): ConversationTarget {
     finish(stopped) {
       if (stopped) view.agent.runner.stop();
       settle();
+      view.agent.runner.followEnd(ticket);
     },
   };
 }
@@ -76,6 +79,7 @@ export function boardConversation(view: BoardView): ConversationTarget {
 export function boardLesson(view: BoardView): LessonTarget {
   /** The figure card the lesson made last (data: the shape's id), forgotten when a turn begins. */
   const made: { last?: string } = {};
+  let ticket = 0;
   return {
     context() {
       const card = cardOf(view, made.last);
@@ -89,6 +93,10 @@ export function boardLesson(view: BoardView): LessonTarget {
     begin() {
       view.agent.runner.forget();
       delete made.last;
+      ticket = view.agent.runner.followBegin();
+    },
+    end() {
+      view.agent.runner.followEnd(ticket);
     },
     lines(lines) {
       cardOf(view, made.last)?.app?.run(lines, { independent: true });

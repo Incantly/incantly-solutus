@@ -53,6 +53,8 @@ export interface ActionEnv {
   readonly hand?: HandPlayer;
   readonly onPoint?: (box: Bounds) => void;
   readonly onHand?: (at: { readonly x: number; readonly y: number }) => void;
+  /** The action moved the camera itself (`camera`, or a `page` change). Follow claims that pose as its own. */
+  readonly onCamera?: () => void;
 }
 
 /** A store `limit` is the agent's `agent_refused` (errors.md); any other error stays as it is. */
@@ -378,10 +380,11 @@ function cameraTo(core: BoardCore, a: Extract<BoardAction, { op: 'camera' }>, ca
   const c = centreOf(bounds);
   camera.moveTo(c.x - size.w / zoom / 2, c.y - size.h / zoom / 2, zoom, env.clock());
   core.cameras.save(page);
+  env.onCamera?.();
   return done();
 }
 
-function pageTo(core: BoardCore, a: Extract<BoardAction, { op: 'page' }>, call: CallState): ActionResult {
+function pageTo(core: BoardCore, a: Extract<BoardAction, { op: 'page' }>, call: CallState, env: ActionEnv): ActionResult {
   const list = core.pages.list();
   const at = list.findIndex((p) => p.id === core.pages.current);
   let target: string | undefined;
@@ -400,6 +403,7 @@ function pageTo(core: BoardCore, a: Extract<BoardAction, { op: 'page' }>, call: 
   const moved = core.pages.goToPage(target);
   if (!moved.ok) return asRefused(moved);
   call.last = undefined;
+  env.onCamera?.();
   return done(target);
 }
 
@@ -433,7 +437,7 @@ export async function applyAction(core: BoardCore, raw: unknown, call: CallState
       case 'camera':
         return cameraTo(core, a, call, env);
       case 'page':
-        return pageTo(core, a, call);
+        return pageTo(core, a, call, env);
     }
   } catch (e) {
     return boardError('internal', `The "${a.op}" action failed: ${e instanceof Error ? e.message : 'unknown reason'}.`, { detail: { op: a.op } });
