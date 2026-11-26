@@ -1286,7 +1286,7 @@ class Compiler {
         }
         p = c;
       }
-      return { ops, residual, test, poly: p };
+      return { ops, residual, test, poly: p, ...(n.identicallyTrue === true ? { identicallyTrue: true as const } : {}) };
     };
   }
 
@@ -1519,6 +1519,7 @@ export function compileLine(line: CheckedLine, opts: CompileOptions = {}): Resul
             arity: params.length,
             ret,
             reason: undefined,
+            ...(expr.n === 'cmp' && expr.identicallyTrue === true ? { identicallyTrue: true as const } : {}),
             call: (...xs: number[]) => {
               const saved = env.reason;
               const savedCause = env.cause;

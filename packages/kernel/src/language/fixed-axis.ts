@@ -60,7 +60,7 @@ function commandAxis(node: TNode & { n: 'command' }): FixedAxis | undefined {
 }
 
 /** Same shape, literals, names and object ids. Source positions are not part of the text. */
-function sameTree(a: TNode, b: TNode): boolean {
+export function sameTree(a: TNode, b: TNode): boolean {
   if (a.n !== b.n || a.unit !== b.unit) return false;
   switch (a.n) {
     case 'num':

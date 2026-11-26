@@ -61,11 +61,43 @@ describe('implicit curves: Curve(F == G) (6)', () => {
     near(implicitAt(f, 'wc', 0, 0), 0, 1e-12);
   });
 
-  // to be implemented: the notice is raised as kind identically_true with a code in the registry's format; the test reads the code field
-  it.skip('F - G identically zero (x == x) is defined with an identically_true notice', () => {
+});
+
+describe('identically true relations (13, errors 2)', () => {
+  const identicalNotices = (r: ReturnType<typeof ok>) => r.notices.filter((n) => n.kind === 'identically_true');
+  const identicallyTrue = (f: ReturnType<typeof fig>, name: string): unknown =>
+    (val<{ identicallyTrue?: unknown }>(f, name)).identicallyTrue;
+
+  it('Curve(x == x) is defined, with one identically_true warning, and identicallyTrue true', () => {
     const f = fig([]);
     const r = ok(f, 'tc = Curve(x == x)');
-    expect(noticeCodes(r)).toContain('identically_true');
+    expect(reasonOf(f, 'tc')).toBeUndefined();
+    expect(f.get('tc')?.type).toBe('Curve');
+    expect(identicalNotices(r)).toEqual([
+      expect.objectContaining({ kind: 'identically_true', severity: 'warning' }),
+    ]);
+    expect(identicallyTrue(f, 'tc')).toBe(true);
+  });
+
+  it('an empty curve x^2 + y^2 == -1 is defined and has no identically_true notice', () => {
+    const f = fig([]);
+    const r = ok(f, 'ec = Curve(x^2 + y^2 == -1)');
+    expect(reasonOf(f, 'ec')).toBeUndefined();
+    expect(f.get('ec')?.type).toBe('Curve');
+    expect(identicalNotices(r)).toEqual([]);
+    expect(identicallyTrue(f, 'ec')).not.toBe(true);
+  });
+
+  it('sin(x) == sin(x) has one identically_true warning; sin(x)^2 + cos(x)^2 == 1 does not', () => {
+    const f = fig([]);
+    const same = ok(f, 'ss = Curve(sin(x) == sin(x))');
+    expect(identicalNotices(same)).toEqual([
+      expect.objectContaining({ kind: 'identically_true', severity: 'warning' }),
+    ]);
+    expect(identicallyTrue(f, 'ss')).toBe(true);
+    const pyth = ok(f, 'py = Curve(sin(x)^2 + cos(x)^2 == 1)');
+    expect(identicalNotices(pyth)).toEqual([]);
+    expect(identicallyTrue(f, 'py')).not.toBe(true);
   });
 });
 

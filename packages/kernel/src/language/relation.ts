@@ -3,6 +3,7 @@
  * x and y to a polynomial of degree at most 2 with expression coefficients, and classification
  * into Line, Circle, Curve or Region.
  */
+import { sameTree } from './fixed-axis';
 import type { PolyNodes, RelTree, RelationShape, TNode } from './tnode';
 import { T } from './types';
 
@@ -184,10 +185,17 @@ const co = (p: Poly, i: number, j: number): TNode => p.get(key(i, j)) ?? num(0);
 export interface Classified {
   readonly shape: RelationShape;
   readonly poly?: PolyNodes;
+  /** The comparison was proved true for every real x and y. */
+  readonly identicallyTrue?: true;
 }
 
 /** Classify a relation tree. A single `==` of degree <= 2 is a Line, Circle or conic. */
 export function classify(tree: RelTree, sx: number, sy: number): Classified {
+  const out = classifyShape(tree, sx, sy);
+  return identicallyTrue(tree, sx, sy) ? { ...out, identicallyTrue: true } : out;
+}
+
+function classifyShape(tree: RelTree, sx: number, sy: number): Classified {
   if (tree.t !== 'cmp' || tree.ops.length !== 1) return { shape: 'region' };
   const op = tree.ops[0];
   const l = polyOf(tree.operands[0] as TNode, sx, sy);
@@ -214,6 +222,107 @@ export function classify(tree: RelTree, sx: number, sy: number): Classified {
     if (r2 !== undefined && r2 > 0) return { shape: 'circle', poly: polyNodes };
   }
   return { shape: 'conic', poly: polyNodes };
+}
+
+const REL_TOL = 1e-12;
+
+/**
+ * True when one comparison is proved for every real x and y: the same tree on `==`, `>=` or `<=`,
+ * a zero polynomial of any degree, or a numeric quadratic of degree at most 2. A name as a
+ * coefficient blocks the quadratic proof. Nothing is sampled.
+ */
+export function identicallyTrue(tree: RelTree, sx: number, sy: number): boolean {
+  if (tree.t !== 'cmp' || tree.ops.length !== 1) return false;
+  const op = tree.ops[0];
+  const left = tree.operands[0];
+  const right = tree.operands[1];
+  if (op === undefined || left === undefined || right === undefined) return false;
+  if ((op === '==' || op === '>=' || op === '<=') && sameTree(left, right)) return true;
+  const lp = polyOf(left, sx, sy);
+  const rp = polyOf(right, sx, sy);
+  const p = lp && rp ? pAdd(lp, rp, true) : null;
+  if (!p) return false;
+  if (polynomialZero(p)) return op === '==' || op === '>=' || op === '<=';
+  if (degreeOf(p) > 2) return false;
+  const coef = numericQuadratic(p);
+  if (!coef) return false;
+  return quadraticAlways(coef, op);
+}
+
+function polynomialZero(p: Poly): boolean {
+  for (const v of p.values()) {
+    if (!isNum(v) || v.v !== 0) return false;
+  }
+  return true;
+}
+
+/** The six coefficients of `A x^2 + B xy + C y^2 + D x + E y + F`, or undefined when one is not a finite number. */
+function numericQuadratic(p: Poly): readonly [number, number, number, number, number, number] | undefined {
+  const read = (i: number, j: number): number | undefined => {
+    const n = co(p, i, j);
+    return isNum(n) && Number.isFinite(n.v) ? n.v : undefined;
+  };
+  const A = read(2, 0);
+  const B = read(1, 1);
+  const C = read(0, 2);
+  const D = read(1, 0);
+  const E = read(0, 1);
+  const F = read(0, 0);
+  if (A === undefined || B === undefined || C === undefined || D === undefined || E === undefined || F === undefined) return undefined;
+  return [A, B, C, D, E, F];
+}
+
+/** `<=` and `<` are the same tests on the negated coefficients. `==` holds only for the zero polynomial. */
+function quadraticAlways(coef: readonly [number, number, number, number, number, number], op: string): boolean {
+  let A = coef[0];
+  let B = coef[1];
+  let C = coef[2];
+  let D = coef[3];
+  let E = coef[4];
+  let F = coef[5];
+  if (op === '<' || op === '<=') {
+    A = -A;
+    B = -B;
+    C = -C;
+    D = -D;
+    E = -E;
+    F = -F;
+  } else if (op !== '>' && op !== '>=' && op !== '==') {
+    return false;
+  }
+  const scale = Math.max(1, Math.abs(A), Math.abs(B), Math.abs(C), Math.abs(D), Math.abs(E), Math.abs(F));
+  const tol = REL_TOL * scale;
+  const snap = (v: number): number => (Math.abs(v) < tol ? 0 : v);
+  A = snap(A);
+  B = snap(B);
+  C = snap(C);
+  D = snap(D);
+  E = snap(E);
+  F = snap(F);
+  if (op === '==') return A === 0 && B === 0 && C === 0 && D === 0 && E === 0 && F === 0;
+  const strict = op === '>' || op === '<';
+  if (A === 0 && B === 0 && C === 0) {
+    if (D !== 0 || E !== 0) return false;
+    return strict ? F > 0 : F >= 0;
+  }
+  const halfB = B / 2;
+  const det = A * C - halfB * halfB;
+  if (A < 0 || C < 0 || det < 0) return false;
+  if (A > 0 && det > 0) return minHolds(F - (C * D * D - B * D * E + A * E * E) / (4 * det), strict);
+  if (A > 0 && det === 0) {
+    // Flat in one direction, including a perfect square such as (x + y)^2. A nonzero coefficient there is unbounded.
+    if (A * E - halfB * D !== 0) return false;
+    return minHolds(F - (D * D) / (4 * A), strict);
+  }
+  if (C > 0 && A === 0) {
+    if (D !== 0) return false;
+    return minHolds(F - (E * E) / (4 * C), strict);
+  }
+  return false;
+}
+
+function minHolds(min: number, strict: boolean): boolean {
+  return strict ? min > 0 : min >= 0;
 }
 
 /* ------------------------- symbolic radius squared ------------------------- */

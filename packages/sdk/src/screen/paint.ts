@@ -519,6 +519,8 @@ function polygon(ctx: Ctx, vp: Viewport, pts: readonly Pt[], c: string, fill: nu
 
 function paintCurveLike(ctx: Ctx, vp: Viewport, v: unknown, c: string): void {
   const o = v as Record<string, unknown>;
+  // proved true at every point: the warning is why the picture is blank
+  if (o['identicallyTrue'] === true) return;
   // a relation in x and y: an equation is traced, an inequality filled
   if (typeof o['residual'] === 'function' && Array.isArray(o['ops'])) {
     const ops = o['ops'] as string[];

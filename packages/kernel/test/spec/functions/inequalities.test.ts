@@ -12,13 +12,13 @@ import {
   near,
   nearList,
   nearPt,
-  noticeCodes,
   num,
   ok,
   pt,
   reasonOf,
   setFree,
   useTimeout,
+  val,
   within,
 } from './helpers';
 
@@ -181,11 +181,71 @@ describe('Area(q, x0, x1, y0, y1): measure of the region in a rectangle (7)', ()
     expect(Number.isFinite(num(f, 'A'))).toBe(true);
   });
 
-  // to be implemented: Area does not raise the identically_true notice yet
-  it.skip('the notices of an inequality that is true everywhere include identically_true', () => {
+});
+
+describe('identically true predicates (13, errors 2)', () => {
+  const identicalNotices = (r: ReturnType<typeof ok>) => r.notices.filter((n) => n.kind === 'identically_true');
+  const identicallyTrue = (f: ReturnType<typeof fig>, name: string): unknown =>
+    (val<{ identicallyTrue?: unknown }>(f, name)).identicallyTrue;
+
+  it('x^2 >= 0 succeeds with one identically_true warning and identicallyTrue true', () => {
     const f = fig([]);
     const r = ok(f, 'tt(x, y) = x^2 >= 0');
-    expect(noticeCodes(r)).toContain('identically_true');
+    expect(reasonOf(f, 'tt')).toBeUndefined();
+    expect(identicalNotices(r)).toEqual([
+      expect.objectContaining({ kind: 'identically_true', severity: 'warning' }),
+    ]);
+    expect(identicallyTrue(f, 'tt')).toBe(true);
+  });
+
+  it('x^2 + y^2 < 4 has no identically_true notice', () => {
+    const f = fig([]);
+    const r = ok(f, 'qd(x, y) = x^2 + y^2 < 4');
+    expect(identicalNotices(r)).toEqual([]);
+    expect(identicallyTrue(f, 'qd')).not.toBe(true);
+  });
+
+  it('x > x has no notice, and x >= x has one identically_true warning', () => {
+    const f = fig([]);
+    const gt = ok(f, 'gt(x) = x > x');
+    expect(gt.notices).toEqual([]);
+    expect(identicallyTrue(f, 'gt')).not.toBe(true);
+    const ge = ok(f, 'ge(x) = x >= x');
+    expect(identicalNotices(ge)).toEqual([
+      expect.objectContaining({ kind: 'identically_true', severity: 'warning' }),
+    ]);
+    expect(identicallyTrue(f, 'ge')).toBe(true);
+  });
+
+  it('x^2 >= a has no notice when a is a number object', () => {
+    const f = fig('a = 0');
+    const r = ok(f, 'qa(x) = x^2 >= a');
+    expect(r.notices).toEqual([]);
+    expect(identicallyTrue(f, 'qa')).not.toBe(true);
+  });
+
+  it('x^2 + 0.000001 x >= 0 succeeds with no identically_true notice', () => {
+    const f = fig([]);
+    const r = ok(f, 'q1(x, y) = x^2 + 0.000001 x >= 0');
+    expect(reasonOf(f, 'q1')).toBeUndefined();
+    expect(identicalNotices(r)).toEqual([]);
+    expect(identicallyTrue(f, 'q1')).not.toBe(true);
+  });
+
+  it('x^2 + 1e-12 y >= 0 succeeds with no identically_true notice', () => {
+    const f = fig([]);
+    const r = ok(f, 'q2(x, y) = x^2 + 1e-12 y >= 0');
+    expect(reasonOf(f, 'q2')).toBeUndefined();
+    expect(identicalNotices(r)).toEqual([]);
+    expect(identicallyTrue(f, 'q2')).not.toBe(true);
+  });
+
+  it('x^2 + (2 + 1e-13) x y + y^2 >= 0 succeeds with no identically_true notice', () => {
+    const f = fig([]);
+    const r = ok(f, 'q3(x, y) = x^2 + (2 + 1e-13) * x * y + y^2 >= 0');
+    expect(reasonOf(f, 'q3')).toBeUndefined();
+    expect(identicalNotices(r)).toEqual([]);
+    expect(identicallyTrue(f, 'q3')).not.toBe(true);
   });
 });
 
