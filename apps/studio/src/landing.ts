@@ -1,8 +1,14 @@
 /**
- * The first page of the studio (`.kiro/specs/studio-landing`). It explains each part and opens the studio on Start.
- * A `?mode=`, `?start`, or shared `#f=` address never shows it: `main.ts` opens the studio directly.
+ * The first page of the studio (`.kiro/specs/studio-landing`). Each part shows that app itself, running one of the
+ * studio's examples. A `?mode=`, `?start`, or shared `#f=` address never shows this page: `main.ts` opens the studio.
  */
 import type { AppModeId } from '@incantly/modes';
+import { onCasEngine } from '@incantly/kernel';
+import { createApp } from '@incantly/sdk';
+import type { MountedApp, UiOptions } from '@incantly/sdk';
+import { createBoard } from '@incantly/board';
+import { EXAMPLES } from './examples';
+import { loadCasEngine, onCasAnswer } from './registry';
 
 export interface LandingOptions {
   /** Opens the studio. With no mode, the whole studio (Classic). */
@@ -13,71 +19,133 @@ interface Part {
   readonly title: string;
   readonly purpose: string;
   readonly text: string;
-  readonly example: readonly string[];
   readonly mode?: AppModeId;
+  /** The app the stage runs. The Board stage is the board, not a figure. */
+  readonly show: AppModeId | 'board';
+  readonly example?: string;
+  readonly script?: string;
+  /** Geometry's tool strip would cover the figure, so that stage only shows the construction. */
+  readonly readOnly?: boolean;
+  /** Exact algebra waits for the engine, then the figure is drawn again. */
+  readonly algebra?: boolean;
 }
+
+const QUIET: Partial<UiOptions> = {
+  menu: false,
+  undoRedo: false,
+  clockBar: false,
+  zoomButtons: false,
+  resetButton: false,
+  dragPoints: true,
+  panAndZoom: true,
+  fileFeatures: false,
+  borderColor: 'none',
+  background: '#ffffff',
+};
+
+/** A circle and its tangent: the figure a spoken lesson draws (the embed demo's first figure). */
+const LESSON = ['@view -5 5 -3.5 3.5', 'c = Circle((0, 0), 2)', 'P = PointOn(c, 0.6)', 'T = Tangent(P, c)'].join('\n');
+/** The algebra example's visible lines: the factor, the roots, and the circle. The heavy factorisations stay out of this page. */
+const ALGEBRA = [
+  'p = Expr(x^2 - 5x + 6)',
+  'fp = Factor(p)',
+  'label = FormulaText(fp) with at = (-6, 4), anchor = nw, size = 22',
+  'circ = Expr(x^2 + y^2 == 9) with plot = true',
+].join('\n');
+
+const linesOf = (id: string): string => EXAMPLES.find((e) => e.id === id)?.lines.join('\n') ?? '';
+
+/** The algebra engine arrives after the figure. Recompute what was waiting, and paint. */
+const settleAlgebra = (app: MountedApp): (() => void) => {
+  let dead = false;
+  const refresh = (): void => {
+    if (dead) return;
+    const ids = app.figure.objects().filter((o) => !o.cell.defined && o.cell.reason === 'pending').map((o) => o.id);
+    if (ids.length === 0) return;
+    app.figure.recompute(ids);
+    app.figure.flush();
+    app.screen.paint();
+  };
+  const stop = onCasAnswer(refresh);
+  onCasEngine(refresh);
+  return () => {
+    dead = true;
+    stop();
+  };
+};
 
 const PARTS: readonly Part[] = [
   {
     title: 'A spoken lesson',
     purpose: 'talk, and the figure is drawn',
-    text: 'Ask in words. The teacher draws the figure as it speaks, then asks you a question. The same lesson can run on the board.',
-    example: ['You: Take a circle of radius 2.', 'c = Circle((0, 0), 2)', 'P = PointOn(c)', 'tg = Tangent(P, c)'],
+    text: 'Ask in words. The teacher draws the figure as it speaks, then asks you a question.',
+    show: 'geometry',
+    script: LESSON,
+    readOnly: true,
   },
   {
     title: 'Graphing',
     purpose: 'draw functions',
-    text: 'A function, its derivative, and the area under it. A slider moves the curve while you drag.',
-    example: ['a = 1 in -3..3 step 0.1', 'f(x) = x^3 / 4 - a*x + 1', 'g = Derivative(f)', 'R = AreaUnder(f, -2, 2)'],
+    text: 'The curve, its derivative, and the shaded area. Drag a slider and the picture moves.',
+    show: 'graphing',
+    example: 'functions',
     mode: 'graphing',
   },
   {
     title: 'Geometry',
     purpose: 'build and measure',
-    text: 'Points, a polygon, and the circle and height that belong to it. Drag a point and the measures follow.',
-    example: ['A = (-3, -1)', 'B = (4, -2)', 'C = (1, 4)', 'tri = Polygon(A, B, C)', 'area = Area(tri)'],
+    text: 'A triangle, the circle on one side, and the height. Drag a corner and the measures follow.',
+    show: 'geometry',
+    example: 'geometry',
+    readOnly: true,
     mode: 'geometry',
   },
   {
     title: 'Scientific',
     purpose: 'calculate with keys',
-    text: 'One column of calculations. Each row keeps what you typed and the result, as a fraction or a decimal.',
-    example: ['3/5 + 1/4', 'Ans * 2'],
+    text: 'Each row keeps what you typed and the result, as a fraction or a decimal.',
+    show: 'scientific',
+    example: 'sci-fractions',
     mode: 'scientific',
   },
   {
     title: 'Probability',
     purpose: 'explore chance',
-    text: 'A distribution, the shaded chance between two values, and a chart of a sample. Drag the mean and the curve moves.',
-    example: ['d = Normal(0, 1)', 'p = Prob(d, -1, 1)', 'rolls = Sample(DiscreteUniform(1, 6), 60)', 'tally = BarChart(rolls, 1)'],
+    text: 'A distribution with the chance shaded, and a chart of a sample beside it.',
+    show: 'probability',
+    example: 'probability',
     mode: 'probability',
   },
   {
     title: 'Board',
     purpose: 'write and draw',
-    text: 'An endless page for pen, shapes, and handwriting. A figure card on the page is a live graph, calculator, or construction. The agent writes by hand and keeps new work on screen.',
-    example: ['f(x) = (x - 1)^2 - 2', 'a card, an arrow, and a note beside it'],
+    text: 'The page and the pen. Open it to write and to put a live graph on the page.',
+    show: 'board',
     mode: 'notes',
   },
   {
     title: '3D',
     purpose: 'space and surfaces',
-    text: 'Solids, planes, and a cut you can move. Press play and a point can climb a path, or a body can fall.',
-    example: ['A = (0, 0, 0)', 'B = (3, 0, 0)', 'C = (0, 1, 0)', 'k = Cube(A, B, C)', 'p = Plane((1.5, 1.5, 1.5), Vector(1, 1, 1))', 'cut = Intersect(p, k)'],
+    text: 'A solid you can turn, and the face where a plane cuts it.',
+    show: 'graphing3d',
+    example: 'cube-slice',
     mode: 'graphing3d',
   },
   {
     title: 'CAS',
     purpose: 'exact algebra',
-    text: 'Factor, solve, and rewrite, and the result stays exact. The same line can become a function on the graph.',
-    example: ['p = Expr(x^2 - 5x + 6)', 'fp = Factor(p)', 's = Solve(Expr(p == 0), x)'],
+    text: 'Factor and solve, and the result stays exact.',
+    show: 'classic',
+    script: ALGEBRA,
+    algebra: true,
     mode: 'cas',
   },
   {
     title: 'Classic',
     purpose: 'everything',
-    text: 'Algebra, the graph, statistics, lists, and motion together. This is the studio Start opens.',
-    example: ['xs = Seq(k, k, 1, 8)', 'M = Matrix([[2, 1], [1, 3]])', 'det = Determinant(M)', 'f(x) = sin(x - t)'],
+    text: 'The list and the graph together. This is the studio Start opens.',
+    show: 'classic',
+    example: 'functions',
     mode: 'classic',
   },
 ];
@@ -89,34 +157,73 @@ const h = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, 
   return node;
 };
 
-const startButton = (onStart: LandingOptions['onStart'], label: string): HTMLButtonElement => {
-  const button = h('button', { type: 'button', class: 'land-start' }, label);
-  button.addEventListener('click', () => onStart());
-  return button;
-};
+interface Live {
+  destroy(): void;
+}
 
-/** Fills `root` with the landing page. Start and Open call `onStart`. */
+/** Fills `root` with the landing page. Start and Open close these views and call `onStart`. */
 export function mountLanding(root: HTMLElement, options: LandingOptions): void {
   const { onStart } = options;
+  const live: Live[] = [];
+  let closed = false;
+  const close = (mode?: AppModeId): void => {
+    if (closed) return;
+    closed = true;
+    for (const one of live) one.destroy();
+    onStart(mode);
+  };
+  const open = (slot: HTMLElement, part: Part): void => {
+    if (part.show === 'board') {
+      const made = createBoard({ container: slot, canvas2dOnly: true, onError: () => undefined });
+      if (!made.ok) return;
+      const board = made.value;
+      if (closed) board.dispose();
+      else live.push({ destroy: () => board.dispose() });
+      return;
+    }
+    const script = part.script ?? (part.example === undefined ? '' : linesOf(part.example));
+    if (part.algebra === true) void loadCasEngine();
+    void createApp({
+      container: slot,
+      mode: part.show,
+      script,
+      readOnly: part.readOnly === true,
+      size: { width: 'fill', height: 'fill' },
+      ui: QUIET,
+    }).then((app) => {
+      if (closed) {
+        app.destroy();
+        return;
+      }
+      const stop = part.algebra === true ? settleAlgebra(app) : undefined;
+      live.push({ destroy: () => { stop?.(); app.destroy(); } });
+    }, () => undefined);
+  };
+  const stage = (part: Part, now: boolean): HTMLElement => {
+    const slot = h('div', { class: 'land-slot' });
+    const box = h('div', { class: 'land-stage' }, slot);
+    box.setAttribute('aria-label', part.title);
+    const run = (): void => open(slot, part);
+    if (now) run();
+    else {
+      const watch = new IntersectionObserver((entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        watch.disconnect();
+        run();
+      }, { rootMargin: '240px' });
+      watch.observe(box);
+    }
+    return box;
+  };
   const sections = h('div', { class: 'land-sections' });
-  for (const part of PARTS) {
-    const open = h('button', { type: 'button', class: 'land-open' }, part.mode === undefined ? 'Open the studio' : `Open ${part.title}`);
-    if (part.mode !== undefined) open.dataset['mode'] = part.mode;
-    open.addEventListener('click', () => onStart(part.mode));
-    const example = h('pre', { class: 'land-example' });
-    example.append(h('code', {}, part.example.join('\n')));
-    sections.append(
-      h(
-        'article',
-        { class: 'land-card' },
-        h('p', { class: 'land-kicker' }, part.purpose),
-        h('h2', {}, part.title),
-        h('p', {}, part.text),
-        example,
-        open,
-      ),
-    );
-  }
+  PARTS.forEach((part, i) => {
+    const button = h('button', { type: 'button', class: 'land-open' }, part.mode === undefined ? 'Open the studio' : `Open ${part.title}`);
+    if (part.mode !== undefined) button.dataset['mode'] = part.mode;
+    button.addEventListener('click', () => close(part.mode));
+    const row = h('article', { class: i % 2 === 1 ? 'land-row flip' : 'land-row' }, h('div', { class: 'land-copy' }, h('p', { class: 'land-kicker' }, part.purpose), h('h2', {}, part.title), h('p', {}, part.text), button), stage(part, false));
+    sections.append(row);
+  });
+  const hero = PARTS[1] as Part;
   const page = h(
     'div',
     { class: 'landing' },
@@ -124,16 +231,21 @@ export function mountLanding(root: HTMLElement, options: LandingOptions): void {
       'header',
       { class: 'land-bar' },
       h('div', { class: 'brand' }, h('span', { class: 'logo', 'aria-hidden': 'true' }, '∿'), h('span', { class: 'brand-name' }, 'Incantly'), h('span', { class: 'brand-sub' }, 'Studio')),
-      startButton(onStart, 'Start'),
+      startButton(() => close()),
     ),
     h(
       'section',
       { class: 'land-hero' },
-      h('h1', {}, 'A live blackboard for maths and science'),
-      h('p', {}, 'Write a line and the figure is drawn. Drag a point, play a motion, or ask the teacher to draw it while it speaks. Each part below is one way in. Start opens the whole studio.'),
-      startButton(onStart, 'Start'),
+      h('div', { class: 'land-copy' }, h('h1', {}, 'A live blackboard for maths and science'), h('p', {}, 'Write a line and the figure is drawn. Each part below is that app, running one of its examples. Start opens the whole studio.'), startButton(() => close())),
+      stage(hero, true),
     ),
     sections,
   );
   root.replaceChildren(page);
 }
+
+const startButton = (run: () => void): HTMLButtonElement => {
+  const button = h('button', { type: 'button', class: 'land-start' }, 'Start');
+  button.addEventListener('click', run);
+  return button;
+};

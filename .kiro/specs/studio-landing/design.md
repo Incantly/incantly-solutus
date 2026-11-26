@@ -4,6 +4,6 @@ The page is drawn by `apps/studio/src/landing.ts` into `#app`. `main.ts` shows i
 
 There is no state machine. The page is either the landing or the studio, and Start only goes one way.
 
-The examples are lines the studio already runs (the Examples menu and the mode docs). The page is English, the same language as the source catalogue. The studio's own language switch is inside, after Start.
+Each example is that app itself, mounted in the section and running an example the studio already has. The page does not draw a second graph, calculator, or board. The page is English, the same language as the source catalogue. The studio's own language switch is inside, after Start.
 
 The embed and the notes page do not use this entry.

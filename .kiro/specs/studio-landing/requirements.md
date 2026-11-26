@@ -6,7 +6,7 @@ The first page of the studio explains what it is, then Start opens the studio.
 
 - Opening the studio with no mode and no shared figure shows a page about the studio, not the workspace.
 - The page says what the studio is, then one section for each app: Graphing, Geometry, Scientific, Probability, Board, 3D, CAS, and Classic, plus the spoken lesson.
-- Each section says what that part is for and shows a short example of a real figure.
+- Each section says what that part is for and shows that app itself, running one of its examples. The page does not draw a stand-in for the app.
 - A shared link (`#f=`) and an address with `?mode=` or `?start` open the studio directly.
 
 ## R2. Start
