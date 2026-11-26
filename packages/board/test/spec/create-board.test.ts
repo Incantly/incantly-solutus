@@ -151,12 +151,17 @@ describe('toolbar (design 10; ui.md Layout; errors.md tool_unknown)', () => {
     expect(rowIds(board)).toEqual([
       'select', 'hand', 'pen', 'highlighter', 'eraser', 'laser', 'lasso',
       'rect', 'more-shapes', 'ellipse', 'arrow', 'line', 'text', 'sticky', 'frame',
-      'image', 'figure', 'fix', 'ask', 'undo', 'redo',
+      'image', 'figures', 'fix', 'ask', 'undo', 'redo',
     ]);
     for (const id of ['triangle', 'diamond', 'star']) {
       const b = toolButton(board, id);
       expect(b, id).not.toBeNull();
       expect(b?.closest('.ib-more'), id).not.toBeNull();
+    }
+    for (const id of ['figure', 'graph', 'geometry', 'scientific', 'probability', 'space']) {
+      const b = actionButton(board, id);
+      expect(b, id).not.toBeNull();
+      expect(b?.closest('.ib-figmenu'), id).not.toBeNull();
     }
   });
 
@@ -182,9 +187,9 @@ describe('toolbar (design 10; ui.md Layout; errors.md tool_unknown)', () => {
     expect(errors).toEqual([]);
   });
 
-  it('accepts the buttons image, figure, fix, undo, redo and more-shapes as ids', () => {
-    const board = mount({ toolbar: { groups: [['pen', 'rect', 'more-shapes'], ['image', 'figure', 'fix', 'undo', 'redo']] } });
-    expect(rowIds(board)).toEqual(['pen', 'rect', 'more-shapes', 'image', 'figure', 'fix', 'undo', 'redo']);
+  it('accepts the buttons image, figure, figures, graph, fix, undo, redo and more-shapes as ids', () => {
+    const board = mount({ toolbar: { groups: [['pen', 'rect', 'more-shapes'], ['image', 'figure', 'figures', 'graph', 'fix', 'undo', 'redo']] } });
+    expect(rowIds(board)).toEqual(['pen', 'rect', 'more-shapes', 'image', 'figure', 'figures', 'graph', 'fix', 'undo', 'redo']);
     expect(errors).toEqual([]);
   });
 

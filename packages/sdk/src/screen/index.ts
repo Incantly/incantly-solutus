@@ -9,5 +9,9 @@ export * from './viewport';
 export * from './scene';
 export * from './files';
 export * from './space/index';
+export * from './figure-host';
+export * from './tool-strip';
+export * from './scientific-pane';
+export * from './prob-pane';
 /** The smoke image a grid draws (physics ui.md 7), for hosts and tests. */
 export { smokeImage } from './physics';

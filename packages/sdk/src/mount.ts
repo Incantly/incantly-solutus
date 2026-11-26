@@ -5,15 +5,22 @@
  */
 import { animatingIds, space, tracedIds } from '@incantly/kernel';
 import type { Figure } from '@incantly/kernel';
+import { MODES, compilePolicy } from '@incantly/modes';
 import { createHeadlessApp } from './app';
 import type { App, HeadlessOptions } from './app';
 import { apiError, need } from './errors';
 import type { ApiError } from './errors';
 import { frameStyleOf } from './export';
+import { sdkRegistry } from './registry';
 import type { ExportEnv, ExportOptions, ExportResult } from './export';
 import type { IncantlyFile, LoadResult } from './file';
 import { mountGraph } from './screen/graph-pane';
-import type { GraphPane } from './screen/graph-pane';
+import type { GraphPane, GraphTool } from './screen/graph-pane';
+import { mountProbCalc } from './screen/prob-pane';
+import type { ProbCalc } from './screen/prob-pane';
+import { mountScientific } from './screen/scientific-pane';
+import type { ScientificView } from './screen/scientific-pane';
+import type { ToolStrip } from './screen/tool-strip';
 import { sceneBounds } from './screen/paint';
 import { sceneOf } from './screen/scene';
 import { mountSpace } from './screen/space/space-pane';
@@ -69,7 +76,7 @@ export interface MountedApp extends App {
 
 const STYLE_ID = 'incantly-app-style';
 const CSS = `
-.inc-app{position:relative;display:flex;flex-direction:column;box-sizing:border-box;border-radius:8px;overflow:hidden;font:14px/1.4 Inter,"Segoe UI",system-ui,-apple-system,sans-serif;color:#1f2430}
+.inc-app{position:relative;display:flex;flex-direction:column;box-sizing:border-box;border-radius:8px;overflow:hidden;font:14px/1.4 Inter,"Segoe UI",system-ui,-apple-system,sans-serif;color:#1f2430;--line:#e3e6eb;--line-strong:#d5d7dd;--muted:#5b6472;--accent:#2f6fdb;--accent-soft:#e7f0ff;--ink:#1f2430;--danger:#b42318;--mono:ui-monospace,monospace;--font:inherit;--tab:#f3f5f8;--radius:8px}
 .inc-app *{box-sizing:border-box}
 .inc-top{display:flex;align-items:center;gap:4px;padding:4px 6px;border-bottom:1px solid #e3e6eb;background:#fafbfc}
 .inc-title{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -108,6 +115,61 @@ const CSS = `
 .failed-lines{padding-left:20px}
 .failed-lines code{font-size:12px;color:#5b6472}
 .failed-lines .hint{margin:2px 0 6px;color:#5b6472}
+.inc-app > .sci-view{flex:1;display:flex;flex-direction:column;width:100%;min-height:0;max-width:none;margin:0;border:0}
+.inc-app .sci-bar{display:flex;justify-content:flex-end;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.inc-app .sci-bar button{border:1px solid var(--line-strong);background:#fff;border-radius:6px;padding:3px 10px;font-size:12.5px;cursor:pointer}
+.inc-app .sci-bar button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.inc-app .sci-rows{list-style:none;margin:0;padding:0;flex:1;overflow-y:auto}
+.inc-app .sci-row{display:grid;grid-template-columns:1fr auto;padding:8px 12px;border-bottom:1px solid var(--line)}
+.inc-app .sci-row button{border:0;background:none;padding:2px 0;text-align:start;cursor:pointer;font:inherit}
+.inc-app .sci-expr{font:15px/1.4 var(--mono);color:var(--ink)}
+.inc-app .sci-result{font-size:18px;font-weight:600;text-align:end}
+.inc-app .sci-decimal{grid-column:2;text-align:end;color:var(--muted);font-size:13px}
+.inc-app .sci-row.bad .sci-result{color:var(--danger);font-weight:400;font-size:13px}
+.inc-app .sci-new{padding:8px 12px;border-top:1px solid var(--line)}
+.inc-app .sci-input{width:100%;font:16px/1.5 var(--mono);padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px}
+.inc-app .sci-error{color:var(--danger);font-size:13px;margin:4px 0 0;min-height:1em}
+.inc-app > .probcalc{flex:1;width:auto;max-width:none;min-height:0;border:0;display:flex;flex-direction:column;background:#fff}
+.inc-app .lab-head{display:flex;align-items:center;justify-content:space-between;height:36px;padding:0 8px 0 12px;border-bottom:1px solid var(--line);background:#f8f9fa}
+.inc-app .lab-head h2{margin:0;font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.inc-app .lab-body{overflow-y:auto;padding:10px 12px 16px;display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}
+.inc-app .lab-body h3{margin:6px 0 0;font-size:13px}
+.inc-app .row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}
+.inc-app .field{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--muted)}
+.inc-app .field select,.inc-app .field input{border:1px solid var(--line-strong);border-radius:6px;padding:4px 6px;background:#fff;color:var(--ink);min-width:72px}
+.inc-app .check{font-size:13px;display:inline-flex;align-items:center;gap:4px}
+.inc-app .seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line-strong);border-radius:7px;overflow:hidden}
+.inc-app .seg button{border:0;background:#fff;padding:5px 8px;font-size:12px;border-right:1px solid var(--line);cursor:pointer}
+.inc-app .seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.inc-app .lab-plot{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.inc-app .calc-plot{height:168px}
+.inc-app .calc-plot canvas{display:block;width:100%;height:100%}
+.inc-app .lab-error{color:var(--danger);font-size:12.5px;margin:0}
+.inc-app .stats{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:3px 10px;margin:0;font-size:13px}
+.inc-app .stats dt{color:var(--muted)}
+.inc-app .stats dd{margin:0;font-family:var(--mono)}
+.inc-app .lab-actions{display:flex;gap:8px}
+.inc-app .lab-lines{margin:0;padding:8px 10px;background:#f6f7f9;border-radius:6px;font:12px/1.5 var(--mono);white-space:pre-wrap}
+.inc-app .muted{color:var(--muted)}
+.inc-app .primary{background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:6px;padding:6px 12px;cursor:pointer}
+.inc-app .secondary{background:#fff;border:1px solid var(--line-strong);border-radius:6px;padding:6px 12px;cursor:pointer}
+.inc-app .bounds{align-items:flex-end}
+.inc-app .bound{display:flex;align-items:flex-end;gap:4px}
+.inc-app .end-toggle{width:26px;height:28px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;font:600 14px var(--mono);cursor:pointer}
+.inc-app .tool-strip{position:absolute;top:8px;left:8px;right:8px;display:flex;flex-wrap:wrap;gap:4px;align-items:center;z-index:3;pointer-events:none}
+.inc-app .tool-strip > *{pointer-events:auto}
+.inc-app .tool-group{display:flex;background:#fff;border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 1px 4px rgba(15,23,42,.08);overflow:hidden}
+.inc-app .strip-btn{width:32px;height:30px;border:0;background:#fff;font-size:15px;color:#374151;cursor:pointer}
+.inc-app .strip-btn.on{background:var(--accent-soft);color:var(--accent)}
+.inc-app .strip-more{width:16px;border:0;border-left:1px solid var(--line);background:#fff;font-size:9px;color:var(--muted);padding:0;cursor:pointer}
+.inc-app .tool-drawer{position:absolute;top:40px;min-width:210px;max-height:50vh;overflow-y:auto;background:#fff;border:1px solid var(--line-strong);border-radius:10px;box-shadow:0 10px 28px rgba(15,23,42,.18);padding:6px;display:flex;flex-direction:column;z-index:4}
+.inc-app .tool-drawer[hidden]{display:none}
+.inc-app .drawer-title{margin:2px 8px 4px;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.inc-app .drawer-item{display:flex;gap:8px;align-items:center;border:0;background:#fff;padding:6px 8px;border-radius:6px;text-align:left;font-size:13px;cursor:pointer}
+.inc-app .drawer-item.on{color:var(--accent);font-weight:600}
+.inc-app .tool-hint{position:absolute;left:8px;bottom:8px;margin:0;max-width:calc(100% - 16px);background:rgba(255,255,255,.95);border:1px solid var(--line-strong);border-radius:8px;padding:6px 10px;font-size:13px;z-index:3}
+.inc-app .tool-hint[hidden]{display:none}
+.inc-app .tool-entry{position:absolute;z-index:4;font:13px var(--mono);padding:4px 6px;border:1px solid var(--accent);border-radius:6px}
 `;
 
 function addStyle(doc: Document): void {
@@ -214,8 +276,11 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   };
 
   // the screen's own window: the figure's `@view` at start and after a script sets it; pans and zooms stay here
+  let graphTool: GraphTool | undefined;
+  const items = (): ReturnType<typeof sceneOf> => sceneOf(core.figure, { draggable: (o) => ui.dragPoints && core.draggable(o.name) });
   const graph = mountGraph({
-    items: () => sceneOf(core.figure, { draggable: (o) => ui.dragPoints && core.draggable(o.name) }),
+    items,
+    tool: () => graphTool,
     bounds: () => {
       const b = sceneBounds(sceneOf(core.figure));
       return b;
@@ -262,6 +327,36 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     })
     : undefined;
   if (space3) graph.element.hidden = true;
+
+  // a calculator, a probability panel, or geometry's tools: the card shows that mode, not a bare graph
+  const host = lineHost(core);
+  let sci: ScientificView | undefined;
+  let prob: ProbCalc | undefined;
+  let tools: ToolStrip | undefined;
+  if (!space3 && core.mode === 'scientific') {
+    graph.element.hidden = true;
+    sci = mountScientific(core, say);
+  } else if (!space3 && core.mode === 'probability') {
+    graph.element.hidden = true;
+    prob = mountProbCalc(host, sdkRegistry(), say, () => frameStyleOf(core), true);
+  } else if (!space3 && core.mode === 'geometry' && !core.readOnly) {
+    const policy = compilePolicy(MODES.geometry);
+    // the tool table lives in the UI package, which needs a DOM; load it only for a geometry app
+    const { mountToolStrip } = await import('./screen/tool-strip');
+    tools = mountToolStrip({
+      session: host,
+      registry: sdkRegistry(),
+      host: () => graph.element,
+      items,
+      redraw: () => graph.redraw(),
+      say,
+      flash: () => undefined,
+      viewport: () => graph.viewport,
+    });
+    tools.setAllowed((id, group) => policy.tool(id as never, group as never));
+    graphTool = tools.graphTool;
+    graph.element.append(tools.element, tools.hint);
+  }
 
   /* ------------------------------ top bar and menu ------------------------------ */
 
@@ -339,7 +434,7 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   };
 
-  element.append(top, graph.element, ...(space3 ? [space3.element] : []), clockBar, menu, status, failedDialog, shareDialog, tooNewDialog);
+  element.append(top, ...(sci ? [sci.element] : []), ...(prob ? [prob.element] : []), graph.element, ...(space3 ? [space3.element] : []), clockBar, menu, status, failedDialog, shareDialog, tooNewDialog);
   container.append(element);
 
   /* ------------------------------ keeping the screen up to date ------------------------------ */
@@ -365,6 +460,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
     }
     graph.redraw();
     space3?.redraw();
+    sci?.refresh();
+    prob?.refresh();
   };
   const offs = (['ready', 'loaded', 'modeChanged', 'added', 'removed', 'changed', 'restyled', 'renamed', 'redefined', 'cleared', 'drag', 'dragEnd', 'clockChanged', 'play', 'pause', 'undoPoint', 'undone', 'redone'] as const).map((t) => core.on(t, sync));
   // a script that sets `@view` moves the screen to it; the learner's own pans do not write lines
@@ -377,11 +474,14 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   offs.push(core.on('loaded', () => {
     const v = core.view.get();
     graph.viewport.fit({ x0: v.x0, x1: v.x1, y0: v.y0, y1: v.y1 }, 0, false);
+    tools?.figureChanged();
   }));
+  offs.push(core.on('cleared', () => tools?.figureChanged()));
 
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
-    const r = graph.element.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) core.resize(r.width, r.height);
+    const w = graph.element.clientWidth;
+    const h = graph.element.clientHeight;
+    if (w > 0 && h > 0) core.resize(w, h);
   }) : undefined;
   ro?.observe(graph.element);
 
@@ -522,6 +622,8 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
       ro?.disconnect();
       graph.dispose();
       space3?.dispose();
+      sci?.dispose();
+      tools?.dispose();
       if (statusTimer) clearTimeout(statusTimer);
       element.remove();
       coreDestroy();
@@ -535,4 +637,29 @@ export async function createApp(opts: AppOptions): Promise<MountedApp> {
   space3?.paint();
   sync();
   return mounted;
+}
+
+/** The figure a calculator, a probability panel, or the geometry tools write into. */
+function lineHost(core: App): {
+  readonly figure: Figure;
+  applyLines(lines: readonly string[], label: string, mode?: 'independent' | 'atomic'): { ok: true; message: string } | { ok: false; error: { message: string } };
+  delete(name: string): { ok: true; message: string } | { ok: false; error: { message: string } };
+} {
+  return {
+    get figure() {
+      return core.figure;
+    },
+    applyLines(lines, label, mode = 'independent') {
+      const r = core.as('user', () => core.figure.applyBatch(lines, { group: label, mode, origin: 'host' }));
+      if (mode === 'atomic' && !r.ok) {
+        const bad = r.results.find((x) => !x.ok);
+        return { ok: false, error: { message: bad && !bad.ok ? bad.message : 'That did not apply.' } };
+      }
+      return { ok: true, message: `${label}: ${r.applied} lines applied` };
+    },
+    delete(name) {
+      const r = core.remove(name);
+      return r.ok ? { ok: true, message: `Deleted ${name}` } : { ok: false, error: { message: r.message } };
+    },
+  };
 }

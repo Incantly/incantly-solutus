@@ -198,6 +198,24 @@ describe('eraser (design 6.4, B8)', () => {
     expect(copyOf(strokes(rig)[0] as ShapeRecord)).toEqual(kept);
   });
 
+  it('partial mode cuts a long segment at the eraser, and leaves the ink the ring did not touch', () => {
+    const rig = makeRig();
+    drawPath(rig, line(0, 100, 200, 100, 1));
+    rig.styles.eraser = { mode: 'partial', radius: 6 };
+    rig.host.setTool('eraser');
+    drawPath(rig, line(100, 80, 100, 120, 4), {}, 5000);
+    const pieces = strokes(rig);
+    expect(pieces).toHaveLength(2);
+    const [left, right] = [...pieces].sort((a, b) => Math.min(...xsOf(a)) - Math.min(...xsOf(b))) as [ShapeRecord, ShapeRecord];
+    const leftEnd = Math.max(...xsOf(left));
+    const rightStart = Math.min(...xsOf(right));
+    // the ring is 6 across the centre, plus the stroke's own half width, so the cut sits just beside it
+    expect(leftEnd).toBeGreaterThan(85);
+    expect(leftEnd).toBeLessThan(96);
+    expect(rightStart).toBeGreaterThan(104);
+    expect(rightStart).toBeLessThan(115);
+  });
+
   it('partial mode: a stroke wiped from end to end leaves no piece', () => {
     const rig = makeRig();
     drawPath(rig, line(0, 100, 40, 100, 8));

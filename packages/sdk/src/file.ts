@@ -221,6 +221,25 @@ export function defaultSettings(): FileSettings {
   };
 }
 
+/** Modes whose graphics are not the graphing frame. A new app of one of these uses that mode's axes, grid, and window until a line sets them. */
+const MODE_FRAME: ReadonlySet<AppModeId> = new Set(['geometry', 'scientific', 'figure']);
+
+/** Settings a new app starts from. Graphing keeps `defaultSettings`; geometry, the calculator, and a figure take the mode's frame. */
+export function settingsForMode(mode: AppModeId): FileSettings {
+  const base = defaultSettings();
+  if (!MODE_FRAME.has(mode)) return base;
+  const d = MODES[mode].defaults;
+  return {
+    ...base,
+    view: { x0: d.view.x0, x1: d.view.x1, y0: d.view.y0, y1: d.view.y1, keepRatio: d.view.keepRatio },
+    axes: { x: d.axes, y: d.axes },
+    grid: d.grid,
+    angleUnit: d.angleUnit,
+    rounding: { mode: d.rounding.mode, digits: d.rounding.digits },
+    coordinatesStyle: d.coordinates === 'polar' ? 'polar' : 'cartesian',
+  };
+}
+
 /* ------------------------------ assets ------------------------------ */
 
 function bytesOf(b64: string): Uint8Array | undefined {

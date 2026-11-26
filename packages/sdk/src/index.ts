@@ -12,7 +12,7 @@ export { cellValue, toValue } from './values';
 export type { Value } from './values';
 export { sdkRegistry } from './registry';
 export {
-  APP_VERSION, FILE_LIMITS, FORMAT_VERSION, MIGRATIONS, assetProblem, checkAssets, checkFile, defaultSettings, fromFragment, gzip, migrate, modeFor, readFile,
+  APP_VERSION, FILE_LIMITS, FORMAT_VERSION, MIGRATIONS, assetProblem, checkAssets, checkFile, defaultSettings, fromFragment, gzip, migrate, modeFor, readFile, settingsForMode,
   sniff, textOfBytes, toFragment,
 } from './file';
 export type { Asset, AssetMime, FileSettings, FileWarning, IncantlyFile, LoadResult, Meta } from './file';

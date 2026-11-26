@@ -48,7 +48,7 @@ import { CircleMenu } from './ui/circle-menu';
 import { defaultIcon } from './ui/icons';
 import { MenuHost } from './ui/menus';
 import type { MenuItem, MenuTarget } from './ui/menus';
-import { MORE_SHAPES, resolveShell, toolsFor } from './ui/shell';
+import { FIGURE_ACTIONS, MORE_SHAPES, resolveShell, toolsFor } from './ui/shell';
 import type { Shell, ShellOptions } from './ui/shell';
 import { CSS, STYLE_ID } from './ui/styles';
 import { describeKey } from '../core/keymap';
@@ -400,10 +400,11 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   surface.append(painter.element);
   const toolBar = h('div', { class: 'ib-bar ib-tools', role: 'toolbar', 'aria-label': strings.t('toolbar.label'), 'data-position': shell.position });
   const styleBar = h('div', { class: 'ib-bar ib-style', 'aria-label': strings.t('style.label') });
+  const penBar = h('div', { class: 'ib-bar ib-penbar', role: 'group', 'aria-label': strings.t('style.pen', 'Pen'), hidden: '' });
   const pageBar = h('div', { class: 'ib-bar ib-pages', 'aria-label': strings.t('pages.label') });
   const zoomBar = h('div', { class: 'ib-bar ib-zoom', 'aria-label': strings.t('zoom.label') });
   root.append(surface);
-  if (shell.ui.styleBar && !readOnly) root.append(styleBar);
+  if (shell.ui.styleBar && !readOnly) root.append(styleBar, penBar);
   if (shell.position !== 'none') root.append(toolBar);
   if (shell.ui.pages) root.append(pageBar);
   if (shell.ui.zoom) root.append(zoomBar);
@@ -558,6 +559,22 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       // kept in one record: a pen sends hundreds of samples a second
       pointer.x = s.x;
       pointer.y = s.y;
+      // a selection held in the margin pans the page, so the shape can leave the view (the tool then reads the new page point)
+      if (s.phase === 'move' && s.buttons !== 0 && host.tool === 'select' && core.editor.state === 'closed') {
+        const camera = core.camera;
+        if (camera !== undefined) {
+          const { w: viewW, h: viewH } = sizeOf();
+          const edge = 28;
+          const step = 8;
+          let dx = 0;
+          let dy = 0;
+          if (s.x < edge) dx = step;
+          else if (s.x > viewW - edge) dx = -step;
+          if (s.y < edge) dy = step;
+          else if (s.y > viewH - edge) dy = -step;
+          if (dx !== 0 || dy !== 0) camera.panBy(dx, dy);
+        }
+      }
       host.sample(s);
     },
     key: (k) => {
@@ -664,21 +681,38 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const moreLabel = strings.t('action.moreShapes');
   const moreMenu = h('div', { class: 'ib-list ib-more', role: 'menu', 'aria-label': moreLabel, hidden: '' });
   const moreBtn = h('button', { type: 'button', title: moreLabel, 'aria-label': moreLabel, 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'more-shapes' }, '▾');
-  /** Opens or closes the menu above its button. The menu's `hidden` is its state: no other field says it. */
+  const figLabel = strings.t('action.figures');
+  const figMenu = h('div', { class: 'ib-list ib-figmenu', role: 'menu', 'aria-label': figLabel, hidden: '' });
+  const figBtn = makeButton('figures', figLabel, strings.t('action.figures.title'), { 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-pressed': 'false', 'data-action': 'figures' });
+  /** Puts a menu on its button. The menu's `hidden` is its state: no other field says it. */
+  const placeMenu = (menu: HTMLElement, btn: HTMLElement): void => {
+    const at = btn.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    menu.style.left = `${Math.max(0, at.left - box.left)}px`;
+    if (shell.position === 'left' || shell.position === 'right') menu.style.top = `${Math.max(0, at.top - box.top)}px`;
+  };
   const showMore = (open: boolean): void => {
     moreMenu.hidden = !open;
     moreBtn.setAttribute('aria-expanded', String(open));
     if (!open) return;
-    const at = moreBtn.getBoundingClientRect();
-    const box = root.getBoundingClientRect();
-    moreMenu.style.left = `${Math.max(0, at.left - box.left)}px`;
-    if (shell.position === 'left' || shell.position === 'right') moreMenu.style.top = `${Math.max(0, at.top - box.top)}px`;
+    figMenu.hidden = true;
+    figBtn.setAttribute('aria-expanded', 'false');
+    placeMenu(moreMenu, moreBtn);
+  };
+  const showFigures = (open: boolean): void => {
+    figMenu.hidden = !open;
+    figBtn.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    moreMenu.hidden = true;
+    moreBtn.setAttribute('aria-expanded', 'false');
+    placeMenu(figMenu, figBtn);
   };
   const makeToolButton = (def: ToolDef): HTMLButtonElement => {
     const label = toolLabel(def.id, def.label);
     const b = makeButton(def.id, label, `${label}${hintFor(def.id)}`, { 'aria-pressed': 'false', 'data-tool': def.id });
     b.addEventListener('click', () => {
       showMore(false);
+      showFigures(false);
       host.setTool(def.id);
     });
     toolButtons.set(def.id, b);
@@ -728,6 +762,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   };
   /** Adds a figure card at the middle of the view, selects it and asks for the input (it goes live and takes it). */
   const addFigureHere = (mode?: string): BoardResult<string> => {
+    showFigures(false);
     const made = addFigure(core, { at: viewCentre(), ...(mode !== undefined ? { mode } : {}) });
     if (!made.ok) {
       report(made);
@@ -756,6 +791,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const actionButton = (id: string): HTMLElement | undefined => {
     if (id === 'more-shapes') return moreIds.length > 0 ? moreBtn : undefined;
     if (readOnly) return undefined;
+    if (id === 'figures') return figBtn;
     if (id === 'undo') return shell.ui.history ? undoBtn : undefined;
     if (id === 'redo') return shell.ui.history ? redoBtn : undefined;
     if (id === 'image') {
@@ -766,6 +802,12 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     if (id === 'figure') {
       const b = makeButton('figure', strings.t('action.figure'), `${strings.t('action.figure.title')}${hintFor('figure')}`, { 'data-action': 'figure' });
       b.addEventListener('click', () => void addFigureHere());
+      return b;
+    }
+    const figure = FIGURE_ACTIONS.find((a) => a.id === id);
+    if (figure !== undefined) {
+      const b = makeButton(id, strings.t(`action.${id}`), strings.t(`action.${id}.title`), { 'data-action': id });
+      b.addEventListener('click', () => void addFigureHere(figure.mode));
       return b;
     }
     if (id === 'fix') {
@@ -811,6 +853,30 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     });
     root.append(moreMenu);
   }
+  // Figure, Graph, Geometry, Calculator, Probability and 3D. A host who names one of those ids still gets its own button.
+  if (figBtn.isConnected) {
+    const choices: readonly { readonly id: string; readonly mode?: string }[] = [{ id: 'figure' }, ...FIGURE_ACTIONS.map((a) => ({ id: a.id, mode: a.mode }))];
+    for (const choice of choices) {
+      const label = strings.t(`action.${choice.id}`);
+      const b = makeButton(choice.id, label, strings.t(`action.${choice.id}.title`), { role: 'menuitem', 'data-action': choice.id }, true);
+      b.addEventListener('click', () => void addFigureHere(choice.mode));
+      figMenu.append(b);
+    }
+    figBtn.addEventListener('click', () => showFigures(figMenu.hasAttribute('hidden')));
+    figBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') showFigures(false);
+    });
+    figMenu.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      showFigures(false);
+      figBtn.focus();
+    });
+    root.addEventListener('pointerdown', (e) => {
+      const t = e.target as Node;
+      if (!figMenu.hasAttribute('hidden') && !figMenu.contains(t) && !figBtn.contains(t)) showFigures(false);
+    });
+    root.append(figMenu);
+  }
   root.append(note, fileInput);
   const syncHistory = (): void => {
     undoBtn.disabled = !core.history.canUndo;
@@ -819,6 +885,32 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   const stopHistory = core.history.on(syncHistory);
   syncHistory();
 
+  /** Puts the pen row on the ink tool's button. A hidden toolbar leaves the controls in the style bar. */
+  const placePenBar = (): void => {
+    if (penBar.hidden) return;
+    const btn = toolButtons.get(host.tool);
+    if (btn === undefined) return;
+    const at = btn.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    const gap = 8;
+    penBar.style.right = 'auto';
+    penBar.style.bottom = 'auto';
+    if (shell.position === 'left') {
+      penBar.style.left = `${at.right - box.left + gap}px`;
+      penBar.style.top = `${Math.max(0, at.top - box.top)}px`;
+    } else if (shell.position === 'right') {
+      penBar.style.left = 'auto';
+      penBar.style.right = `${box.right - at.left + gap}px`;
+      penBar.style.top = `${Math.max(0, at.top - box.top)}px`;
+    } else if (shell.position === 'top') {
+      penBar.style.left = `${Math.max(0, at.left - box.left)}px`;
+      penBar.style.top = `${at.bottom - box.top + gap}px`;
+    } else {
+      penBar.style.left = `${Math.max(0, at.left - box.left)}px`;
+      penBar.style.top = 'auto';
+      penBar.style.bottom = `${box.bottom - at.top + gap}px`;
+    }
+  };
   const renderStyle = (): void => {
     const tool = host.tool;
     const kids: (Node | string)[] = [];
@@ -826,13 +918,20 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       const which = tool;
       const st = styles[which];
       if (tool === 'pen') {
-        const nib = h('select', { 'aria-label': 'Nib' });
-        for (const [id, label] of NIB_LABELS) nib.append(h('option', { value: id }, label));
-        nib.value = st.nib;
-        nib.addEventListener('change', () => {
-          styles.pen = { ...styles.pen, nib: nib.value as typeof st.nib };
-        });
-        kids.push(nib);
+        for (const [nib, label] of NIB_LABELS) {
+          const b = h('button', { type: 'button', class: 'ib-nib', title: label, 'aria-label': label, 'aria-pressed': String(styles.pen.nib === nib) });
+          const icon = iconFor(nib);
+          if (icon !== undefined) {
+            if (styles.pen.nib === nib) icon.style.color = styles.pen.color;
+            b.append(icon);
+          } else b.append(label);
+          b.addEventListener('click', () => {
+            styles.pen = { ...styles.pen, nib };
+            renderStyle();
+          });
+          kids.push(b);
+        }
+        kids.push(h('span', { class: 'ib-sep' }));
       }
       for (const color of tool === 'pen' ? SWATCHES : HIGHLIGHTS) {
         const sw = h('button', { type: 'button', class: 'ib-swatch', 'aria-label': `Colour ${color}`, 'aria-pressed': String(st.color === color), style: `background:${color}` });
@@ -866,9 +965,27 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     } else if ((tool === 'select' || tool === 'hand') && core.selection.size === 0) {
       kids.push(...backgroundControls());
     }
-    styleBar.replaceChildren(...kids);
-    styleBar.hidden = kids.length === 0;
+    const ink = tool === 'pen' || tool === 'highlighter' || tool === 'eraser';
+    const docked = ink && shell.position !== 'none' && shell.ui.styleBar;
+    if (docked) {
+      penBar.replaceChildren(...kids);
+      penBar.hidden = false;
+      styleBar.replaceChildren();
+      styleBar.hidden = true;
+      placePenBar();
+    } else {
+      penBar.replaceChildren();
+      penBar.hidden = true;
+      styleBar.replaceChildren(...kids);
+      styleBar.hidden = kids.length === 0;
+    }
     for (const [id, b] of toolButtons) b.setAttribute('aria-pressed', String(id === tool));
+    const tint = (id: string, color: string): void => {
+      const svg = toolButtons.get(id)?.querySelector('svg');
+      if (svg instanceof SVGElement) svg.style.color = color;
+    };
+    tint('pen', styles.pen.color);
+    tint('highlighter', styles.highlighter.color);
     moreBtn.setAttribute('aria-pressed', String(MORE_SHAPES.includes(tool)));
     surface.style.cursor = tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair';
   };
@@ -901,6 +1018,8 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
         ...(patch.dash !== undefined ? { dash: patch.dash } : {}),
         ...(patch.size !== undefined ? { size: patch.size } : {}),
         ...(patch.font !== undefined ? { font: patch.font } : {}),
+        ...(patch.labelAlign !== undefined ? { labelAlign: patch.labelAlign } : {}),
+        ...(patch.labelV !== undefined ? { labelV: patch.labelV } : {}),
       };
       if (host.tool === 'select' && core.selection.size > 0) styleShapes(core, core.selection.ids, patch);
       renderStyle();
@@ -940,6 +1059,32 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     font.value = st.font;
     font.addEventListener('change', () => apply({ font: font.value as FontFamily }));
     kids.push(font);
+    const boxes = new Set(['rect', 'ellipse', 'triangle', 'diamond', 'star']);
+    let across = st.labelAlign ?? 'center';
+    let down = st.labelV ?? 'middle';
+    if (host.tool === 'select') {
+      for (const id of core.selection.ids) {
+        const r = core.store.get(id);
+        if (r === undefined || !r.id.startsWith('shape:')) continue;
+        const s = r as ShapeRecord;
+        if (!boxes.has(s.kind)) continue;
+        const p = s.props as { labelAlign?: typeof across; labelV?: typeof down };
+        if (p.labelAlign !== undefined) across = p.labelAlign;
+        if (p.labelV !== undefined) down = p.labelV;
+        break;
+      }
+    }
+    kids.push(h('span', { class: 'ib-sep' }));
+    for (const [id, label] of [['start', 'Left'], ['center', 'Centre'], ['end', 'Right']] as const) {
+      const b = h('button', { type: 'button', class: 'ib-align', 'data-style': 'label-align', title: label, 'aria-label': `Align ${label}`, 'aria-pressed': String(across === id) }, label.slice(0, 1));
+      b.addEventListener('click', () => apply({ labelAlign: id }));
+      kids.push(b);
+    }
+    for (const [id, label] of [['start', 'Top'], ['middle', 'Middle'], ['end', 'Bottom']] as const) {
+      const b = h('button', { type: 'button', class: 'ib-align', 'data-style': 'label-anchor', title: label, 'aria-label': `Align ${label}`, 'aria-pressed': String(down === id) }, label.slice(0, 1));
+      b.addEventListener('click', () => apply({ labelV: id }));
+      kids.push(b);
+    }
     return kids;
   };
   host.onTool(() => {
@@ -1059,12 +1204,26 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
       family = (p['font'] as FontFamily | undefined) ?? 'sans';
     }
     const screenPx = px * zoom;
-    const centre = g.toPage((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2);
     const bw = Math.max(70, (box.maxX - box.minX) * zoom);
     const bh = Math.max(screenPx * 1.3 + 12, (box.maxY - box.minY) * zoom);
+    const boxLabel = shape.kind !== 'text' && shape.kind !== 'sticky' && shape.kind !== 'frame';
+    if (boxLabel) {
+      const ha = p['labelAlign'];
+      align = ha === 'start' ? 'left' : ha === 'end' ? 'right' : 'center';
+    }
+    const down = p['labelV'] === 'start' ? 'start' : p['labelV'] === 'end' ? 'end' : 'middle';
+    const block = lineCount(field.value) * screenPx * 1.3;
+    const pad = !boxLabel ? 4 : down === 'start' ? 4 : down === 'end' ? Math.max(4, bh - block - 4) : Math.max(4, (bh - block) / 2);
+    // a text shape grows down from its top left, so a new letter does not move the line that is already there
+    const anchor = shape.kind === 'text' ? g.toPage(box.minX, box.minY) : g.toPage((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2);
+    const left = shape.kind === 'text' ? (anchor.x - camera.x) * zoom : (anchor.x - camera.x) * zoom - bw / 2;
+    const top = shape.kind === 'text' ? (anchor.y - camera.y) * zoom : (anchor.y - camera.y) * zoom - bh / 2;
+    const place = `${left.toFixed(1)}|${top.toFixed(1)}|${bw.toFixed(1)}|${bh.toFixed(1)}|${align}|${pad.toFixed(1)}|${bg}|${rotate}|${screenPx.toFixed(1)}|${family}`;
+    if (field.dataset['place'] === place) return;
+    field.dataset['place'] = place;
     const st = field.style;
-    st.left = `${(centre.x - camera.x) * zoom - bw / 2}px`;
-    st.top = `${(centre.y - camera.y) * zoom - bh / 2}px`;
+    st.left = `${left}px`;
+    st.top = `${top}px`;
     st.width = `${bw}px`;
     st.height = `${bh}px`;
     st.font = cssFontFor('text', family, screenPx);
@@ -1072,8 +1231,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     st.textAlign = align;
     st.background = bg;
     st.transform = rotate === 0 ? '' : `rotate(${rotate}rad)`;
-    const boxLabel = shape.kind !== 'text' && shape.kind !== 'sticky' && shape.kind !== 'frame';
-    st.paddingTop = boxLabel ? `${Math.max(4, (bh - lineCount(field.value) * screenPx * 1.3) / 2)}px` : '4px';
+    st.paddingTop = `${pad}px`;
   }
   const openField = (): void => {
     field.value = editor.text;
@@ -1084,6 +1242,7 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
     field.setSelectionRange(field.value.length, field.value.length);
   };
   const closeField = (): void => {
+    delete field.dataset['place'];
     field.hidden = true;
     renderActions();
     renderStyle();
@@ -1361,14 +1520,33 @@ export function mountBoardView(options: BoardViewOptions): BoardResult<BoardView
   });
 
   // ---- resizing
+  /** Keeps the toolbar in the space beside the zoom bar, so the zoom never sits on a tool. */
+  const placeBars = (): void => {
+    placePenBar();
+    if (shell.position !== 'bottom' || toolBar.parentElement === null) return;
+    const viewW = root.clientWidth;
+    if (viewW <= 0) return;
+    const zoomW = zoomBar.parentElement !== null && !zoomBar.hidden ? zoomBar.offsetWidth : 0;
+    const reserve = zoomW > 0 ? zoomW + 28 : 0;
+    const available = Math.max(120, viewW - 24 - reserve);
+    toolBar.style.marginLeft = '0';
+    toolBar.style.marginRight = '0';
+    toolBar.style.right = 'auto';
+    toolBar.style.maxWidth = `${available}px`;
+    const shift = Math.max(0, (available - toolBar.offsetWidth) / 2);
+    toolBar.style.left = `${12 + shift}px`;
+  };
   let observer: ResizeObserver | undefined;
   if (typeof ResizeObserver === 'function') {
     observer = new ResizeObserver(() => {
       input.measure();
+      placeBars();
       loop.request();
     });
     observer.observe(surface);
+    if (zoomBar.parentElement !== null) observer.observe(zoomBar);
   }
+  placeBars();
 
   const api: BoardView = {
     core,

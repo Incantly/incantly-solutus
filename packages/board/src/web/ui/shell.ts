@@ -22,7 +22,15 @@ export type ToolbarPosition = 'top' | 'bottom' | 'left' | 'right' | 'none';
 export type IconFactory = (doc: Document) => Element;
 
 /** The buttons of the toolbar that are not tools. */
-export const TOOLBAR_ACTIONS: readonly string[] = ['image', 'figure', 'fix', 'undo', 'redo', 'more-shapes'];
+export const TOOLBAR_ACTIONS: readonly string[] = ['image', 'figure', 'figures', 'graph', 'geometry', 'scientific', 'probability', 'space', 'fix', 'undo', 'redo', 'more-shapes'];
+/** A figure button and the mode its card opens in. `figure` stays for a host who names it. */
+export const FIGURE_ACTIONS: readonly { readonly id: string; readonly mode: string }[] = [
+  { id: 'graph', mode: 'graphing' },
+  { id: 'geometry', mode: 'geometry' },
+  { id: 'scientific', mode: 'scientific' },
+  { id: 'probability', mode: 'probability' },
+  { id: 'space', mode: 'graphing3d' },
+];
 /** The shapes the More shapes menu holds when the rectangle is on the toolbar. */
 export const MORE_SHAPES: readonly string[] = ['triangle', 'diamond', 'star'];
 
@@ -85,8 +93,8 @@ export function defaultGroups(tools: ToolList): readonly (readonly string[])[] {
     shapes.push(id);
     if (hasMore && id === 'rect') shapes.push('more-shapes');
   }
-  // Ask comes after Figure (ui.md, Layout)
-  return [plain, shapes, ['image', 'figure', 'fix', ...(ids.includes('ask') ? ['ask'] : [])], ['undo', 'redo']].filter((g) => g.length > 0);
+  // Ask comes after the Figures menu (ui.md, Layout). A host who names graph, geometry, scientific, probability or space still gets that button.
+  return [plain, shapes, ['image', 'figures', 'fix', ...(ids.includes('ask') ? ['ask'] : [])], ['undo', 'redo']].filter((g) => g.length > 0);
 }
 
 const closeNames = (id: string, known: readonly string[]): string[] => known.filter((k) => k.startsWith(id.slice(0, 1))).slice(0, 4);

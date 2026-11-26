@@ -121,9 +121,9 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
 
   const paint = (): void => {
     frame = 0;
-    const rect = element.getBoundingClientRect();
-    const w = rect.width || 800;
-    const h = rect.height || 600;
+    // Layout size, not the transformed box: a board zoom scales the card with CSS and must not resize the maths window.
+    const w = element.clientWidth || 800;
+    const h = element.clientHeight || 600;
     vp.resize(w, h);
     if (first) {
       goHome();
@@ -187,7 +187,12 @@ export function mountGraph(opts: GraphPaneOptions): GraphPane {
   let down: { x: number; y: number; tool: boolean } | undefined;
   const local = (e: PointerEvent | WheelEvent): { x: number; y: number } => {
     const r = canvas.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    // A CSS scale on a parent makes the box smaller than the canvas. Pointers stay in canvas pixels, where the viewport is.
+    const sx = r.width > 0 ? canvas.clientWidth / r.width : 1;
+    const sy = r.height > 0 ? canvas.clientHeight / r.height : 1;
+    return { x: x * sx, y: y * sy };
   };
   const hitAt = (x: number, y: number): Hit | undefined => {
     for (let i = hits.length - 1; i >= 0; i--) if (inside(hits[i] as Hit, x, y)) return hits[i];

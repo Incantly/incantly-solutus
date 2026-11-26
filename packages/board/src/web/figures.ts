@@ -166,6 +166,8 @@ export class FigureCard {
   #offApp: (() => void)[] = [];
   #pictureTimer = 0;
   #watch: MutationObserver | undefined;
+  /** The host scale the graph was last drawn at. Board zoom updates it and the pixels per unit together, so the maths window stays. */
+  #laidScale = 0;
   readonly #home: CardHome;
 
   constructor(shape: Shape, home: CardHome) {
@@ -277,6 +279,8 @@ export class FigureCard {
   move(): void {
     if (!sendIfAble(this.life, 'move')) return;
     this.slot.dataset['state'] = this.life.state;
+    // a calculator or a probability panel has no graph picture that should cover it
+    if (this.mode === 'scientific' || this.mode === 'probability') return;
     const snap = this.mode === 'graphing3d' ? undefined : this.#snapshot();
     const url = snap ?? this.shape.props.picture ?? undefined;
     if (url !== undefined) {
@@ -286,7 +290,7 @@ export class FigureCard {
     }
   }
 
-  /** The camera stopped: the host is sized for the zoom again, and the app shows and paints. */
+  /** The camera stopped: the host is sized for the zoom again, and the app shows. The paint waits until the slot has that size. */
   settle(scale: number): void {
     if (!sendIfAble(this.life, 'settle')) return;
     this.hostScale = scale;
@@ -294,7 +298,40 @@ export class FigureCard {
     this.picEl.hidden = this.shape.props.picture === null;
     if (this.shape.props.picture !== null) this.picEl.src = this.shape.props.picture;
     this.render();
-    safe(() => this.#app?.screen.paint());
+  }
+
+  /**
+   * The slot's layout size now matches `hostScale`. When that size change resizes the graph's canvas, the pixels per
+   * unit follow it, so a board zoom does not zoom the maths. Resizing the card does not change `hostScale`, so it still
+   * shows more of the graph.
+   */
+  keepMathsWindow(): void {
+    const next = this.hostScale;
+    const laid = this.#laidScale;
+    if (laid === next) return;
+    if (this.mode === 'scientific' || this.mode === 'probability') {
+      this.#laidScale = next;
+      return;
+    }
+    const app = this.#app;
+    if (!(laid > 0) || app === undefined) {
+      this.#laidScale = next;
+      return;
+    }
+    const vp = app.screen.graph.viewport;
+    const beforeW = vp.w;
+    const beforeH = vp.h;
+    const beforePpu = vp.ppu;
+    const beforePpuY = vp.ppuY;
+    safe(() => app.screen.paint());
+    this.#laidScale = next;
+    if (this.mode === 'graphing3d' || beforeW <= 1 || beforeH <= 1) return;
+    const sx = vp.w / beforeW;
+    const sy = vp.h / beforeH;
+    if (Math.abs(sx - 1) < 1e-3 && Math.abs(sy - 1) < 1e-3) return;
+    vp.ppu = beforePpu * sx;
+    vp.ppuY = beforePpuY * sy;
+    safe(() => app.screen.paint());
   }
 
   #snapshot(): string | undefined {
@@ -843,6 +880,7 @@ export class FigureLayer {
     if (st.height !== height) st.height = height;
     const rot = card.shape.rotation;
     st.transform = `translate(${sx}px,${sy}px) scale(${k})${rot === 0 ? '' : ` translate(${w / 2}px,${h / 2}px) rotate(${rot}rad) translate(${-w / 2}px,${-h / 2}px)`}`;
+    card.keepMathsWindow();
   }
 
   #publish(visible: Set<string>, near: Set<string>): void {

@@ -76,7 +76,12 @@ export function styledDefaults(ctx: ToolContext, kind: string): Record<string, u
   if (def === undefined) return {};
   const s = ctx.styles.shape;
   // a note keeps its paper colour and a frame its white; the colour and fill of the style bar are for lines and shapes
-  const style: StylePatch = kind === 'sticky' ? { size: s.size, font: s.font } : { color: s.color, dash: s.dash, size: s.size, font: s.font, ...(kind === 'frame' ? {} : { fill: s.fill }) };
+  const box = kind === 'rect' || kind === 'ellipse' || kind === 'triangle' || kind === 'diamond' || kind === 'star';
+  const style: StylePatch = kind === 'sticky' ? { size: s.size, font: s.font } : {
+    color: s.color, dash: s.dash, size: s.size, font: s.font, ...(kind === 'frame' ? {} : { fill: s.fill }),
+    ...(box && s.labelAlign !== undefined ? { labelAlign: s.labelAlign } : {}),
+    ...(box && s.labelV !== undefined ? { labelV: s.labelV } : {}),
+  };
   return { ...(def.applyStyle?.(def.defaults, style) ?? {}) } as Record<string, unknown>;
 }
 

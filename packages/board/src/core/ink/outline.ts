@@ -87,6 +87,23 @@ const ease = (p: number): number => {
   return c * c * (3 - 2 * c);
 };
 
+/**
+ * Half the width the outline draws at one sample, before the three-point smooth. The eraser cuts the centre line this
+ * far inside the ink, so a round cap ends on the eraser's edge.
+ */
+export function sampleHalfWidth(size: number, nib: Nib, pressure: number, tiltX = 0, tiltY = 0, dirX = 1, dirY = 0): number {
+  const spec = NIB_SPECS[nib] ?? NIB_SPECS.pen;
+  let w = size * (1 - spec.thinning + spec.thinning * ease(pressure));
+  if (spec.tilt) {
+    const mag = Math.hypot(tiltX, tiltY);
+    if (mag > 0) {
+      const across = Math.abs(dirX * tiltY - dirY * tiltX) / mag;
+      w *= 1 + TILT_WIDEN * Math.min(1, mag / 60) * across;
+    }
+  }
+  return w * 0.5;
+}
+
 /** The angle step of an arc of radius `r` that stays within `tolerance` of the circle. */
 function arcStep(r: number, tolerance: number): number {
   const t = tolerance > 0 ? tolerance : 0.1;

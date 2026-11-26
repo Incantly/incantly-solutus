@@ -61,7 +61,7 @@ export const BOARD_TOOL: AgentToolDef = Object.freeze({
           properties: {
             op: { type: 'string', enum: [...OPS] },
             text: { type: 'string', description: 'write, edit. $…$ is maths. For a figure card, edit takes its lines.' },
-            style: { type: 'string', enum: ['hand', 'typed'] },
+            style: { type: 'string', enum: ['hand', 'typed'], description: 'write: hand is the handwriting font (the default); typed is a plain font and appears at once.' },
             kind: { type: 'string', enum: [...SHAPE_KINDS] },
             at: PLACE,
             w: { type: 'number' },

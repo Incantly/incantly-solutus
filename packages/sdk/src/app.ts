@@ -13,7 +13,7 @@ import type { AppEvent, ChangedObject, EventOf, EventSource, EventType, ListenOp
 import { sdkRegistry } from './registry';
 import type { Value } from './values';
 import { cellValue, toValue } from './values';
-import { APP_VERSION, FORMAT_VERSION, defaultSettings, fromFragment, modeFor, readFile, sniff, textOfBytes, toFragment, unknownKeys } from './file';
+import { APP_VERSION, FORMAT_VERSION, defaultSettings, fromFragment, modeFor, readFile, settingsForMode, sniff, textOfBytes, toFragment, unknownKeys } from './file';
 import type { Asset, FileSettings, FileWarning, IncantlyFile, LoadResult, Meta } from './file';
 
 export const API_VERSION = 1 as const;
@@ -314,6 +314,7 @@ class AppCore implements App {
     const mode = opts.mode ?? 'graphing';
     need(Object.hasOwn(MODES, mode), 'createApp', `mode must be one of ${Object.keys(MODES).join(', ')}`);
     this.mode = mode;
+    this.fileSettings = settingsForMode(mode);
     this.readOnly = opts.readOnly === true;
     this.registry = opts.registry ?? sdkRegistry();
     this.hub = new EventHub(opts.scheduler);
@@ -1027,7 +1028,7 @@ class AppCore implements App {
       this.mode = from;
       return NOT_LOADED(r.failed);
     }
-    this.fileSettings = defaultSettings();
+    this.fileSettings = settingsForMode(this.mode);
     this.fileAssets = {};
     this.fileMeta = {};
     this.fileKeep = {};
